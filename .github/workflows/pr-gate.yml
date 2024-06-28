@@ -6,7 +6,7 @@ on:
       - main
 
 jobs:
-  build:
+  pr-gate:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,7 +23,7 @@ jobs:
           pip install poetry
           poetry install
       - name: Run linters
-        run: poetry run ruff
+        run: poetry run ruff check .
       - name: Run tests
         run: poetry run pytest
       - name: Cache dependencies
