@@ -18,7 +18,11 @@ codecontext = "codecontext.__main__:main"
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-cov>=6.1.0",
     "ruff>=0.13.3",
+    "bandit>=1.8.1",
+    "safety>=4.0.0",
+    "twine>=6.1.0",
 ]
 mcp = [
     "mcp>=1.16.0",
