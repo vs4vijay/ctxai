@@ -128,9 +128,7 @@ jobs:
           
           # Set multiline output
           {
-            echo 'changelog<<EOF'
             cat CHANGELOG.md
-            echo EOF
           } >> $GITHUB_OUTPUT
       
       - name: Create GitHub Release
