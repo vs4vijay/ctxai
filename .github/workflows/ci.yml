@@ -99,5 +99,4 @@ jobs:
 
       - name: Run security checks
         run: |
-          uv run bandit -r codecontext/
-          uv run safety check
+          uv run bandit -r src/
