@@ -3,13 +3,13 @@ name = "codecontext"
 version = "0.1.0"
 description = ""
 authors = [{ name = "vs4vijay", email = "vs4vijay@gmail.com" }]
-requires-python = "~=3.10"
+requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
 dependencies = [
-    "fastapi>=0.103.2,<0.104",
-    "pydantic>=2.4.2,<3",
-    "python-dotenv>=1.0.0,<2",
+    "pydantic>=2.11.10",
+    "pydantic-ai>=1.0.15",
+    "python-dotenv>=1.1.1",
 ]
 
 [project.scripts]
@@ -17,14 +17,21 @@ codecontext = "codecontext.__main__:main"
 
 [dependency-groups]
 dev = [
-    "ruff>=0.0.292,<0.0.293",
-    "pytest>=7.4.2,<8",
+    "pytest>=8.4.2",
+    "ruff>=0.13.3",
 ]
-server = ["uvicorn>=0.23.2,<0.24"]
+mcp = [
+    "mcp>=1.16.0",
+]
+server = [
+    "fastapi>=0.118.0",
+    "uvicorn>=0.37.0",
+]
 
 [tool.uv]
 default-groups = [
     "dev",
+    "mcp",
     "server",
 ]
 
