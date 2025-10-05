@@ -1,41 +1,56 @@
 # ctxai
 
-Intelligent semantic search across your entire codebase
+A semantic code search engine that transforms your codebase into intelligent embeddings for fast, context-aware code retrieval. **ctxai** uses natural language processing to find code snippets, documentation, and examples through both CLI and MCP Server interfaces.
+
+Available as both an MCP Server and CLI tool, **ctxai** integrates seamlessly with multi-agent systems and orchestration frameworks, allowing agents to discover relevant code through semantic queries.
+
+TLDR; Intelligent semantic search across your entire codebase
 
 Transform your code into searchable embeddings with advanced chunking and vector database indexing
 
-An advanced code search engine leveraging large language models to comprehend the context and intent of your queries. Quickly locate relevant code snippets, documentation, and examples within large codebases using intelligent semantic understanding.
+## Features
 
+- **MCP Server Integration**: Works with any agent that supports MCP protocol
+- **Smart Code Search**: Converts your code into searchable vectors using AI
+- **Natural Language Queries**: Find code by describing what you want, not just keywords
+- **CLI and Agent Ready**: Use from command line or integrate with AI agents
+- **Fast Indexing**: Quickly processes large codebases
 
 ## Usage
 
-- Indexing of the code
+### Indexing Your Codebase
+
+Index your project to enable semantic search:
+
 ```bash
 python -m ctxai.index /path/to/codebase "index_name"
+
+# OR
+ctxai index /path/to/codebase "index_name"
 ```
 
-- Usage
-Create mcp.json file with as below:
+### MCP Server Configuration
+
+Configure the MCP server by creating an `mcp.json` file:
+
 ```json
 {
-    "inputs": [],
-    "servers": {	
-        "calculator": {
-            "command": "python",
-            "args": [
-                "-m",
-                "ctxai.start",
-                "--index",
-                "index_name"
-            ],
-        }
+  "inputs": [],
+  "servers": {
+    "ctxai": {
+      "command": "python",
+      "args": ["-m", "ctxai.server", "--index", "index_name"]
     }
+  }
 }
 ```
 
-- Use Github Copilot's Agent mode to use this as below:
+### Querying with GitHub Copilot
+
+Use natural language queries through GitHub Copilot's Agent mode:
+
 ```
-/ctxai "Find the code related to Profile Image update"
+@ctxai find code for updating profile images
 ```
 
 ---
@@ -47,21 +62,23 @@ Pre-requisites:
 - Python 3.10+
 
 ```bash
+pip install ctxai
+
+# OR using uv
 uvx ctxai
 ```
 
 ## Running
 
-- copy `.env.example` to `.env` and fill in the values
-
 ```bash
-codepilot
+uv run ctxai
 ```
 
 ### Development Notes
 
 ```bash
 
+ctxai index
 ctxai server
 ctxai playgruond
 ctxai shell
