@@ -1,5 +1,5 @@
 [project]
-name = "codepilot"
+name = "codecontext"
 version = "0.1.0"
 description = ""
 authors = [{ name = "vs4vijay", email = "vs4vijay@gmail.com" }]
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codepilot = "codepilot.__main__:main"
+codecontext = "codecontext.__main__:main"
 
 [dependency-groups]
 dev = [
