@@ -1,4 +1,4 @@
-# codecontext
+# ctxai
 
 Intelligent semantic search across your entire codebase
 
@@ -11,7 +11,7 @@ An advanced code search engine leveraging large language models to comprehend th
 
 - Indexing of the code
 ```bash
-python -m codecontext.index /path/to/codebase "index_name"
+python -m ctxai.index /path/to/codebase "index_name"
 ```
 
 - Usage
@@ -24,7 +24,7 @@ Create mcp.json file with as below:
             "command": "python",
             "args": [
                 "-m",
-                "code_context.start",
+                "ctxai.start",
                 "--index",
                 "index_name"
             ],
@@ -35,7 +35,7 @@ Create mcp.json file with as below:
 
 - Use Github Copilot's Agent mode to use this as below:
 ```
-/code_context "Find the code related to Profile Image update"
+/ctxai "Find the code related to Profile Image update"
 ```
 
 ---
@@ -47,7 +47,7 @@ Pre-requisites:
 - Python 3.10+
 
 ```bash
-uvx codecontext
+uvx ctxai
 ```
 
 ## Running
@@ -62,13 +62,17 @@ codepilot
 
 ```bash
 
-codecontext server
-codecontext playgruond
-codecontext shell
+ctxai server
+ctxai playgruond
+ctxai shell
 
 
+python -m ctxai.index /path/to/codebase "index_name"
+/ctxai "Find the code related to Profile Image update"
 
 
+tree-sitter
+ast
 
 
 perfect

@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from code_context.server import app
+from ctxai.server import app
 
 client = TestClient(app)
 
