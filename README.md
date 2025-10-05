@@ -1,4 +1,4 @@
-# codepilot
+# codecontext
 
 ## Installation
 
@@ -7,7 +7,7 @@ Pre-requisites:
 - Python 3.10+
 
 ```bash
-pip install codepilot
+uvx codecontext
 ```
 
 ## Running
@@ -18,19 +18,23 @@ pip install codepilot
 codepilot
 ```
 
----
-
 ### Development Notes
 
 ```bash
 
 
-codepilot server
-codepilot playgruond
+codecontext server
+codecontext playgruond
 
 perfect
 
 autogen
+
+pydentic ai
+
+memory
+
+spec kit
 
 shell
 
