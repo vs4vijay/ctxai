@@ -86,6 +86,12 @@ agent-framework
 
 ```
 
+## Releasing
+
+- Bump version in pyproject.toml and push to main
+- create a new release with tags pattern `vx.y.z` e.g. v0.0.1
+- It would create a release on github and start a github action which would publish on pypi
+
 ## Contributing
 
 We welcome all contributions to the project! Before submitting your pull request, please ensure you have run the tests and linters locally. This helps us maintain the quality of the project and makes the review process faster for everyone.
