@@ -1,6 +1,6 @@
 [project]
 name = "codecontext"
-version = "0.1.0"
+version = "0.0.1"
 description = ""
 authors = [{ name = "vs4vijay", email = "vs4vijay@gmail.com" }]
 requires-python = ">=3.10"
@@ -18,11 +18,8 @@ codecontext = "codecontext.__main__:main"
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
-    "pytest-cov>=6.1.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.13.3",
-    "bandit>=1.8.1",
-    "safety>=4.0.0",
-    "twine>=6.1.0",
 ]
 mcp = [
     "mcp>=1.16.0",
