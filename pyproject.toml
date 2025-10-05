@@ -1,28 +1,33 @@
-[tool.poetry]
+[project]
 name = "codepilot"
 version = "0.1.0"
 description = ""
-authors = ["vs4vijay <vs4vijay@gmail.com>"]
-license = "MIT"
+authors = [{ name = "vs4vijay", email = "vs4vijay@gmail.com" }]
+requires-python = "~=3.10"
 readme = "README.md"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.103.2,<0.104",
+    "pydantic>=2.4.2,<3",
+    "python-dotenv>=1.0.0,<2",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-fastapi = "^0.103.2"
-pydantic = "^2.4.2"
-python-dotenv = "^1.0.0"
-
-[tool.poetry.scripts]
+[project.scripts]
 codepilot = "codepilot.__main__:main"
 
-[tool.poetry.group.dev.dependencies]
-ruff = "^0.0.292"
-pytest = "^7.4.2"
+[dependency-groups]
+dev = [
+    "ruff>=0.0.292,<0.0.293",
+    "pytest>=7.4.2,<8",
+]
+server = ["uvicorn>=0.23.2,<0.24"]
 
-
-[tool.poetry.group.server.dependencies]
-uvicorn = "^0.23.2"
+[tool.uv]
+default-groups = [
+    "dev",
+    "server",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
