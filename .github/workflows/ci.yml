@@ -39,18 +39,18 @@ jobs:
       - name: Run linters
         run: |
           uv run ruff check .
-        #   uv run ruff format --check .
+          # uv run ruff format --check .
 
       - name: Run tests with coverage
         run: uv run pytest --cov=codecontext --cov-report=xml --cov-report=term-missing
 
-      - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
+      # - name: Upload coverage to Codecov
+      #   if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      #   uses: codecov/codecov-action@v4
+      #   with:
+      #     file: ./coverage.xml
+      #     fail_ci_if_error: true
+      #     token: ${{ secrets.CODECOV_TOKEN }}
 
   build:
     runs-on: ubuntu-latest

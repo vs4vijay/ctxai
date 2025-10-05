@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
-from codepilot.server import app
+
+from codecontext.server import app
 
 client = TestClient(app)
 
