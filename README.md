@@ -99,6 +99,7 @@ autogen
 pydentic ai
 
 memory
+mem0
 
 spec kit
 
