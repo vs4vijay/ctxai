@@ -1,6 +1,6 @@
 [project]
 name = "ctxai"
-version = "0.0.1"
+version = "0.0.2"
 description = ""
 authors = [{ name = "vs4vijay", email = "vs4vijay@gmail.com" }]
 requires-python = ">=3.10"
