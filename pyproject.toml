@@ -1,24 +1,48 @@
 [project]
 name = "ctxai"
-version = "0.0.1"
+version = "0.0.2"
 description = ""
 authors = [{ name = "vs4vijay", email = "vs4vijay@gmail.com" }]
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
 dependencies = [
+    "chromadb>=0.5.0",
+    "pathspec>=0.12.1",
     "pydantic>=2.11.10",
     "pydantic-ai>=1.0.15",
     "python-dotenv>=1.1.1",
+    "rich>=13.9.4",
+    "sentence-transformers>=3.3.1",
+    "tree-sitter>=0.25.2",
+    "tree-sitter-language-pack>=0.9.0",
+    "typer>=0.19.2",
+]
+
+[project.optional-dependencies]
+openai = [
+    "openai>=1.58.1",
+]
+dashboard = [
+    "python-fasthtml>=0.9.3",
+]
+mcp = [
+    "mcp>=1.16.0",
+]
+all = [
+    "openai>=1.58.1",
+    "python-fasthtml>=0.9.3",
+    "mcp>=1.16.0",
 ]
 
 [project.scripts]
-ctxai = "ctxai.__main__:main"
+ctxai = "ctxai.__main__:app"
 
 [dependency-groups]
 dev = [
     "bandit>=1.8.6",
     "pytest>=8.4.2",
+    "pytest-asyncio>=0.25.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.13.3",
     "twine>=6.2.0",
@@ -44,7 +68,7 @@ build-backend = "hatchling.build"
 
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
