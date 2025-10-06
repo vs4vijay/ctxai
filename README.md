@@ -17,7 +17,14 @@ pip install ctxai
 # 2. Index your codebase (uses local embeddings by default - no API key needed!)
 ctxai index /path/to/your/project "my-project"
 
-# 3. (Optional) Configure to use OpenAI embeddings for better results
+# 3. Query your codebase using natural language
+ctxai query my-project "Find authentication functions"
+
+# 4. (Optional) Start the web dashboard for interactive exploration
+pip install ctxai[dashboard]  # Install FastHTML first
+ctxai dashboard  # Open http://localhost:3000
+
+# 5. (Optional) Configure to use OpenAI embeddings for better results
 # Edit .ctxai/config.json in your project:
 {
   "embedding": {
@@ -26,9 +33,6 @@ ctxai index /path/to/your/project "my-project"
   }
 }
 # Then set: export OPENAI_API_KEY=your-api-key-here
-
-# 4. Use with GitHub Copilot (coming soon)
-# @ctxai find code for updating profile images
 ```
 
 ## Features
@@ -103,8 +107,107 @@ ctxai --help
 
 Available commands:
 - `index` - Index a codebase for semantic search
-- `server` - Start the MCP server (coming soon)
-- `dashboard` - Start the web dashboard (coming soon)
+- `query` - Query an indexed codebase using natural language
+- `dashboard` - Start the web dashboard for browsing and querying
+- `server` - Start the MCP server for AI agents
+
+### Querying Your Codebase
+
+Once you've indexed a codebase, you can query it using natural language:
+
+```bash
+# Basic query
+ctxai query my-project "Find authentication functions"
+
+# Limit number of results
+ctxai query my-project "How to connect to database" --n-results 3
+
+# Show only metadata (no code content)
+ctxai query my-project "Find error handling code" --no-content
+```
+
+The query command will:
+1. Generate an embedding for your query
+2. Search the vector database for similar code
+3. Display results with:
+   - File paths and line numbers
+   - Chunk types (function, class, etc.)
+   - Similarity scores
+   - Syntax-highlighted code previews
+
+### Web Dashboard
+
+Start the interactive web dashboard to manage your indexes:
+
+```bash
+# Start dashboard (default port 3000)
+ctxai dashboard
+
+# Use custom port
+ctxai dashboard --port 8080
+```
+
+The dashboard provides:
+- 📊 View all indexes with statistics (chunk count, size, timestamps)
+- 🔍 Query interface with natural language search
+- 📄 Browse all chunks with metadata
+- ⚙️ View configuration and CTXAI_HOME settings
+- 🎨 Beautiful, dark-themed UI
+
+Open your browser to `http://localhost:3000` to access the dashboard.
+
+**Note:** Dashboard requires FastHTML. Install it with:
+```bash
+pip install ctxai[dashboard]
+# Or install all optional dependencies
+pip install ctxai[all]
+```
+
+### MCP Server for AI Agents
+
+Start the MCP server to expose ctxai functionality to AI agents like Claude:
+
+```bash
+# Start MCP server
+ctxai server
+
+# With custom project path
+ctxai server --project-path /path/to/project
+```
+
+The MCP server provides tools for LLMs to:
+- 📋 List available indexes
+- 📊 Index new codebases
+- 🔍 Query code with natural language
+- 📈 Get index statistics
+
+**Claude Desktop Configuration:**
+
+Add to your Claude Desktop config file:
+```json
+{
+  "mcpServers": {
+    "ctxai": {
+      "command": "ctxai",
+      "args": ["server"]
+    }
+  }
+}
+```
+
+Then you can ask Claude:
+- "List all available code indexes"
+- "Index my project at /path/to/project"
+- "Search the project index for authentication code"
+
+**Note:** MCP server requires the MCP package. Install it with:
+```bash
+pip install ctxai[mcp]
+# Or install all optional dependencies
+pip install ctxai[all]
+```
+
+See [docs/MCP_SERVER.md](docs/MCP_SERVER.md) for complete documentation.
 
 ### Configuration
 

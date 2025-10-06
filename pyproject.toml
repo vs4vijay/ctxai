@@ -26,9 +26,17 @@ openai = [
 huggingface = [
     "requests>=2.32.0",
 ]
+dashboard = [
+    "python-fasthtml>=0.9.3",
+]
+mcp = [
+    "mcp>=1.16.0",
+]
 all = [
     "openai>=1.58.1",
     "requests>=2.32.0",
+    "python-fasthtml>=0.9.3",
+    "mcp>=1.16.0",
 ]
 
 [project.scripts]

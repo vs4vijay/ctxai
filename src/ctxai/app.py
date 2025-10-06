@@ -64,28 +64,82 @@ def index(
 
 
 @app.command()
-def server(
-    index_name: str = typer.Option(
+def query(
+    index_name: str = typer.Argument(
         ...,
-        "--index",
-        "-i",
-        help="Name of the index to serve",
+        help="Name of the index to query",
     ),
-    port: int = typer.Option(
-        8000,
-        "--port",
-        "-p",
-        help="Port to run the server on",
+    query_text: str = typer.Argument(
+        ...,
+        help="Natural language query to search the codebase",
+    ),
+    n_results: int = typer.Option(
+        5,
+        "--n-results",
+        "-n",
+        help="Number of results to return",
+    ),
+    no_content: bool = typer.Option(
+        False,
+        "--no-content",
+        help="Don't show code content, only metadata",
     ),
 ):
     """
-    Start the MCP server for semantic code search.
-    """
-    typer.echo(f"🚀 Starting MCP server with index: {index_name}")
-    typer.echo(f"📡 Server will run on port: {port}")
+    Query an indexed codebase using natural language.
     
-    # TODO: Implement server command
-    typer.echo("⚠️  Server command not yet implemented")
+    This command searches the vector database using semantic similarity
+    and returns the most relevant code chunks.
+    """
+    from .commands.query_command import query_codebase
+    
+    query_codebase(
+        index_name=index_name,
+        query=query_text,
+        n_results=n_results,
+        show_content=not no_content,
+    )
+
+
+@app.command()
+def server(
+    project_path: Optional[Path] = typer.Option(
+        None,
+        "--project-path",
+        "-p",
+        help="Project path for configuration (uses CTXAI_HOME if not provided)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """
+    Start the MCP (Model Context Protocol) server for AI agents.
+    
+    Exposes ctxai functionality as MCP tools that can be used by LLMs
+    and AI agents. The server communicates via stdio and can be integrated
+    with MCP-compatible clients like Claude Desktop.
+    
+    Available tools:
+    - list_indexes: List all available code indexes
+    - index_codebase: Index a new codebase
+    - query_codebase: Query indexed code with natural language
+    - get_index_stats: Get detailed statistics about an index
+    
+    Example MCP client configuration (Claude Desktop):
+    {
+      "mcpServers": {
+        "ctxai": {
+          "command": "ctxai",
+          "args": ["server"]
+        }
+      }
+    }
+    """
+    from .commands.server_command import start_mcp_server
+    
+    start_mcp_server(project_path=project_path)
 
 
 @app.command()
@@ -98,12 +152,17 @@ def dashboard(
     ),
 ):
     """
-    Start the web dashboard for browsing indexed codebases.
-    """
-    typer.echo(f"🚀 Starting dashboard on port: {port}")
+    Start the web dashboard for browsing and querying indexed codebases.
     
-    # TODO: Implement dashboard command
-    typer.echo("⚠️  Dashboard command not yet implemented")
+    Provides a FastHTML-based web interface to:
+    - View all indexes with statistics
+    - Query codebases using natural language
+    - Browse chunks and metadata
+    - View configuration settings
+    """
+    from .commands.dashboard_command import start_dashboard
+    
+    start_dashboard(port=port)
 
 
 def main():
