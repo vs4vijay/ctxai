@@ -4,7 +4,7 @@ Stores and retrieves code embeddings for semantic search.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 import chromadb
 from chromadb.config import Settings
@@ -46,8 +46,8 @@ class VectorStore:
 
     def add_chunks(
         self,
-        chunks: List[CodeChunk],
-        embeddings: List[List[float]],
+        chunks: list[CodeChunk],
+        embeddings: list[list[float]],
         batch_size: int = 100,
     ):
         """
@@ -83,10 +83,10 @@ class VectorStore:
 
     def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         n_results: int = 10,
-        filter_dict: Optional[Dict] = None,
-    ) -> List[Dict]:
+        filter_dict: dict | None = None,
+    ) -> list[dict]:
         """
         Search for similar code chunks.
 
@@ -125,7 +125,7 @@ class VectorStore:
             print(f"Error searching vector store: {e}")
             return []
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """
         Get statistics about the vector store.
 
@@ -134,23 +134,23 @@ class VectorStore:
         """
         try:
             count = self.collection.count()
-            
+
             # Get sample of metadata to analyze
             sample_size = min(count, 1000)
             results = self.collection.get(limit=sample_size, include=["metadatas"])
-            
+
             unique_files = set()
             languages = {}
-            
+
             if results["metadatas"]:
                 for metadata in results["metadatas"]:
                     file_path = metadata.get("file_path", "")
                     if file_path:
                         unique_files.add(file_path)
-                    
+
                     language = metadata.get("language", "unknown")
                     languages[language] = languages.get(language, 0) + 1
-            
+
             return {
                 "total_chunks": count,
                 "unique_files": len(unique_files),
@@ -183,7 +183,7 @@ class VectorStore:
         file_name = chunk.file_path.name
         return f"{file_name}_{chunk.start_line}_{chunk.end_line}_{index}"
 
-    def _chunk_to_metadata(self, chunk: CodeChunk) -> Dict[str, str]:
+    def _chunk_to_metadata(self, chunk: CodeChunk) -> dict[str, str]:
         """
         Convert CodeChunk to metadata dictionary.
 

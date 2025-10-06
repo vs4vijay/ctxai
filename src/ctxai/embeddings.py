@@ -11,7 +11,7 @@ Supported providers:
 
 import os
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Optional
 
 from .config import EmbeddingConfig
 
@@ -30,7 +30,7 @@ class BaseEmbeddingProvider(ABC):
         self.batch_size = config.batch_size
 
     @abstractmethod
-    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
         """
         Generate embeddings for a list of texts.
 
@@ -42,7 +42,7 @@ class BaseEmbeddingProvider(ABC):
         """
         pass
 
-    def generate_embedding(self, text: str) -> List[float]:
+    def generate_embedding(self, text: str) -> list[float]:
         """
         Generate embedding for a single text.
 
@@ -67,7 +67,7 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
     def __init__(self, config: EmbeddingConfig):
         """Initialize local embedding provider."""
         super().__init__(config)
-        
+
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError:
@@ -75,14 +75,14 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
                 "sentence-transformers is required for local embeddings. "
                 "Install it with: pip install sentence-transformers"
             )
-        
+
         # Use a good default model for code
         model_name = config.model or "all-MiniLM-L6-v2"
         print(f"Loading local embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
         self._dimension = self.model.get_sentence_embedding_dimension()
 
-    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using local model."""
         if not texts:
             return []
@@ -110,15 +110,12 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
     def __init__(self, config: EmbeddingConfig):
         """Initialize OpenAI embedding provider."""
         super().__init__(config)
-        
+
         try:
             from openai import OpenAI
         except ImportError:
-            raise ImportError(
-                "openai is required for OpenAI embeddings. "
-                "Install it with: pip install openai"
-            )
-        
+            raise ImportError("openai is required for OpenAI embeddings. Install it with: pip install openai")
+
         # Get API key from config or environment
         api_key = config.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -126,10 +123,10 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
                 "OpenAI API key is required. Set OPENAI_API_KEY environment variable "
                 "or configure it in .ctxai/config.json"
             )
-        
+
         self.model = config.model or "text-embedding-3-small"
         self.client = OpenAI(api_key=api_key)
-        
+
         # Determine dimension based on model
         if "3-small" in self.model:
             self._dimension = 1536
@@ -140,7 +137,7 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
         else:
             self._dimension = 1536  # Default
 
-    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using OpenAI API."""
         if not texts:
             return []
@@ -150,7 +147,7 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
         # Process in batches
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            
+
             try:
                 response = self.client.embeddings.create(
                     input=batch,
@@ -175,7 +172,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
     def __init__(self, config: EmbeddingConfig):
         """Initialize HuggingFace embedding provider."""
         super().__init__(config)
-        
+
         # Get API key from config or environment
         api_key = config.api_key or os.getenv("HUGGINGFACE_API_KEY")
         if not api_key:
@@ -183,15 +180,15 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                 "HuggingFace API key is required. Set HUGGINGFACE_API_KEY environment variable "
                 "or configure it in .ctxai/config.json"
             )
-        
+
         self.model = config.model or "sentence-transformers/all-MiniLM-L6-v2"
         self.api_key = api_key
         self._dimension = 384  # Default for all-MiniLM-L6-v2
 
-    def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using HuggingFace API."""
         import requests
-        
+
         if not texts:
             return []
 
@@ -201,7 +198,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
 
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            
+
             try:
                 response = requests.post(api_url, headers=headers, json={"inputs": batch})
                 response.raise_for_status()
@@ -244,11 +241,8 @@ class EmbeddingsFactory:
         provider_class = cls._providers.get(config.provider)
         if provider_class is None:
             available = ", ".join(cls._providers.keys())
-            raise ValueError(
-                f"Unknown embedding provider: {config.provider}. "
-                f"Available providers: {available}"
-            )
-        
+            raise ValueError(f"Unknown embedding provider: {config.provider}. Available providers: {available}")
+
         return provider_class(config)
 
     @classmethod

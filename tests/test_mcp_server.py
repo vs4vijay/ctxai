@@ -2,9 +2,10 @@
 Tests for MCP server functionality.
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 # Skip all tests if MCP is not available
 pytest.importorskip("mcp", reason="MCP not installed")
@@ -34,9 +35,9 @@ async def test_list_indexes_via_server(tmp_path):
         mock_indexes_dir = tmp_path / "indexes"
         mock_indexes_dir.mkdir()
         mock_get_indexes_dir.return_value = mock_indexes_dir
-        
+
         server = create_server()
-        
+
         # The tools should be registered
         assert len(server._tool_manager._tools) == 4
         tool_names = [tool.name for tool in server._tool_manager._tools.values()]
@@ -51,7 +52,7 @@ async def test_server_with_project_path(tmp_path):
     """Test server with custom project path."""
     project_path = tmp_path / "project"
     project_path.mkdir()
-    
+
     server = create_server(project_path=project_path)
     assert server is not None
     assert server.name == "ctxai"

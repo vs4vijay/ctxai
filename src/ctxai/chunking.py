@@ -5,7 +5,7 @@ Preserves semantic meaning by respecting code structure.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 from tree_sitter_language_pack import get_parser
 
@@ -20,7 +20,7 @@ class CodeChunk:
     end_line: int
     chunk_type: str  # e.g., "function", "class", "module", "comment"
     language: str
-    metadata: Dict[str, str]  # Additional context like function name, class name, etc.
+    metadata: dict[str, str]  # Additional context like function name, class name, etc.
 
 
 class CodeChunker:
@@ -106,9 +106,9 @@ class CodeChunker:
         """
         self.max_chunk_size = max_chunk_size
         self.overlap = overlap
-        self.parsers: Dict[str, any] = {}
+        self.parsers: dict[str, any] = {}
 
-    def _get_language(self, file_path: Path) -> Optional[str]:
+    def _get_language(self, file_path: Path) -> str | None:
         """Detect language from file extension."""
         return self.LANGUAGE_MAP.get(file_path.suffix.lower())
 
@@ -126,7 +126,7 @@ class CodeChunker:
         """Extract text from a tree-sitter node."""
         return source_code[node.start_byte : node.end_byte].decode("utf-8", errors="ignore")
 
-    def _get_node_metadata(self, node, source_code: bytes, language: str) -> Dict[str, str]:
+    def _get_node_metadata(self, node, source_code: bytes, language: str) -> dict[str, str]:
         """Extract metadata from a node based on its type."""
         metadata = {"node_type": node.type}
 
@@ -148,7 +148,7 @@ class CodeChunker:
 
         return metadata
 
-    def chunk_file(self, file_path: Path) -> List[CodeChunk]:
+    def chunk_file(self, file_path: Path) -> list[CodeChunk]:
         """
         Chunk a file into semantically meaningful pieces.
 
@@ -179,9 +179,7 @@ class CodeChunker:
 
             # Traverse the tree and extract chunks
             chunks.extend(
-                self._extract_chunks_from_tree(
-                    tree.root_node, source_code, file_path, language, chunk_node_types
-                )
+                self._extract_chunks_from_tree(tree.root_node, source_code, file_path, language, chunk_node_types)
             )
 
             # If no chunks were extracted (e.g., simple script), chunk the whole file
@@ -200,8 +198,8 @@ class CodeChunker:
         source_code: bytes,
         file_path: Path,
         language: str,
-        chunk_node_types: List[str],
-    ) -> List[CodeChunk]:
+        chunk_node_types: list[str],
+    ) -> list[CodeChunk]:
         """Recursively extract chunks from a tree-sitter tree."""
         chunks = []
 
@@ -230,11 +228,7 @@ class CodeChunker:
         else:
             # Recurse into children
             for child in node.children:
-                chunks.extend(
-                    self._extract_chunks_from_tree(
-                        child, source_code, file_path, language, chunk_node_types
-                    )
-                )
+                chunks.extend(self._extract_chunks_from_tree(child, source_code, file_path, language, chunk_node_types))
 
         return chunks
 
@@ -245,8 +239,8 @@ class CodeChunker:
         start_line: int,
         chunk_type: str,
         language: str,
-        metadata: Dict[str, str],
-    ) -> List[CodeChunk]:
+        metadata: dict[str, str],
+    ) -> list[CodeChunk]:
         """Split a large chunk into smaller overlapping chunks."""
         chunks = []
         lines = content.split("\n")
@@ -282,9 +276,7 @@ class CodeChunker:
                     overlap_size += len(line) + 1
 
                 current_chunk_lines = overlap_lines
-                current_start_line = current_start_line + len(current_chunk_lines) - len(
-                    overlap_lines
-                )
+                current_start_line = current_start_line + len(current_chunk_lines) - len(overlap_lines)
                 current_size = overlap_size
 
         # Add remaining lines as final chunk
@@ -304,9 +296,7 @@ class CodeChunker:
 
         return chunks
 
-    def _chunk_text_file(
-        self, file_path: Path, language: Optional[str] = None
-    ) -> List[CodeChunk]:
+    def _chunk_text_file(self, file_path: Path, language: str | None = None) -> list[CodeChunk]:
         """
         Simple text-based chunking for files without tree-sitter support.
 
@@ -318,7 +308,7 @@ class CodeChunker:
             List of CodeChunk objects
         """
         try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(file_path, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
 
             chunks = []

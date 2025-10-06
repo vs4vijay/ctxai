@@ -4,8 +4,9 @@ Respects .gitignore patterns and handles file filtering.
 """
 
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, List, Optional, Set
+from typing import Optional
 
 import pathspec
 
@@ -16,8 +17,8 @@ class CodeTraversal:
     def __init__(
         self,
         root_path: Path,
-        include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
         follow_gitignore: bool = True,
     ):
         """
@@ -59,14 +60,14 @@ class CodeTraversal:
             "*.egg-info",
         }
 
-    def _load_gitignore(self) -> Optional[pathspec.PathSpec]:
+    def _load_gitignore(self) -> pathspec.PathSpec | None:
         """Load .gitignore patterns from the root directory."""
         gitignore_path = self.root_path / ".gitignore"
         if not gitignore_path.exists():
             return None
 
         try:
-            with open(gitignore_path, "r", encoding="utf-8") as f:
+            with open(gitignore_path, encoding="utf-8") as f:
                 patterns = f.read().splitlines()
             return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
         except Exception as e:
@@ -122,11 +123,7 @@ class CodeTraversal:
             root_path = Path(root)
 
             # Filter directories in-place to prevent descending into excluded dirs
-            dirs[:] = [
-                d
-                for d in dirs
-                if not self._should_exclude_path(root_path / d)
-            ]
+            dirs[:] = [d for d in dirs if not self._should_exclude_path(root_path / d)]
 
             # Process files
             for file_name in files:

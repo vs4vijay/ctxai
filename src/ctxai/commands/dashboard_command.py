@@ -10,37 +10,38 @@ from typing import Optional
 
 try:
     from fasthtml.common import (
-        FastHTML,
-        Body,
-        Head,
-        Html,
-        Title,
-        Div,
         H1,
         H2,
         H3,
-        P,
-        Form,
-        Input,
-        Button,
-        Table,
-        Thead,
-        Tbody,
-        Tr,
-        Th,
-        Td,
         A,
-        Script,
-        Style,
-        serve,
-        Link,
-        Label,
-        Textarea,
-        Pre,
+        Body,
+        Button,
         Code,
-        Select,
+        Div,
+        FastHTML,
+        Form,
+        Head,
+        Html,
+        Input,
+        Label,
+        Link,
         Option,
+        P,
+        Pre,
+        Script,
+        Select,
+        Style,
+        Table,
+        Tbody,
+        Td,
+        Textarea,
+        Th,
+        Thead,
+        Title,
+        Tr,
+        serve,
     )
+
     FASTHTML_AVAILABLE = True
 except ImportError:
     FASTHTML_AVAILABLE = False
@@ -49,13 +50,13 @@ from rich.console import Console
 
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
-from ..utils import get_indexes_dir, get_ctxai_home, get_ctxai_home_info
+from ..utils import get_ctxai_home, get_ctxai_home_info, get_indexes_dir
 from ..vector_store import VectorStore
 
 console = Console()
 
 
-def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
+def start_dashboard(port: int = 3000, project_path: Path | None = None):
     """
     Start the FastHTML dashboard server.
 
@@ -65,12 +66,8 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
     """
     if not FASTHTML_AVAILABLE:
         console.print("[red]✗ FastHTML is not installed[/red]\n")
-        console.print(
-            "[yellow]Install it with:[/yellow] [cyan]pip install python-fasthtml[/cyan]\n"
-        )
-        console.print(
-            "[yellow]Or install all optional dependencies:[/yellow] [cyan]pip install ctxai[all][/cyan]\n"
-        )
+        console.print("[yellow]Install it with:[/yellow] [cyan]pip install python-fasthtml[/cyan]\n")
+        console.print("[yellow]Or install all optional dependencies:[/yellow] [cyan]pip install ctxai[all][/cyan]\n")
         return
 
     console.print(f"[bold blue]🚀 Starting dashboard on port {port}...[/bold blue]\n")
@@ -316,15 +313,11 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                 if index_path.is_dir():
                     try:
                         # Get vector store stats
-                        vector_store = VectorStore(
-                            storage_path=index_path, collection_name=index_path.name
-                        )
+                        vector_store = VectorStore(storage_path=index_path, collection_name=index_path.name)
                         stats = vector_store.get_stats()
 
                         # Get creation time
-                        creation_time = datetime.fromtimestamp(
-                            index_path.stat().st_ctime
-                        ).strftime("%Y-%m-%d %H:%M:%S")
+                        creation_time = datetime.fromtimestamp(index_path.stat().st_ctime).strftime("%Y-%m-%d %H:%M:%S")
 
                         indexes.append(
                             {
@@ -332,9 +325,8 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                                 "path": str(index_path),
                                 "chunks": stats["total_chunks"],
                                 "created": creation_time,
-                                "size_mb": sum(
-                                    f.stat().st_size for f in index_path.rglob("*") if f.is_file()
-                                ) / (1024 * 1024),
+                                "size_mb": sum(f.stat().st_size for f in index_path.rglob("*") if f.is_file())
+                                / (1024 * 1024),
                             }
                         )
                     except Exception as e:
@@ -349,9 +341,19 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                     Td(f"{idx['size_mb']:.2f} MB"),
                     Td(idx["created"]),
                     Td(
-                        A("View", href=f"/index/{idx['name']}", cls="btn btn-secondary", style="padding: 0.5rem 1rem;"),
+                        A(
+                            "View",
+                            href=f"/index/{idx['name']}",
+                            cls="btn btn-secondary",
+                            style="padding: 0.5rem 1rem;",
+                        ),
                         " ",
-                        A("Query", href=f"/query?index={idx['name']}", cls="btn", style="padding: 0.5rem 1rem;"),
+                        A(
+                            "Query",
+                            href=f"/query?index={idx['name']}",
+                            cls="btn",
+                            style="padding: 0.5rem 1rem;",
+                        ),
                     ),
                 )
                 for idx in indexes
@@ -361,7 +363,10 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                 Tbody(*index_rows),
             )
         else:
-            index_table = P("No indexes found. Create one using the 'ctxai index' command.", style="color: #94a3b8;")
+            index_table = P(
+                "No indexes found. Create one using the 'ctxai index' command.",
+                style="color: #94a3b8;",
+            )
 
         return Html(
             Head(Title("CTXAI Dashboard"), app_styles),
@@ -385,7 +390,10 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                         H2("📁 Configuration"),
                         Div(
                             Div(Div(P("Home Directory"), P(str(ctxai_home))), cls="info-item"),
-                            Div(Div(P("Location Type"), P(home_info["location_type"])), cls="info-item"),
+                            Div(
+                                Div(P("Location Type"), P(home_info["location_type"])),
+                                cls="info-item",
+                            ),
                             Div(Div(P("Total Indexes"), P(str(len(indexes)))), cls="info-item"),
                             cls="info-grid",
                         ),
@@ -405,10 +413,14 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
 
         if not index_path.exists():
             return Html(
-                Head(Title(f"Index Not Found - CTXAI"), app_styles),
+                Head(Title("Index Not Found - CTXAI"), app_styles),
                 Body(
                     Div(
-                        Div(H1("❌ Index Not Found"), P(f"Index '{name}' does not exist."), cls="header"),
+                        Div(
+                            H1("❌ Index Not Found"),
+                            P(f"Index '{name}' does not exist."),
+                            cls="header",
+                        ),
                         Div(A("← Back to Home", href="/", cls="btn")),
                         cls="container",
                     )
@@ -448,7 +460,7 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
 
         except Exception as e:
             return Html(
-                Head(Title(f"Error - CTXAI"), app_styles),
+                Head(Title("Error - CTXAI"), app_styles),
                 Body(
                     Div(
                         Div(H1("❌ Error"), P(f"Error loading index: {e}"), cls="header"),
@@ -462,12 +474,22 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
             Head(Title(f"{name} - CTXAI Dashboard"), app_styles),
             Body(
                 Div(
-                    Div(H1(f"📊 Index: {name}"), P(f"Total chunks: {stats['total_chunks']:,}"), cls="header"),
-                    Div(A("← Back to Home", href="/", cls="btn"), A("Query This Index", href=f"/query?index={name}", cls="btn")),
+                    Div(
+                        H1(f"📊 Index: {name}"),
+                        P(f"Total chunks: {stats['total_chunks']:,}"),
+                        cls="header",
+                    ),
+                    Div(
+                        A("← Back to Home", href="/", cls="btn"),
+                        A("Query This Index", href=f"/query?index={name}", cls="btn"),
+                    ),
                     Div(
                         H2("📈 Statistics"),
                         Div(
-                            Div(Div(P("Total Chunks"), P(f"{stats['total_chunks']:,}")), cls="info-item"),
+                            Div(
+                                Div(P("Total Chunks"), P(f"{stats['total_chunks']:,}")),
+                                cls="info-item",
+                            ),
                             Div(Div(P("Index Name"), P(name)), cls="info-item"),
                             Div(Div(P("Storage Path"), P(str(index_path))), cls="info-item"),
                             cls="info-grid",
@@ -485,7 +507,7 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
         )
 
     @app.get("/query")
-    def query_page(index: Optional[str] = None):
+    def query_page(index: str | None = None):
         """Query interface."""
         # Get all indexes for dropdown
         index_options = []
@@ -521,7 +543,14 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                             ),
                             Div(
                                 Label("Number of Results", **{"for": "n_results"}),
-                                Input(type="number", id="n_results", name="n_results", value="5", min="1", max="20"),
+                                Input(
+                                    type="number",
+                                    id="n_results",
+                                    name="n_results",
+                                    value="5",
+                                    min="1",
+                                    max="20",
+                                ),
                                 cls="form-group",
                             ),
                             Button("🔍 Search", type="submit"),
@@ -606,7 +635,11 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
             Head(Title("Query Results - CTXAI Dashboard"), app_styles),
             Body(
                 Div(
-                    Div(H1("🔍 Query Results"), P(f"Found {len(results)} result(s) for: {query}"), cls="header"),
+                    Div(
+                        H1("🔍 Query Results"),
+                        P(f"Found {len(results)} result(s) for: {query}"),
+                        cls="header",
+                    ),
                     Div(A("← New Query", href="/query", cls="btn")),
                     Div(H2(f"Results from '{index}'"), *result_cards, cls="card"),
                     cls="container",
@@ -650,7 +683,10 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                         H2("📁 CTXAI Home"),
                         Div(
                             Div(Div(P("Home Directory"), P(str(ctxai_home))), cls="info-item"),
-                            Div(Div(P("Location Type"), P(home_info["location_type"])), cls="info-item"),
+                            Div(
+                                Div(P("Location Type"), P(home_info["location_type"])),
+                                cls="info-item",
+                            ),
                             Div(Div(P("Indexes Directory"), P(str(indexes_dir))), cls="info-item"),
                             cls="info-grid",
                         ),
@@ -658,7 +694,10 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
                     ),
                     Div(
                         H2("🔧 Configuration"),
-                        P("Current configuration from .ctxai/config.json", style="color: #94a3b8; margin-bottom: 1rem;"),
+                        P(
+                            "Current configuration from .ctxai/config.json",
+                            style="color: #94a3b8; margin-bottom: 1rem;",
+                        ),
                         Div(Pre(Code(config_json)), cls="code-block"),
                         cls="card",
                     ),
@@ -668,7 +707,7 @@ def start_dashboard(port: int = 3000, project_path: Optional[Path] = None):
         )
 
     # Start server
-    console.print(f"[green]✓ Dashboard started successfully![/green]")
+    console.print("[green]✓ Dashboard started successfully![/green]")
     console.print(f"[cyan]Open in browser: http://localhost:{port}[/cyan]\n")
     console.print("[dim]Press Ctrl+C to stop the server[/dim]\n")
 

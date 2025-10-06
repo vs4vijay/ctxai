@@ -1,6 +1,7 @@
-import typer
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
+
+import typer
 
 app = typer.Typer(
     name="ctxai",
@@ -19,17 +20,17 @@ def index(
         dir_okay=True,
         resolve_path=True,
     ),
-    name: Optional[str] = typer.Argument(
+    name: str | None = typer.Argument(
         None,
         help="Name for the index (uses configured default if not provided)",
     ),
-    include: Optional[List[str]] = typer.Option(
+    include: list[str] | None = typer.Option(
         None,
         "--include",
         "-i",
         help="File patterns to include (e.g., '*.py', '*.js'). Can be specified multiple times.",
     ),
-    exclude: Optional[List[str]] = typer.Option(
+    exclude: list[str] | None = typer.Option(
         None,
         "--exclude",
         "-e",
@@ -43,19 +44,19 @@ def index(
 ):
     """
     Index a codebase for semantic search.
-    
+
     This command traverses your codebase, chunks the code intelligently,
     generates embeddings, and stores them in a local vector database.
     """
     from .commands.index_command import index_codebase
-    
+
     if name:
         typer.echo(f"🚀 Indexing codebase at: {path}")
         typer.echo(f"📝 Index name: {name}")
     else:
         typer.echo(f"🚀 Indexing codebase at: {path}")
-        typer.echo(f"📝 Using configured or default index name")
-    
+        typer.echo("📝 Using configured or default index name")
+
     index_codebase(
         path=path,
         index_name=name,
@@ -63,14 +64,14 @@ def index(
         exclude_patterns=exclude,
         follow_gitignore=follow_gitignore,
     )
-    
+
     if name:
         typer.echo(f"✅ Successfully indexed codebase as '{name}'")
 
 
 @app.command()
 def query(
-    index_name: Optional[str] = typer.Argument(
+    index_name: str | None = typer.Argument(
         None,
         help="Name of the index to query (uses configured default if not provided)",
     ),
@@ -92,12 +93,12 @@ def query(
 ):
     """
     Query an indexed codebase using natural language.
-    
+
     This command searches the vector database using semantic similarity
     and returns the most relevant code chunks.
     """
     from .commands.query_command import query_codebase
-    
+
     query_codebase(
         index_name=index_name,
         query=query_text,
@@ -108,7 +109,7 @@ def query(
 
 @app.command()
 def server(
-    project_path: Optional[Path] = typer.Option(
+    project_path: Path | None = typer.Option(
         None,
         "--project-path",
         "-p",
@@ -121,17 +122,17 @@ def server(
 ):
     """
     Start the MCP (Model Context Protocol) server for AI agents.
-    
+
     Exposes ctxai functionality as MCP tools that can be used by LLMs
     and AI agents. The server communicates via stdio and can be integrated
     with MCP-compatible clients like Claude Desktop.
-    
+
     Available tools:
     - list_indexes: List all available code indexes
     - index_codebase: Index a new codebase
     - query_codebase: Query indexed code with natural language
     - get_index_stats: Get detailed statistics about an index
-    
+
     Example MCP client configuration (Claude Desktop):
     {
       "mcpServers": {
@@ -143,7 +144,7 @@ def server(
     }
     """
     from .commands.server_command import start_mcp_server
-    
+
     start_mcp_server(project_path=project_path)
 
 
@@ -158,7 +159,7 @@ def dashboard(
 ):
     """
     Start the web dashboard for browsing and querying indexed codebases.
-    
+
     Provides a FastHTML-based web interface to:
     - View all indexes with statistics
     - Query codebases using natural language
@@ -166,7 +167,7 @@ def dashboard(
     - View configuration settings
     """
     from .commands.dashboard_command import start_dashboard
-    
+
     start_dashboard(port=port)
 
 
@@ -178,25 +179,25 @@ def config(
         "-l",
         help="List all configuration settings",
     ),
-    get: Optional[str] = typer.Option(
+    get: str | None = typer.Option(
         None,
         "--get",
         "-g",
         help="Get a specific configuration value (e.g., 'embedding.provider')",
     ),
-    set_key: Optional[str] = typer.Option(
+    set_key: str | None = typer.Option(
         None,
         "--set",
         "-s",
         help="Set a configuration key (requires --value)",
     ),
-    value: Optional[str] = typer.Option(
+    value: str | None = typer.Option(
         None,
         "--value",
         "-v",
         help="Value to set for the configuration key (used with --set)",
     ),
-    unset: Optional[str] = typer.Option(
+    unset: str | None = typer.Option(
         None,
         "--unset",
         "-u",
@@ -213,7 +214,7 @@ def config(
         "-e",
         help="Show configuration file location for manual editing",
     ),
-    project_path: Optional[Path] = typer.Option(
+    project_path: Path | None = typer.Option(
         None,
         "--project-path",
         "-p",
@@ -226,51 +227,53 @@ def config(
 ):
     """
     Manage ctxai configuration settings (similar to git config).
-    
+
     Configuration is stored in .ctxai/config.json and can be managed at:
     - Global level (CTXAI_HOME environment variable)
     - Project level (.ctxai in current directory)
-    
+
     Examples:
         # List all configuration
         ctxai config --list
-        
+
         # Get a specific value
         ctxai config --get embedding.provider
-        
+
         # Set a value
         ctxai config --set embedding.provider --value openai
         ctxai config --set embedding.api_key --value sk-xxx
         ctxai config --set indexing.chunk_size --value 1500
-        
+
         # Unset a value (revert to default)
         ctxai config --unset embedding.api_key
-        
+
         # View raw config file
         ctxai config --show-file
-        
+
         # Get config file location
         ctxai config --edit
     """
     from .commands.config_command import (
-        list_config,
-        get_config,
-        set_config,
-        unset_config,
-        show_config_file,
         edit_config,
+        get_config,
+        list_config,
+        set_config,
+        show_config_file,
+        unset_config,
     )
-    
+
     # Handle different operations
-    operations_count = sum([
-        list_all,
-        get is not None,
-        set_key is not None,
-        unset is not None,
-        show_file,
-        edit,
-    ])
-    
+    operations_count = sum(
+        [
+            list_all,
+            get is not None,
+            set_key is not None,
+            unset is not None,
+            show_file,
+            edit,
+        ]
+    )
+
     if operations_count == 0:
         # Default to listing config
         list_config(project_path=project_path)

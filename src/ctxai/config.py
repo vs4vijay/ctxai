@@ -5,28 +5,28 @@ Respects CTXAI_HOME environment variable for custom .ctxai location.
 """
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 
-from .utils import get_ctxai_home, get_config_path
+from .utils import get_config_path, get_ctxai_home
 
 
 @dataclass
 class EmbeddingConfig:
     """Configuration for embedding generation."""
-    
+
     provider: str = "local"  # "local", "openai", "huggingface", "azure"
-    model: Optional[str] = None  # Model name, provider-specific default if None
-    api_key: Optional[str] = None  # API key for cloud providers
+    model: str | None = None  # Model name, provider-specific default if None
+    api_key: str | None = None  # API key for cloud providers
     batch_size: int = 100
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
 
 
 @dataclass
 class IndexConfig:
     """Configuration for indexing behavior."""
-    
+
     max_files: int = 10000  # Maximum number of files to index
     max_total_size_mb: int = 500  # Maximum total size in MB
     max_file_size_mb: int = 5  # Maximum individual file size in MB
@@ -37,19 +37,19 @@ class IndexConfig:
 @dataclass
 class Config:
     """Main configuration for ctxai."""
-    
+
     embedding: EmbeddingConfig
     indexing: IndexConfig
     version: str = "1.0"
-    
+
     # Current index metadata
-    index_name: Optional[str] = None  # Current/default index name
-    index_status: Optional[str] = None  # "indexing", "completed", "failed"
-    index_files_count: Optional[int] = None  # Number of files in index
-    index_size_mb: Optional[float] = None  # Total size of indexed files in MB
-    index_chunks_count: Optional[int] = None  # Total number of chunks
-    index_last_updated: Optional[str] = None  # ISO format timestamp
-    
+    index_name: str | None = None  # Current/default index name
+    index_status: str | None = None  # "indexing", "completed", "failed"
+    index_files_count: int | None = None  # Number of files in index
+    index_size_mb: float | None = None  # Total size of indexed files in MB
+    index_chunks_count: int | None = None  # Total number of chunks
+    index_last_updated: str | None = None  # ISO format timestamp
+
     @classmethod
     def default(cls) -> "Config":
         """Create default configuration."""
@@ -57,8 +57,8 @@ class Config:
             embedding=EmbeddingConfig(),
             indexing=IndexConfig(),
         )
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "version": self.version,
@@ -71,9 +71,9 @@ class Config:
             "index_chunks_count": self.index_chunks_count,
             "index_last_updated": self.index_last_updated,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Config":
+    def from_dict(cls, data: dict[str, Any]) -> "Config":
         """Create from dictionary."""
         return cls(
             version=data.get("version", "1.0"),
@@ -90,13 +90,13 @@ class Config:
 
 class ConfigManager:
     """Manages configuration loading and saving."""
-    
+
     CONFIG_FILENAME = "config.json"
-    
-    def __init__(self, project_path: Optional[Path] = None):
+
+    def __init__(self, project_path: Path | None = None):
         """
         Initialize config manager.
-        
+
         Args:
             project_path: Optional project root path. If not provided,
                          uses CTXAI_HOME env var or current directory.
@@ -104,21 +104,21 @@ class ConfigManager:
         self.project_path = project_path
         self.ctxai_home = get_ctxai_home(project_path)
         self.config_path = get_config_path(project_path)
-        self._config: Optional[Config] = None
-    
+        self._config: Config | None = None
+
     def load(self) -> Config:
         """
         Load configuration from file or create default.
-        
+
         Returns:
             Config object
         """
         if self._config is not None:
             return self._config
-        
+
         if self.config_path.exists():
             try:
-                with open(self.config_path, "r", encoding="utf-8") as f:
+                with open(self.config_path, encoding="utf-8") as f:
                     data = json.load(f)
                 self._config = Config.from_dict(data)
             except Exception as e:
@@ -128,40 +128,40 @@ class ConfigManager:
         else:
             self._config = Config.default()
             self.save()  # Save default config for user reference
-        
+
         return self._config
-    
-    def save(self, config: Optional[Config] = None) -> None:
+
+    def save(self, config: Config | None = None) -> None:
         """
         Save configuration to file.
-        
+
         Args:
             config: Config to save, or use currently loaded config
         """
         if config is not None:
             self._config = config
-        
+
         if self._config is None:
             raise ValueError("No configuration to save")
-        
+
         # Ensure directory exists
         self.ctxai_home.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self._config.to_dict(), f, indent=2)
         except Exception as e:
             print(f"Warning: Could not save config to {self.config_path}: {e}")
-    
+
     def update_embedding_provider(
         self,
         provider: str,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
+        model: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         """
         Update embedding provider configuration.
-        
+
         Args:
             provider: Provider name ("local", "openai", etc.)
             model: Optional model name
@@ -174,30 +174,30 @@ class ConfigManager:
         if api_key is not None:
             config.embedding.api_key = api_key
         self.save(config)
-    
+
     def get_embedding_config(self) -> EmbeddingConfig:
         """Get embedding configuration."""
         return self.load().embedding
-    
+
     def get_index_config(self) -> IndexConfig:
         """Get indexing configuration."""
         return self.load().indexing
-    
-    def get_current_index_name(self) -> Optional[str]:
+
+    def get_current_index_name(self) -> str | None:
         """Get the current/default index name."""
         return self.load().index_name
-    
+
     def update_index_metadata(
         self,
         index_name: str,
         status: str,
-        files_count: Optional[int] = None,
-        size_mb: Optional[float] = None,
-        chunks_count: Optional[int] = None,
+        files_count: int | None = None,
+        size_mb: float | None = None,
+        chunks_count: int | None = None,
     ) -> None:
         """
         Update index metadata in configuration.
-        
+
         Args:
             index_name: Name of the index
             status: Status of the index ("indexing", "completed", "failed")
@@ -206,22 +206,22 @@ class ConfigManager:
             chunks_count: Total number of chunks created
         """
         from datetime import datetime
-        
+
         config = self.load()
         config.index_name = index_name
         config.index_status = status
-        
+
         if files_count is not None:
             config.index_files_count = files_count
         if size_mb is not None:
             config.index_size_mb = round(size_mb, 2)
         if chunks_count is not None:
             config.index_chunks_count = chunks_count
-        
+
         config.index_last_updated = datetime.utcnow().isoformat() + "Z"
-        
+
         self.save(config)
-    
+
     def clear_index_metadata(self) -> None:
         """Clear all index metadata from configuration."""
         config = self.load()
@@ -232,11 +232,11 @@ class ConfigManager:
         config.index_chunks_count = None
         config.index_last_updated = None
         self.save(config)
-    
-    def get_index_metadata(self) -> Dict[str, Any]:
+
+    def get_index_metadata(self) -> dict[str, Any]:
         """
         Get current index metadata.
-        
+
         Returns:
             Dictionary with index metadata
         """

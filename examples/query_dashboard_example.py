@@ -8,8 +8,8 @@ This example demonstrates:
 
 from pathlib import Path
 
-from ctxai.commands.query_command import query_codebase
 from ctxai.commands.dashboard_command import start_dashboard
+from ctxai.commands.query_command import query_codebase
 
 
 def example_query():
