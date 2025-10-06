@@ -455,6 +455,9 @@ ruff format src/
 
 # Type checking (if mypy is added)
 mypy src/
+
+
+uv version --bump patch
 ```
 
 ### Project Structure
