@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import tree_sitter_languages
+from tree_sitter_language_pack import get_parser
 
 
 @dataclass
@@ -116,7 +116,7 @@ class CodeChunker:
         """Get or create a tree-sitter parser for the given language."""
         if language not in self.parsers:
             try:
-                self.parsers[language] = tree_sitter_languages.get_parser(language)
+                self.parsers[language] = get_parser(language)
             except Exception as e:
                 print(f"Warning: Could not get parser for {language}: {e}")
                 return None

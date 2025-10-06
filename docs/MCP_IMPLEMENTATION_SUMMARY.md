@@ -107,7 +107,6 @@ mcp = [
 ]
 all = [
     "openai>=1.58.1",
-    "requests>=2.32.0",
     "python-fasthtml>=0.9.3",
     "mcp>=1.16.0",
 ]
