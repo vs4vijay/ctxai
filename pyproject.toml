@@ -36,7 +36,7 @@ all = [
 ]
 
 [project.scripts]
-ctxai = "ctxai.__main__:main"
+ctxai = "ctxai.__main__:app"
 
 [dependency-groups]
 dev = [

@@ -48,6 +48,10 @@ ctxai dashboard  # Open http://localhost:3000
 
 ## Usage
 
+![help command](.images/help.png)
+
+![index command](.images/index.png)
+
 ### Prerequisites
 
 **No API key needed for default local embeddings!**
