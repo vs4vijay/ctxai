@@ -35,7 +35,7 @@ def test_query_command_basic(tmp_path):
         patch("ctxai.commands.query_command.get_indexes_dir") as mock_get_indexes_dir,
     ):
         # Setup mocks
-        mock_config = Config(embedding=EmbeddingConfig(provider="local"), index=IndexConfig())
+        mock_config = Config(embedding=EmbeddingConfig(provider="local"), indexing=IndexConfig())
         mock_config_manager.return_value.load.return_value = mock_config
 
         mock_embeddings = MagicMock()
@@ -73,7 +73,7 @@ def test_query_command_no_results(tmp_path):
         patch("ctxai.commands.query_command.get_indexes_dir") as mock_get_indexes_dir,
     ):
         # Setup mocks
-        mock_config = Config(embedding=EmbeddingConfig(provider="local"), index=IndexConfig())
+        mock_config = Config(embedding=EmbeddingConfig(provider="local"), indexing=IndexConfig())
         mock_config_manager.return_value.load.return_value = mock_config
 
         mock_embeddings = MagicMock()
@@ -106,7 +106,7 @@ def test_query_command_index_not_found(tmp_path):
         patch("ctxai.commands.query_command.get_indexes_dir") as mock_get_indexes_dir,
     ):
         # Setup mocks
-        mock_config = Config(embedding=EmbeddingConfig(provider="local"), index=IndexConfig())
+        mock_config = Config(embedding=EmbeddingConfig(provider="local"), indexing=IndexConfig())
         mock_config_manager.return_value.load.return_value = mock_config
 
         mock_embeddings = MagicMock()
@@ -149,7 +149,7 @@ def test_query_command_no_content(tmp_path):
         patch("ctxai.commands.query_command.get_indexes_dir") as mock_get_indexes_dir,
     ):
         # Setup mocks
-        mock_config = Config(embedding=EmbeddingConfig(provider="local"), index=IndexConfig())
+        mock_config = Config(embedding=EmbeddingConfig(provider="local"), indexing=IndexConfig())
         mock_config_manager.return_value.load.return_value = mock_config
 
         mock_embeddings = MagicMock()
