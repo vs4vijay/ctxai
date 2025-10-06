@@ -4,13 +4,15 @@ Example script demonstrating how to use ctxai programmatically.
 
 from pathlib import Path
 from ctxai.chunking import CodeChunker
+from ctxai.config import ConfigManager, EmbeddingConfig
+from ctxai.embeddings import EmbeddingsFactory
 from ctxai.traversal import CodeTraversal
-from ctxai.embeddings import EmbeddingsGenerator
+from ctxai.utils import get_ctxai_home, get_indexes_dir
 from ctxai.vector_store import VectorStore
 
 
-def example_index_codebase():
-    """Example: Index a codebase programmatically."""
+def example_index_with_local_embeddings():
+    """Example: Index a codebase with local embeddings (no API key needed)."""
     
     # 1. Set up traversal
     codebase_path = Path("./your-project")
@@ -34,15 +36,22 @@ def example_index_codebase():
     
     print(f"Created {len(all_chunks)} chunks from codebase")
     
-    # 4. Generate embeddings
-    embeddings_gen = EmbeddingsGenerator()
+    # 4. Create embedding config for local provider (default)
+    embedding_config = EmbeddingConfig(
+        provider="local",
+        model="all-MiniLM-L6-v2",  # Good balance of speed and quality
+    )
+    
+    # 5. Generate embeddings
+    embeddings_gen = EmbeddingsFactory.create(embedding_config)
     chunk_texts = [chunk.content for chunk in all_chunks]
     embeddings = embeddings_gen.generate_embeddings(chunk_texts)
     
     print(f"Generated {len(embeddings)} embeddings")
     
-    # 5. Store in vector database
-    storage_path = codebase_path / ".ctxai" / "indexes" / "my-index"
+    # 6. Store in vector database (respects CTXAI_HOME)
+    indexes_dir = get_indexes_dir(codebase_path)
+    storage_path = indexes_dir / "my-index"
     vector_store = VectorStore(
         storage_path=storage_path,
         collection_name="my-index",
@@ -51,7 +60,7 @@ def example_index_codebase():
     
     print("✓ Indexing complete!")
     
-    # 6. Get stats
+    # 7. Get stats
     stats = vector_store.get_stats()
     print(f"\nIndex stats:")
     print(f"  Total chunks: {stats['total_chunks']}")
@@ -59,29 +68,92 @@ def example_index_codebase():
     print(f"  Languages: {stats['languages']}")
 
 
+def example_index_with_openai():
+    """Example: Index with OpenAI embeddings for better quality."""
+    
+    codebase_path = Path("./your-project")
+    
+    # Load or create config (respects CTXAI_HOME)
+    config_manager = ConfigManager(codebase_path)
+    config = config_manager.load()
+    
+    # Update to use OpenAI
+    config.embedding.provider = "openai"
+    config.embedding.model = "text-embedding-3-small"
+    config_manager.save(config)
+    
+    # Rest is the same as local embeddings...
+    print("Config updated to use OpenAI embeddings")
+    print("Make sure OPENAI_API_KEY is set in environment")
+
+
+def example_with_config_file():
+    """Example: Use configuration from .ctxai/config.json."""
+    
+    codebase_path = Path("./your-project")
+    
+    # 1. Load configuration (respects CTXAI_HOME)
+    config_manager = ConfigManager(codebase_path)
+    config = config_manager.load()
+    
+    print(f"Embedding provider: {config.embedding.provider}")
+    print(f"Max files: {config.indexing.max_files}")
+    
+    # 2. Create embedding provider based on config
+    embeddings_gen = EmbeddingsFactory.create(config.embedding)
+    
+    # 3. Use it...
+    text = "def hello(): return 'world'"
+    embedding = embeddings_gen.generate_embedding(text)
+    print(f"Generated embedding with {len(embedding)} dimensions")
+
+
+def example_with_ctxai_home():
+    """Example: Using CTXAI_HOME for global configuration."""
+    import os
+    
+    # Set global CTXAI_HOME (can also be in .env or shell profile)
+    os.environ["CTXAI_HOME"] = str(Path.home() / ".ctxai")
+    
+    # Now all projects use the same .ctxai directory
+    ctxai_home = get_ctxai_home()
+    print(f"Using global CTXAI_HOME: {ctxai_home}")
+    
+    # Configuration is shared across all projects
+    config_manager = ConfigManager()
+    config = config_manager.load()
+    print(f"Global embedding provider: {config.embedding.provider}")
+
+
 def example_search_codebase():
     """Example: Search an indexed codebase."""
     
-    # 1. Load vector store
+    # 1. Load config and vector store (respects CTXAI_HOME)
     codebase_path = Path("./your-project")
-    storage_path = codebase_path / ".ctxai" / "indexes" / "my-index"
+    indexes_dir = get_indexes_dir(codebase_path)
+    storage_path = indexes_dir / "my-index"
+    
     vector_store = VectorStore(
         storage_path=storage_path,
         collection_name="my-index",
     )
     
-    # 2. Generate query embedding
-    embeddings_gen = EmbeddingsGenerator()
+    # 2. Load config and create embedding provider
+    config_manager = ConfigManager(codebase_path)
+    config = config_manager.load()
+    embeddings_gen = EmbeddingsFactory.create(config.embedding)
+    
+    # 3. Generate query embedding
     query = "function to update user profile image"
     query_embedding = embeddings_gen.generate_embedding(query)
     
-    # 3. Search
+    # 4. Search
     results = vector_store.search(
         query_embedding=query_embedding,
         n_results=5,
     )
     
-    # 4. Display results
+    # 5. Display results
     print(f"\nSearch results for: '{query}'\n")
     for i, result in enumerate(results, 1):
         print(f"Result {i}:")
@@ -94,11 +166,27 @@ def example_search_codebase():
 
 
 if __name__ == "__main__":
-    print("Example 1: Index a codebase")
-    print("-" * 50)
-    # example_index_codebase()
-    print("\nExample 2: Search indexed codebase")
-    print("-" * 50)
+    print("Example 1: Index with local embeddings (no API key needed)")
+    print("-" * 70)
+    # example_index_with_local_embeddings()
+    
+    print("\nExample 2: Index with OpenAI embeddings")
+    print("-" * 70)
+    # example_index_with_openai()
+    
+    print("\nExample 3: Use config file")
+    print("-" * 70)
+    # example_with_config_file()
+    
+    print("\nExample 4: Using CTXAI_HOME for global config")
+    print("-" * 70)
+    # example_with_ctxai_home()
+    
+    print("\nExample 5: Search indexed codebase")
+    print("-" * 70)
     # example_search_codebase()
+    
     print("\nNote: Uncomment the function calls to run the examples")
-    print("Make sure to set OPENAI_API_KEY environment variable first!")
+    print("Default local embeddings work without any API keys!")
+    print("\nTip: Set CTXAI_HOME to use a global .ctxai directory:")
+    print("  export CTXAI_HOME=~/.ctxai")

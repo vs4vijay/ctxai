@@ -10,8 +10,11 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from ..chunking import CodeChunker
-from ..embeddings import EmbeddingsGenerator
+from ..config import ConfigManager, EmbeddingConfig
+from ..embeddings import EmbeddingsFactory
+from ..size_validator import ProjectSizeValidator, ProjectSizeLimitError
 from ..traversal import CodeTraversal
+from ..utils import get_ctxai_home, get_indexes_dir, is_using_global_home
 from ..vector_store import VectorStore
 
 console = Console()
@@ -36,9 +39,27 @@ def index_codebase(
     """
     console.print("\n[bold blue]🚀 Starting codebase indexing...[/bold blue]\n")
 
-    # Initialize components
+    # Setup .ctxai directory and load configuration
+    ctxai_home = get_ctxai_home(path)
+    
+    # Show where .ctxai is located
+    if is_using_global_home():
+        console.print(f"[dim]Using global CTXAI_HOME: {ctxai_home}[/dim]")
+    else:
+        console.print(f"[dim]Using project .ctxai: {ctxai_home}[/dim]")
+    
+    config_manager = ConfigManager(path)
+    config = config_manager.load()
+    
     console.print("[cyan]Initializing components...[/cyan]")
     
+    # Show embedding provider info
+    embedding_config = config.embedding
+    console.print(f"[dim]Embedding provider: {embedding_config.provider}[/dim]")
+    if embedding_config.model:
+        console.print(f"[dim]Model: {embedding_config.model}[/dim]")
+    
+    # Initialize components
     traversal = CodeTraversal(
         root_path=path,
         include_patterns=include_patterns,
@@ -46,21 +67,38 @@ def index_codebase(
         follow_gitignore=follow_gitignore,
     )
     
-    chunker = CodeChunker(max_chunk_size=1000, overlap=100)
+    index_config = config.indexing
+    chunker = CodeChunker(
+        max_chunk_size=index_config.chunk_size,
+        overlap=index_config.chunk_overlap,
+    )
     
+    # Initialize embedding provider
     try:
-        embeddings_generator = EmbeddingsGenerator()
-        console.print("[green]✓[/green] OpenAI API connection established\n")
-    except ValueError as e:
+        embeddings_generator = EmbeddingsFactory.create(embedding_config)
+        console.print(f"[green]✓[/green] Embedding provider '{embedding_config.provider}' initialized\n")
+    except ImportError as e:
         console.print(f"[red]✗[/red] Error: {e}\n")
         console.print(
-            "[yellow]Tip:[/yellow] Set your OpenAI API key: "
-            "[cyan]export OPENAI_API_KEY=your-key-here[/cyan]\n"
+            f"[yellow]Tip:[/yellow] Install the required package for '{embedding_config.provider}' provider\n"
         )
         return
+    except ValueError as e:
+        console.print(f"[red]✗[/red] Error: {e}\n")
+        if embedding_config.provider == "openai":
+            console.print(
+                "[yellow]Tip:[/yellow] Set your OpenAI API key: "
+                "[cyan]export OPENAI_API_KEY=your-key-here[/cyan]\n"
+            )
+            console.print(
+                "Or switch to local embeddings by editing [cyan].ctxai/config.json[/cyan]:\n"
+                '  "embedding": {"provider": "local"}\n'
+            )
+        return
 
-    # Storage path in .ctxai directory
-    storage_path = path / ".ctxai" / "indexes" / index_name
+    # Storage path in .ctxai directory (respects CTXAI_HOME)
+    indexes_dir = get_indexes_dir(path)
+    storage_path = indexes_dir / index_name
     vector_store = VectorStore(storage_path=storage_path, collection_name=index_name)
 
     # Phase 1: Traverse and collect files
@@ -82,6 +120,36 @@ def index_codebase(
     if not files_to_process:
         console.print("[yellow]⚠[/yellow] No files found to index. Check your include/exclude patterns.\n")
         return
+    
+    # Validate project size
+    console.print("[bold cyan]Validating project size...[/bold cyan]")
+    validator = ProjectSizeValidator(index_config)
+    stats = validator.analyze_files(files_to_process)
+    
+    # Show summary
+    for line in validator.get_summary(stats):
+        console.print(f"[dim]{line}[/dim]")
+    console.print()
+    
+    # Check limits
+    is_valid, messages = validator.validate(stats)
+    if messages:
+        for message in messages:
+            console.print(message)
+        console.print()
+    
+    if not is_valid:
+        console.print(
+            "[red]❌ Project exceeds size limits. "
+            "Please reduce the project size or adjust limits in .ctxai/config.json[/red]\n"
+        )
+        raise ProjectSizeLimitError(messages)
+    
+    # Filter out oversized files
+    if stats.oversized_files:
+        oversized_set = {f[0] for f in stats.oversized_files}
+        files_to_process = [f for f in files_to_process if f not in oversized_set]
+        console.print(f"[yellow]⚠[/yellow] Skipped {len(oversized_set)} oversized file(s)\n")
 
     # Phase 2: Chunk files
     console.print("[bold cyan]Phase 2: Chunking code[/bold cyan]")
