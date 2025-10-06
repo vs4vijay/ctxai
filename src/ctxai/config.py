@@ -42,6 +42,14 @@ class Config:
     indexing: IndexConfig
     version: str = "1.0"
     
+    # Current index metadata
+    index_name: Optional[str] = None  # Current/default index name
+    index_status: Optional[str] = None  # "indexing", "completed", "failed"
+    index_files_count: Optional[int] = None  # Number of files in index
+    index_size_mb: Optional[float] = None  # Total size of indexed files in MB
+    index_chunks_count: Optional[int] = None  # Total number of chunks
+    index_last_updated: Optional[str] = None  # ISO format timestamp
+    
     @classmethod
     def default(cls) -> "Config":
         """Create default configuration."""
@@ -56,6 +64,12 @@ class Config:
             "version": self.version,
             "embedding": asdict(self.embedding),
             "indexing": asdict(self.indexing),
+            "index_name": self.index_name,
+            "index_status": self.index_status,
+            "index_files_count": self.index_files_count,
+            "index_size_mb": self.index_size_mb,
+            "index_chunks_count": self.index_chunks_count,
+            "index_last_updated": self.index_last_updated,
         }
     
     @classmethod
@@ -65,6 +79,12 @@ class Config:
             version=data.get("version", "1.0"),
             embedding=EmbeddingConfig(**data.get("embedding", {})),
             indexing=IndexConfig(**data.get("indexing", {})),
+            index_name=data.get("index_name"),
+            index_status=data.get("index_status"),
+            index_files_count=data.get("index_files_count"),
+            index_size_mb=data.get("index_size_mb"),
+            index_chunks_count=data.get("index_chunks_count"),
+            index_last_updated=data.get("index_last_updated"),
         )
 
 
@@ -162,3 +182,70 @@ class ConfigManager:
     def get_index_config(self) -> IndexConfig:
         """Get indexing configuration."""
         return self.load().indexing
+    
+    def get_current_index_name(self) -> Optional[str]:
+        """Get the current/default index name."""
+        return self.load().index_name
+    
+    def update_index_metadata(
+        self,
+        index_name: str,
+        status: str,
+        files_count: Optional[int] = None,
+        size_mb: Optional[float] = None,
+        chunks_count: Optional[int] = None,
+    ) -> None:
+        """
+        Update index metadata in configuration.
+        
+        Args:
+            index_name: Name of the index
+            status: Status of the index ("indexing", "completed", "failed")
+            files_count: Number of files indexed
+            size_mb: Total size of indexed files in MB
+            chunks_count: Total number of chunks created
+        """
+        from datetime import datetime
+        
+        config = self.load()
+        config.index_name = index_name
+        config.index_status = status
+        
+        if files_count is not None:
+            config.index_files_count = files_count
+        if size_mb is not None:
+            config.index_size_mb = round(size_mb, 2)
+        if chunks_count is not None:
+            config.index_chunks_count = chunks_count
+        
+        config.index_last_updated = datetime.utcnow().isoformat() + "Z"
+        
+        self.save(config)
+    
+    def clear_index_metadata(self) -> None:
+        """Clear all index metadata from configuration."""
+        config = self.load()
+        config.index_name = None
+        config.index_status = None
+        config.index_files_count = None
+        config.index_size_mb = None
+        config.index_chunks_count = None
+        config.index_last_updated = None
+        self.save(config)
+    
+    def get_index_metadata(self) -> Dict[str, Any]:
+        """
+        Get current index metadata.
+        
+        Returns:
+            Dictionary with index metadata
+        """
+        config = self.load()
+        return {
+            "index_name": config.index_name,
+            "index_status": config.index_status,
+            "index_files_count": config.index_files_count,
+            "index_size_mb": config.index_size_mb,
+            "index_chunks_count": config.index_chunks_count,
+            "index_last_updated": config.index_last_updated,
+        }

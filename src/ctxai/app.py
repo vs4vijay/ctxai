@@ -19,9 +19,9 @@ def index(
         dir_okay=True,
         resolve_path=True,
     ),
-    name: str = typer.Argument(
-        ...,
-        help="Name for the index",
+    name: Optional[str] = typer.Argument(
+        None,
+        help="Name for the index (uses configured default if not provided)",
     ),
     include: Optional[List[str]] = typer.Option(
         None,
@@ -49,8 +49,12 @@ def index(
     """
     from .commands.index_command import index_codebase
     
-    typer.echo(f"🚀 Indexing codebase at: {path}")
-    typer.echo(f"📝 Index name: {name}")
+    if name:
+        typer.echo(f"🚀 Indexing codebase at: {path}")
+        typer.echo(f"📝 Index name: {name}")
+    else:
+        typer.echo(f"🚀 Indexing codebase at: {path}")
+        typer.echo(f"📝 Using configured or default index name")
     
     index_codebase(
         path=path,
@@ -60,14 +64,15 @@ def index(
         follow_gitignore=follow_gitignore,
     )
     
-    typer.echo(f"✅ Successfully indexed codebase as '{name}'")
+    if name:
+        typer.echo(f"✅ Successfully indexed codebase as '{name}'")
 
 
 @app.command()
 def query(
-    index_name: str = typer.Argument(
-        ...,
-        help="Name of the index to query",
+    index_name: Optional[str] = typer.Argument(
+        None,
+        help="Name of the index to query (uses configured default if not provided)",
     ),
     query_text: str = typer.Argument(
         ...,
@@ -163,6 +168,130 @@ def dashboard(
     from .commands.dashboard_command import start_dashboard
     
     start_dashboard(port=port)
+
+
+@app.command()
+def config(
+    list_all: bool = typer.Option(
+        False,
+        "--list",
+        "-l",
+        help="List all configuration settings",
+    ),
+    get: Optional[str] = typer.Option(
+        None,
+        "--get",
+        "-g",
+        help="Get a specific configuration value (e.g., 'embedding.provider')",
+    ),
+    set_key: Optional[str] = typer.Option(
+        None,
+        "--set",
+        "-s",
+        help="Set a configuration key (requires --value)",
+    ),
+    value: Optional[str] = typer.Option(
+        None,
+        "--value",
+        "-v",
+        help="Value to set for the configuration key (used with --set)",
+    ),
+    unset: Optional[str] = typer.Option(
+        None,
+        "--unset",
+        "-u",
+        help="Unset a configuration value (e.g., 'embedding.api_key')",
+    ),
+    show_file: bool = typer.Option(
+        False,
+        "--show-file",
+        help="Display the raw configuration file content",
+    ),
+    edit: bool = typer.Option(
+        False,
+        "--edit",
+        "-e",
+        help="Show configuration file location for manual editing",
+    ),
+    project_path: Optional[Path] = typer.Option(
+        None,
+        "--project-path",
+        "-p",
+        help="Project path for configuration (uses CTXAI_HOME if not provided)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """
+    Manage ctxai configuration settings (similar to git config).
+    
+    Configuration is stored in .ctxai/config.json and can be managed at:
+    - Global level (CTXAI_HOME environment variable)
+    - Project level (.ctxai in current directory)
+    
+    Examples:
+        # List all configuration
+        ctxai config --list
+        
+        # Get a specific value
+        ctxai config --get embedding.provider
+        
+        # Set a value
+        ctxai config --set embedding.provider --value openai
+        ctxai config --set embedding.api_key --value sk-xxx
+        ctxai config --set indexing.chunk_size --value 1500
+        
+        # Unset a value (revert to default)
+        ctxai config --unset embedding.api_key
+        
+        # View raw config file
+        ctxai config --show-file
+        
+        # Get config file location
+        ctxai config --edit
+    """
+    from .commands.config_command import (
+        list_config,
+        get_config,
+        set_config,
+        unset_config,
+        show_config_file,
+        edit_config,
+    )
+    
+    # Handle different operations
+    operations_count = sum([
+        list_all,
+        get is not None,
+        set_key is not None,
+        unset is not None,
+        show_file,
+        edit,
+    ])
+    
+    if operations_count == 0:
+        # Default to listing config
+        list_config(project_path=project_path)
+    elif operations_count > 1:
+        typer.echo("Error: Please specify only one operation at a time")
+        raise typer.Exit(code=1)
+    elif list_all:
+        list_config(project_path=project_path)
+    elif get:
+        get_config(key=get, project_path=project_path)
+    elif set_key:
+        if value is None:
+            typer.echo("Error: --value is required when using --set")
+            raise typer.Exit(code=1)
+        set_config(key=set_key, value=value, project_path=project_path)
+    elif unset:
+        unset_config(key=unset, project_path=project_path)
+    elif show_file:
+        show_config_file(project_path=project_path)
+    elif edit:
+        edit_config(project_path=project_path)
 
 
 def main():

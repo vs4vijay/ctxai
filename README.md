@@ -52,6 +52,8 @@ ctxai dashboard  # Open http://localhost:3000
 
 ![index command](.images/index.png)
 
+![index output](.images/index_output.png)
+
 ### Prerequisites
 
 **No API key needed for default local embeddings!**

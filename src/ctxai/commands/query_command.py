@@ -20,7 +20,7 @@ console = Console()
 
 
 def query_codebase(
-    index_name: str,
+    index_name: Optional[str],
     query: str,
     project_path: Optional[Path] = None,
     n_results: int = 5,
@@ -30,20 +30,32 @@ def query_codebase(
     Query an indexed codebase using natural language.
 
     Args:
-        index_name: Name of the index to query
+        index_name: Name of the index to query (uses config default if None)
         query: Natural language query
         project_path: Optional project path (uses CTXAI_HOME if not provided)
         n_results: Number of results to return
         show_content: Whether to show full code content
     """
+    # Load configuration
+    config_manager = ConfigManager(project_path)
+    config = config_manager.load()
+    
+    # Determine index name: use provided or fall back to config
+    if index_name is None:
+        index_name = config.index_name
+        if index_name is None:
+            console.print("[red]✗[/red] No index name provided and none configured\n")
+            console.print("[yellow]Tip:[/yellow] Either:\n")
+            console.print("  1. Provide an index name: [cyan]ctxai query <index_name> \"your query\"[/cyan]\n")
+            console.print("  2. Or set a default: [cyan]ctxai config --set index.name <index_name>[/cyan]\n")
+            return
+        console.print(f"[dim]Using configured index: {index_name}[/dim]")
+    
     console.print(f"\n[bold blue]🔍 Searching index '{index_name}'...[/bold blue]\n")
     console.print(f"[dim]Query: {query}[/dim]\n")
 
     try:
-        # Load configuration and create embedding provider
-        config_manager = ConfigManager(project_path)
-        config = config_manager.load()
-        
+        # Create embedding provider
         console.print(f"[dim]Using embedding provider: {config.embedding.provider}[/dim]")
         
         # Initialize embedding provider
