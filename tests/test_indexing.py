@@ -83,8 +83,13 @@ def test_gitignore_respect():
         traversal = CodeTraversal(tmpdir_path, follow_gitignore=True)
         files = list(traversal.traverse())
 
-        assert len(files) == 1
-        assert files[0].name == "included.py"
+        # Should find included.py and .gitignore itself (2 files total)
+        # The ignored.py should not be found
+        assert len(files) == 2
+        file_names = [f.name for f in files]
+        assert "included.py" in file_names
+        assert ".gitignore" in file_names
+        assert "ignored.py" not in file_names
 
 
 def test_include_patterns():
