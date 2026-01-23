@@ -37,6 +37,7 @@ ctxai dashboard  # Open http://localhost:3000
 
 ## Features
 
+- **Accuracy**: Enhances the Agent capability to retrieve context aware code chunks
 - **Multiple Embedding Providers**: Choose between local (default), OpenAI, or HuggingFace embeddings
 - **No API Key Required**: Uses local sentence-transformers by default - works offline!
 - **MCP Server Integration**: Works with any agent that supports MCP protocol (coming soon)
@@ -583,3 +584,29 @@ For very large codebases:
 We welcome all contributions to the project! Before submitting your pull request, please ensure you have run the tests and linters locally. This helps us maintain the quality of the project and makes the review process faster for everyone.
 
 All contributions should adhere to the project's code of conduct. Let's work together to create a welcoming and inclusive environment for everyone.
+
+---
+
+### Development Notes
+
+```bash
+
+ctxai "write a python script to fetch top 10 companies by market cap"
+ctxai chat
+
+- AI Coding Assistant
+ctxai code
+
+- Support MCP Servers
+
+sandoxing with pyiodide
+
+
+memory
+
+https://github.com/getzep/graphiti
+
+
+https://github.com/wesammustafa/Claude-Code-Everything-You-Need-to-Know
+
+```
