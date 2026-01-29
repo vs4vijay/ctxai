@@ -297,6 +297,160 @@ def config(
         edit_config(project_path=project_path)
 
 
+@app.command()
+def chat(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose output showing tool calls and iterations",
+    ),
+    max_iterations: int = typer.Option(
+        10,
+        "--max-iterations",
+        "-m",
+        help="Maximum iterations per request",
+    ),
+    working_directory: Path = typer.Option(
+        None,
+        "--working-directory",
+        "-w",
+        help="Working directory for the agent (default: current directory)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """
+    Start interactive chat mode with the AI coding agent.
+
+    This provides a REPL (Read-Eval-Print Loop) interface where you can:
+    - Ask questions about your codebase
+    - Request code generation or modifications
+    - Execute commands and tools
+    - Get help with coding tasks
+
+    The agent has access to:
+    - File operations (read, write, edit, search)
+    - Bash command execution
+    - Code search and analysis
+    - Git operations (coming soon)
+
+    Example requests:
+        "Read the README.md file"
+        "List all Python files in src/"
+        "Create a new function to validate emails"
+        "What is the current git status?"
+
+    Commands within chat:
+        /help    - Show available commands
+        /clear   - Clear conversation history
+        /exit    - Exit chat mode
+        /status  - Show agent status
+        /tools   - List available tools
+    """
+    from .commands.chat_command import start_chat
+
+    wd = working_directory or Path.cwd()
+    start_chat(working_directory=wd, verbose=verbose, max_iterations=max_iterations)
+
+
+@app.command()
+def code(
+    task: str = typer.Argument(
+        ...,
+        help="Coding task to perform",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose output",
+    ),
+    max_iterations: int = typer.Option(
+        10,
+        "--max-iterations",
+        "-m",
+        help="Maximum iterations",
+    ),
+):
+    """
+    Execute a one-shot coding task with the AI agent.
+
+    This is useful for quick code generation or modification tasks
+    without entering interactive mode.
+
+    Examples:
+        ctxai code "Create a Python function to validate email addresses"
+        ctxai code "Add error handling to the main.py file"
+        ctxai code "Generate unit tests for the User class"
+    """
+    from .commands.chat_command import interactive_chat
+    import asyncio
+
+    async def run_task():
+        from .agent.core import Agent, AgentLoopConfig
+        from .agent.llm.anthropic_provider import AnthropicProvider
+        from .agent.config import AgentLLMConfig, AgentConfig
+        from .agent.tools.registry import ToolRegistry
+        from .agent.tools.file_ops import (
+            ReadFileTool, WriteFileTool, EditFileTool,
+            ListFilesTool, GlobTool, GrepTool
+        )
+        from .agent.tools.bash_tool import BashTool
+        from .agent.tools.code_search import SemanticSearchTool
+        from rich.console import Console
+
+        console = Console()
+
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            console.print("❌ [red]ANTHROPIC_API_KEY not set[/red]")
+            return
+
+        # Initialize agent
+        llm_config = AgentLLMConfig(
+            provider="anthropic",
+            model="claude-3-5-sonnet-20241022",
+            temperature=0.7,
+            max_tokens=4096,
+        )
+        llm = AnthropicProvider(llm_config)
+        agent_config = AgentConfig()
+
+        tools = ToolRegistry(verbose=verbose)
+        tools.register(ReadFileTool())
+        tools.register(WriteFileTool())
+        tools.register(EditFileTool())
+        tools.register(ListFilesTool())
+        tools.register(GlobTool())
+        tools.register(GrepTool())
+        tools.register(BashTool(agent_config.tools))
+        tools.register(SemanticSearchTool())
+
+        loop_config = AgentLoopConfig(
+            llm_provider=llm,
+            tool_registry=tools,
+            agent_config=agent_config,
+            working_directory=Path.cwd(),
+            available_indexes=[],
+            max_iterations=max_iterations,
+            verbose=verbose,
+        )
+        agent = Agent(loop_config)
+
+        console.print(f"\n🤖 [cyan]Task:[/cyan] {task}\n")
+
+        with console.status("[dim]Processing...[/dim]"):
+            response = await agent.process_message(task)
+
+        from rich.markdown import Markdown
+        console.print("\n[bold green]Result:[/bold green]")
+        console.print(Markdown(response))
+
+    asyncio.run(run_task())
+
+
 def main():
     app()
 
