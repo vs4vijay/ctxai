@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Read",
+      "Write",
+      "Create",
+      "Update",
+      "WebSearch",
+
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "Bash(xargs:*)",
+
+      "Bash(lsof:*)",
+      "Bash(netstat:*)",
+
+      "Bash(cat:*)",
+      "Bash(uv --version:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Bash(export PYTHONIOENCODING=utf-8)"
+    ]
+  }
+}
