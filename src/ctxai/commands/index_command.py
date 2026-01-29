@@ -4,6 +4,7 @@ Orchestrates the entire indexing pipeline: traversal, chunking, embedding, and s
 """
 
 from pathlib import Path
+import platform
 from typing import Optional
 
 from rich.console import Console
@@ -17,7 +18,7 @@ from ..traversal import CodeTraversal
 from ..utils import get_ctxai_home, get_indexes_dir, is_using_global_home
 from ..vector_store import VectorStore
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 def index_codebase(
@@ -37,7 +38,7 @@ def index_codebase(
         exclude_patterns: Additional patterns to exclude
         follow_gitignore: Whether to respect .gitignore
     """
-    console.print("\n[bold blue]🚀 Starting codebase indexing...[/bold blue]\n")
+    console.print("\n[bold blue][*] Starting codebase indexing...[/bold blue]\n")
 
     # Setup .ctxai directory and load configuration
     ctxai_home = get_ctxai_home(path)
@@ -94,15 +95,15 @@ def index_codebase(
         # Initialize embedding provider
         try:
             embeddings_generator = EmbeddingsFactory.create(embedding_config)
-            console.print(f"[green]✓[/green] Embedding provider '{embedding_config.provider}' initialized\n")
+            console.print(f"[green][OK][/green] Embedding provider '{embedding_config.provider}' initialized\n")
         except ImportError as e:
-            console.print(f"[red]✗[/red] Error: {e}\n")
+            console.print(f"[red][X][/red] Error: {e}\n")
             console.print(
                 f"[yellow]Tip:[/yellow] Install the required package for '{embedding_config.provider}' provider\n"
             )
             return
         except ValueError as e:
-            console.print(f"[red]✗[/red] Error: {e}\n")
+            console.print(f"[red][X][/red] Error: {e}\n")
             if embedding_config.provider == "openai":
                 console.print(
                     "[yellow]Tip:[/yellow] Set your OpenAI API key: [cyan]export OPENAI_API_KEY=your-key-here[/cyan]\n"
@@ -123,7 +124,7 @@ def index_codebase(
 
         files_to_process = []
         with Progress(
-            SpinnerColumn(),
+            *([] if platform.system() == "Windows" else [SpinnerColumn()]),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
@@ -132,7 +133,7 @@ def index_codebase(
                 files_to_process.append(file_path)
                 progress.update(task, description=f"Found {len(files_to_process)} files...")
 
-        console.print(f"[green]✓[/green] Found {len(files_to_process)} files to process\n")
+        console.print(f"[green][OK][/green] Found {len(files_to_process)} files to process\n")
 
         if not files_to_process:
             console.print("[yellow]⚠[/yellow] No files found to index. Check your include/exclude patterns.\n")
@@ -157,7 +158,7 @@ def index_codebase(
 
         if not is_valid:
             console.print(
-                "[red]❌ Project exceeds size limits. "
+                "[red][X] Project exceeds size limits. "
                 "Please reduce the project size or adjust limits in .ctxai/config.json[/red]\n"
             )
             raise ProjectSizeLimitError(messages)
@@ -191,9 +192,9 @@ def index_codebase(
                         description=f"Chunking files... ({len(all_chunks)} chunks so far)",
                     )
                 except Exception as e:
-                    console.print(f"[red]✗[/red] Error chunking {file_path}: {e}")
+                    console.print(f"[red][X][/red] Error chunking {file_path}: {e}")
 
-        console.print(f"[green]✓[/green] Created {len(all_chunks)} code chunks\n")
+        console.print(f"[green][OK][/green] Created {len(all_chunks)} code chunks\n")
 
         if not all_chunks:
             console.print("[yellow]⚠[/yellow] No chunks created. Nothing to index.\n")
@@ -224,27 +225,27 @@ def index_codebase(
                     all_embeddings.extend(batch_embeddings)
                     progress.update(task, advance=len(batch))
                 except Exception as e:
-                    console.print(f"[red]✗[/red] Error generating embeddings: {e}")
+                    console.print(f"[red][X][/red] Error generating embeddings: {e}")
                     return
 
-        console.print(f"[green]✓[/green] Generated {len(all_embeddings)} embeddings\n")
+        console.print(f"[green][OK][/green] Generated {len(all_embeddings)} embeddings\n")
 
         # Phase 4: Store in vector database
         console.print("[bold cyan]Phase 4: Storing in vector database[/bold cyan]")
 
         with Progress(
-            SpinnerColumn(),
+            *([] if platform.system() == "Windows" else [SpinnerColumn()]),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
             task = progress.add_task("Storing embeddings...", total=None)
             vector_store.add_chunks(all_chunks, all_embeddings)
 
-        console.print("[green]✓[/green] Stored embeddings in vector database\n")
+        console.print("[green][OK][/green] Stored embeddings in vector database\n")
 
         # Print summary
         vector_stats = vector_store.get_stats()
-        console.print("[bold green]✅ Indexing complete![/bold green]\n")
+        console.print("[bold green][OK] Indexing complete![/bold green]\n")
         console.print("[bold]Summary:[/bold]")
         console.print(f"  • Index name: [cyan]{index_name}[/cyan]")
         console.print(f"  • Storage path: [cyan]{storage_path}[/cyan]")
@@ -281,5 +282,5 @@ def index_codebase(
             index_name=index_name,
             status="failed",
         )
-        console.print(f"\n[red]✗[/red] Indexing failed: {e}\n")
+        console.print(f"\n[red][X][/red] Indexing failed: {e}\n")
         raise

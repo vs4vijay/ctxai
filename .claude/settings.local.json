@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(uv --version:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run ctxai --help:*)",
+      "Bash(uv run ctxai config --help:*)",
+      "Bash(uv run ctxai index --help:*)",
+      "Bash(uv run ctxai index:*)",
+      "Bash(export PYTHONIOENCODING=utf-8)",
+      "Bash(uv run:*)"
     ]
   }
 }

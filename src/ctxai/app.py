@@ -51,11 +51,11 @@ def index(
     from .commands.index_command import index_codebase
 
     if name:
-        typer.echo(f"🚀 Indexing codebase at: {path}")
-        typer.echo(f"📝 Index name: {name}")
+        typer.echo(f"[*] Indexing codebase at: {path}")
+        typer.echo(f"[*] Index name: {name}")
     else:
-        typer.echo(f"🚀 Indexing codebase at: {path}")
-        typer.echo("📝 Using configured or default index name")
+        typer.echo(f"[*] Indexing codebase at: {path}")
+        typer.echo("[*] Using configured or default index name")
 
     index_codebase(
         path=path,
@@ -66,7 +66,7 @@ def index(
     )
 
     if name:
-        typer.echo(f"✅ Successfully indexed codebase as '{name}'")
+        typer.echo(f"[OK] Successfully indexed codebase as '{name}'")
 
 
 @app.command()

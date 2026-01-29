@@ -25,7 +25,7 @@ class ToolRegistry:
         """
         self._tools: Dict[str, BaseTool] = {}
         self.verbose = verbose
-        self.console = Console() if verbose else None
+        self.console = Console(legacy_windows=False) if verbose else None
 
     def register(self, tool: BaseTool) -> None:
         """
@@ -46,7 +46,7 @@ class ToolRegistry:
         self._tools[tool.name] = tool
 
         if self.verbose:
-            self.console.print(f"[green]✓ Registered tool:[/green] {tool.name}")
+            self.console.print(f"[green][OK] Registered tool:[/green] {tool.name}")
 
     def register_multiple(self, tools: List[BaseTool]) -> None:
         """
@@ -196,9 +196,9 @@ class ToolRegistry:
 
         if self.verbose:
             if result.get("success"):
-                self.console.print(f"[green]✓ Tool {name} succeeded[/green]")
+                self.console.print(f"[green][OK] Tool {name} succeeded[/green]")
             else:
-                self.console.print(f"[red]✗ Tool {name} failed:[/red] {result.get('error')}")
+                self.console.print(f"[red][X] Tool {name} failed:[/red] {result.get('error')}")
 
         return result
 

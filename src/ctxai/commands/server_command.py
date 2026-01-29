@@ -149,7 +149,7 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             vector_store = VectorStore(storage_path=index_path, collection_name=name)
             stats = vector_store.get_stats()
 
-            result = f"✓ Successfully indexed codebase '{name}'\n\n"
+            result = f"[OK] Successfully indexed codebase '{name}'\n\n"
             result += f"- Total chunks: {stats['total_chunks']:,}\n"
             result += f"- Location: {index_path}\n"
 
@@ -292,11 +292,11 @@ def start_mcp_server(project_path: Path | None = None):
         project_path: Optional project path for configuration
     """
     if not MCP_AVAILABLE:
-        console.print("[red]✗ MCP is not installed[/red]\n")
+        console.print("[red][X] MCP is not installed[/red]\n")
         console.print("[yellow]Install it with:[/yellow] [cyan]pip install ctxai[mcp][/cyan]\n")
         return
 
-    console.print("[bold blue]🚀 Starting MCP server...[/bold blue]\n")
+    console.print("[bold blue][*] Starting MCP server...[/bold blue]\n")
     console.print("[dim]The server will communicate via stdio (standard input/output)[/dim]")
     console.print("[dim]Use this with MCP-compatible clients like Claude Desktop[/dim]\n")
 
@@ -311,4 +311,4 @@ def start_mcp_server(project_path: Path | None = None):
     except Exception as e:
         error_msg = f"Failed to start MCP server: {e}"
         logger.error(error_msg, exc_info=True)
-        console.print(f"[red]✗ {error_msg}[/red]\n")
+        console.print(f"[red][X] {error_msg}[/red]\n")

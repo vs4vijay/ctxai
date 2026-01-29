@@ -14,7 +14,7 @@ from rich.table import Table
 from ..config import ConfigManager
 from ..utils import get_ctxai_home, is_using_global_home
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 def list_config(project_path: Path | None = None):
@@ -95,7 +95,7 @@ def get_config(key: str, project_path: Path | None = None):
     # Parse the key
     parts = key.split(".")
     if len(parts) < 1:
-        console.print("[red]✗[/red] Invalid key format. Use dot notation (e.g., 'embedding.provider')\n")
+        console.print("[red][X][/red] Invalid key format. Use dot notation (e.g., 'embedding.provider')\n")
         return
 
     try:
@@ -105,7 +105,7 @@ def get_config(key: str, project_path: Path | None = None):
             if hasattr(value, part):
                 value = getattr(value, part)
             else:
-                console.print(f"[red]✗[/red] Configuration key '{key}' not found\n")
+                console.print(f"[red][X][/red] Configuration key '{key}' not found\n")
                 return
 
         # Display the value
@@ -117,7 +117,7 @@ def get_config(key: str, project_path: Path | None = None):
             console.print(f"[yellow]{key}[/yellow] = [green]{value}[/green]\n")
 
     except Exception as e:
-        console.print(f"[red]✗[/red] Error retrieving config: {e}\n")
+        console.print(f"[red][X][/red] Error retrieving config: {e}\n")
 
 
 def set_config(key: str, value: str, project_path: Path | None = None):
@@ -135,7 +135,7 @@ def set_config(key: str, value: str, project_path: Path | None = None):
     # Parse the key
     parts = key.split(".")
     if len(parts) != 2:
-        console.print("[red]✗[/red] Invalid key format. Use dot notation with two parts (e.g., 'embedding.provider')\n")
+        console.print("[red][X][/red] Invalid key format. Use dot notation with two parts (e.g., 'embedding.provider')\n")
         return
 
     section, setting = parts
@@ -144,7 +144,7 @@ def set_config(key: str, value: str, project_path: Path | None = None):
         # Navigate to the correct section
         if section == "embedding":
             if not hasattr(config.embedding, setting):
-                console.print(f"[red]✗[/red] Unknown embedding setting: '{setting}'\n")
+                console.print(f"[red][X][/red] Unknown embedding setting: '{setting}'\n")
                 console.print("[yellow]Available settings:[/yellow] provider, model, api_key, batch_size, max_tokens\n")
                 return
 
@@ -162,7 +162,7 @@ def set_config(key: str, value: str, project_path: Path | None = None):
 
         elif section == "indexing":
             if not hasattr(config.indexing, setting):
-                console.print(f"[red]✗[/red] Unknown indexing setting: '{setting}'\n")
+                console.print(f"[red][X][/red] Unknown indexing setting: '{setting}'\n")
                 console.print(
                     "[yellow]Available settings:[/yellow] "
                     "max_files, max_total_size_mb, max_file_size_mb, chunk_size, chunk_overlap\n"
@@ -174,21 +174,21 @@ def set_config(key: str, value: str, project_path: Path | None = None):
             setattr(config.indexing, setting, value)
 
         elif section == "version":
-            console.print("[red]✗[/red] Cannot modify version setting\n")
+            console.print("[red][X][/red] Cannot modify version setting\n")
             return
         elif section == "index":
             # Allow setting index.name manually
             if setting == "name":
                 config.index_name = value
             else:
-                console.print(f"[red]✗[/red] Cannot modify index setting: '{setting}'\n")
+                console.print(f"[red][X][/red] Cannot modify index setting: '{setting}'\n")
                 console.print(
                     "[yellow]Only 'index.name' can be set manually."
                     "Other index metadata is set automatically during indexing.[/yellow]\n"
                 )
                 return
         else:
-            console.print(f"[red]✗[/red] Unknown configuration section: '{section}'\n")
+            console.print(f"[red][X][/red] Unknown configuration section: '{section}'\n")
             console.print("[yellow]Available sections:[/yellow] embedding, indexing, index\n")
             return
 
@@ -197,13 +197,13 @@ def set_config(key: str, value: str, project_path: Path | None = None):
 
         # Display success message
         display_value = "***" if setting == "api_key" and value else value
-        console.print(f"[green]✓[/green] Set [yellow]{key}[/yellow] = [green]{display_value}[/green]\n")
+        console.print(f"[green][OK][/green] Set [yellow]{key}[/yellow] = [green]{display_value}[/green]\n")
         console.print(f"[dim]Config saved to: {config_manager.config_path}[/dim]\n")
 
     except ValueError as e:
-        console.print(f"[red]✗[/red] Invalid value type: {e}\n")
+        console.print(f"[red][X][/red] Invalid value type: {e}\n")
     except Exception as e:
-        console.print(f"[red]✗[/red] Error setting config: {e}\n")
+        console.print(f"[red][X][/red] Error setting config: {e}\n")
 
 
 def unset_config(key: str, project_path: Path | None = None):
@@ -220,7 +220,7 @@ def unset_config(key: str, project_path: Path | None = None):
     # Parse the key
     parts = key.split(".")
     if len(parts) != 2:
-        console.print("[red]✗[/red] Invalid key format. Use dot notation with two parts (e.g., 'embedding.api_key')\n")
+        console.print("[red][X][/red] Invalid key format. Use dot notation with two parts (e.g., 'embedding.api_key')\n")
         return
 
     section, setting = parts
@@ -231,21 +231,21 @@ def unset_config(key: str, project_path: Path | None = None):
             if setting in ["api_key", "model", "max_tokens"]:
                 setattr(config.embedding, setting, None)
             else:
-                console.print(f"[red]✗[/red] Cannot unset required setting: '{setting}'\n")
+                console.print(f"[red][X][/red] Cannot unset required setting: '{setting}'\n")
                 return
         elif section == "index":
             # Allow clearing index metadata
             if setting == "name":
                 config_manager.clear_index_metadata()
-                console.print("[green]✓[/green] Cleared all index metadata\n")
+                console.print("[green][OK][/green] Cleared all index metadata\n")
                 console.print(f"[dim]Config saved to: {config_manager.config_path}[/dim]\n")
                 return
             else:
-                console.print(f"[red]✗[/red] Cannot unset index setting: '{setting}'\n")
+                console.print(f"[red][X][/red] Cannot unset index setting: '{setting}'\n")
                 console.print("[yellow]Use 'index.name' to clear all index metadata[/yellow]\n")
                 return
         else:
-            console.print(f"[red]✗[/red] Cannot unset settings in section: '{section}'\n")
+            console.print(f"[red][X][/red] Cannot unset settings in section: '{section}'\n")
             console.print(
                 "[yellow]Only embedding.api_key, embedding.model, embedding.max_tokens, "
                 "and index.name can be unset[/yellow]\n"
@@ -255,11 +255,11 @@ def unset_config(key: str, project_path: Path | None = None):
         # Save the updated config
         config_manager.save(config)
 
-        console.print(f"[green]✓[/green] Unset [yellow]{key}[/yellow]\n")
+        console.print(f"[green][OK][/green] Unset [yellow]{key}[/yellow]\n")
         console.print(f"[dim]Config saved to: {config_manager.config_path}[/dim]\n")
 
     except Exception as e:
-        console.print(f"[red]✗[/red] Error unsetting config: {e}\n")
+        console.print(f"[red][X][/red] Error unsetting config: {e}\n")
 
 
 def show_config_file(project_path: Path | None = None):
@@ -291,7 +291,7 @@ def show_config_file(project_path: Path | None = None):
         console.print()
 
     except Exception as e:
-        console.print(f"[red]✗[/red] Error reading config file: {e}\n")
+        console.print(f"[red][X][/red] Error reading config file: {e}\n")
 
 
 def edit_config(project_path: Path | None = None):

@@ -46,7 +46,7 @@ class Agent:
         self.llm = config.llm_provider
         self.tools = config.tool_registry
         self.context = ConversationContext()
-        self.console = Console()
+        self.console = Console(legacy_windows=False)
 
         # Initialize system message
         tool_descriptions = self.tools.get_tool_descriptions()
@@ -170,7 +170,7 @@ class Agent:
 
                 if self.config.verbose:
                     if result.get("success"):
-                        self.console.print(f"[green]✓ {tool_call.name} succeeded[/green]")
+                        self.console.print(f"[green][OK] {tool_call.name} succeeded[/green]")
                     else:
                         self.console.print(f"[yellow]⚠ {tool_call.name} failed: {result.get('error')}[/yellow]")
 
@@ -183,7 +183,7 @@ class Agent:
                 results.append(error_result)
 
                 if self.config.verbose:
-                    self.console.print(f"[red]✗ {tool_call.name} exception: {str(e)}[/red]")
+                    self.console.print(f"[red][X] {tool_call.name} exception: {str(e)}[/red]")
 
         return results
 

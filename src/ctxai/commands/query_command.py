@@ -16,7 +16,7 @@ from ..embeddings import EmbeddingsFactory
 from ..utils import get_indexes_dir
 from ..vector_store import VectorStore
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 def query_codebase(
@@ -44,14 +44,14 @@ def query_codebase(
     if index_name is None:
         index_name = config.index_name
         if index_name is None:
-            console.print("[red]✗[/red] No index name provided and none configured\n")
+            console.print("[red][X][/red] No index name provided and none configured\n")
             console.print("[yellow]Tip:[/yellow] Either:\n")
             console.print('  1. Provide an index name: [cyan]ctxai query <index_name> "your query"[/cyan]\n')
             console.print("  2. Or set a default: [cyan]ctxai config --set index.name <index_name>[/cyan]\n")
             return
         console.print(f"[dim]Using configured index: {index_name}[/dim]")
 
-    console.print(f"\n[bold blue]🔍 Searching index '{index_name}'...[/bold blue]\n")
+    console.print(f"\n[bold blue][?] Searching index '{index_name}'...[/bold blue]\n")
     console.print(f"[dim]Query: {query}[/dim]\n")
 
     try:
@@ -66,7 +66,7 @@ def query_codebase(
         storage_path = indexes_dir / index_name
 
         if not storage_path.exists():
-            console.print(f"[red]✗[/red] Index '{index_name}' not found at {storage_path}\n")
+            console.print(f"[red][X][/red] Index '{index_name}' not found at {storage_path}\n")
             console.print("[yellow]Tip:[/yellow] Run [cyan]ctxai index[/cyan] first to create an index\n")
             return
 
@@ -88,7 +88,7 @@ def query_codebase(
             return
 
         # Display results
-        console.print(f"[bold green]✓ Found {len(results)} result(s)[/bold green]\n")
+        console.print(f"[bold green][OK] Found {len(results)} result(s)[/bold green]\n")
 
         for i, result in enumerate(results, 1):
             metadata = result["metadata"]
@@ -111,7 +111,7 @@ def query_codebase(
             info_table.add_row("📍 Lines", f"{metadata['start_line']}-{metadata['end_line']}")
             info_table.add_row("🏷️  Type", metadata["chunk_type"])
             info_table.add_row("💻 Language", metadata["language"])
-            info_table.add_row("🎯 Similarity", f"{similarity:.1%}")
+            info_table.add_row("[*] Similarity", f"{similarity:.1%}")
 
             # Add metadata if present
             for key, value in metadata.items():
@@ -160,7 +160,7 @@ def query_codebase(
         console.print(f"[dim]Showing {len(results)} of {len(results)} results[/dim]\n")
 
     except Exception as e:
-        console.print(f"[red]✗ Error querying index: {e}[/red]\n")
+        console.print(f"[red][X] Error querying index: {e}[/red]\n")
         import traceback
 
         console.print(f"[dim]{traceback.format_exc()}[/dim]")
