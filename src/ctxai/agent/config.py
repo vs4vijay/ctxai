@@ -11,28 +11,45 @@ import os
 class AgentLLMConfig:
     """Configuration for LLM provider."""
 
-    provider: str = "anthropic"  # "anthropic", "openai", "ollama"
+    provider: str = "openrouter"  # "openrouter", "ollama", "anthropic", "openai"
     model: Optional[str] = None  # Provider-specific default if None
     api_key: Optional[str] = None  # API key, will try env vars if None
-    fallback_providers: List[str] = field(default_factory=lambda: ["openai", "ollama"])
+    base_url: Optional[str] = None  # Base URL (for Ollama, custom endpoints)
+    fallback_providers: List[str] = field(default_factory=lambda: ["openrouter", "ollama"])
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 60
 
-    def get_api_key_for_provider(self, provider: str) -> Optional[str]:
-        """Get API key for specific provider, checking environment variables."""
+    def get_api_key_for_provider(self, provider: str) -> Optional[str | dict]:
+        """Get API key for specific provider, checking environment variables and keystore."""
         if self.api_key:
             return self.api_key
 
-        # Check environment variables
+        # Check environment variables first
         env_vars = {
             "anthropic": "ANTHROPIC_API_KEY",
             "openai": "OPENAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "github-copilot": "GITHUB_COPILOT_TOKEN",
+            "ollama": None,  # Ollama doesn't need API key
         }
 
         env_var = env_vars.get(provider.lower())
         if env_var:
-            return os.getenv(env_var)
+            api_key = os.getenv(env_var)
+            if api_key:
+                return api_key
+
+        # If not in environment, check keystore
+        try:
+            # Avoid circular import by importing here
+            import sys
+            if 'ctxai.auth.keystore' in sys.modules:
+                from ctxai.auth.keystore import get_keystore
+                keystore = get_keystore()
+                return keystore.get_key(provider.lower())
+        except (ImportError, Exception):
+            pass
 
         return None
 

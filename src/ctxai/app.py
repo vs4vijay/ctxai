@@ -299,6 +299,44 @@ def config(
 
 @app.command()
 def chat(
+    provider: str = typer.Option(
+        "openrouter",
+        "--provider",
+        "-p",
+        help="LLM provider: openrouter, github-copilot, ollama, anthropic, openai",
+    ),
+    model: str = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model name (provider-specific)",
+    ),
+    architect_editor: bool = typer.Option(
+        False,
+        "--architect-editor",
+        "-ae",
+        help="Use architect/editor pattern (better quality + lower cost)",
+    ),
+    preset: str = typer.Option(
+        "default",
+        "--preset",
+        help="Architect/editor preset: default, premium, budget, cheap, local, mixed",
+    ),
+    architect_model: str = typer.Option(
+        None,
+        "--architect-model",
+        help="Custom architect model (requires --editor-model)",
+    ),
+    editor_model: str = typer.Option(
+        None,
+        "--editor-model",
+        help="Custom editor model (requires --architect-model)",
+    ),
+    use_repomap: bool = typer.Option(
+        True,
+        "--repomap/--no-repomap",
+        help="Use repository mapping for context",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -308,7 +346,6 @@ def chat(
     max_iterations: int = typer.Option(
         10,
         "--max-iterations",
-        "-m",
         help="Maximum iterations per request",
     ),
     working_directory: Path = typer.Option(
@@ -331,17 +368,44 @@ def chat(
     - Execute commands and tools
     - Get help with coding tasks
 
-    The agent has access to:
-    - File operations (read, write, edit, search)
-    - Bash command execution
-    - Code search and analysis
-    - Git operations (coming soon)
+    Multi-Provider Support:
+    - OpenRouter: 100+ models (Claude, GPT-4o, o1, DeepSeek, etc.)
+    - GitHub Copilot: GPT-4, Claude, o1 via your Copilot subscription
+    - Ollama: Local models (CodeLlama, DeepSeek Coder, etc.)
+    - Anthropic: Direct Claude access
+    - OpenAI: Direct GPT access
 
-    Example requests:
-        "Read the README.md file"
-        "List all Python files in src/"
-        "Create a new function to validate emails"
-        "What is the current git status?"
+    Architect/Editor Pattern:
+    Use two models for better quality + lower cost:
+    - Architect (expensive): Plans and designs
+    - Editor (cheaper): Implements
+
+    Example usage:
+        # OpenRouter with Claude
+        ctxai chat --provider openrouter --model anthropic/claude-3.5-sonnet
+
+        # GitHub Copilot (if you have subscription)
+        ctxai chat --provider github-copilot --model gpt-4
+
+        # Local Ollama model (free!)
+        ctxai chat --provider ollama --model codellama:13b
+
+        # Architect/Editor pattern (40-60% cost savings!)
+        ctxai chat --architect-editor --preset default
+
+        # Custom architect/editor
+        ctxai chat --architect-editor --architect-model openai/o1-mini --editor-model anthropic/claude-3.5-sonnet
+
+        # Mixed providers (cloud + local)
+        ctxai chat --architect-editor --preset mixed
+
+    Presets:
+        default  - o1-mini + Claude Sonnet (best balance)
+        premium  - o1 + Claude Opus (best quality)
+        budget   - GPT-4o + GPT-4o-mini (lower cost)
+        cheap    - DeepSeek R1 + DeepSeek Chat (cheapest)
+        local    - CodeLlama 34B + 13B (fully local)
+        mixed    - o1-mini + CodeLlama 13B (cloud + local)
 
     Commands within chat:
         /help    - Show available commands
@@ -353,7 +417,18 @@ def chat(
     from .commands.chat_command import start_chat
 
     wd = working_directory or Path.cwd()
-    start_chat(working_directory=wd, verbose=verbose, max_iterations=max_iterations)
+    start_chat(
+        working_directory=wd,
+        provider=provider,
+        model=model,
+        architect_editor=architect_editor,
+        architect_model=architect_model,
+        editor_model=editor_model,
+        preset=preset,
+        use_repomap=use_repomap,
+        verbose=verbose,
+        max_iterations=max_iterations,
+    )
 
 
 @app.command()
@@ -405,7 +480,7 @@ def code(
         console = Console()
 
         if not os.getenv("ANTHROPIC_API_KEY"):
-            console.print("❌ [red]ANTHROPIC_API_KEY not set[/red]")
+            console.print("[red]ANTHROPIC_API_KEY not set[/red]")
             return
 
         # Initialize agent
@@ -449,6 +524,120 @@ def code(
         console.print(Markdown(response))
 
     asyncio.run(run_task())
+
+
+@app.command()
+def login(
+    provider: str = typer.Argument(
+        "openrouter",
+        help="Provider to authenticate with (openrouter, github-copilot)",
+    ),
+    port: int = typer.Option(
+        8080,
+        "--port",
+        "-p",
+        help="Port for OAuth callback server (OpenRouter only)",
+    ),
+):
+    """
+    Authenticate with an LLM provider using OAuth.
+
+    This command uses OAuth flows to securely authenticate with
+    supported providers without manually entering API keys.
+
+    Currently supported providers:
+    - openrouter: OAuth PKCE flow (browser-based)
+    - github-copilot: OAuth device code flow (enter code at github.com/login/device)
+
+    Examples:
+        ctxai login openrouter
+        ctxai login openrouter --port 3000
+        ctxai login github-copilot
+
+    After authentication, credentials are securely stored and
+    automatically used for chat sessions.
+    """
+    from .auth.keystore import get_keystore
+    from rich.console import Console
+
+    console = Console()
+
+    provider_lower = provider.lower()
+
+    # OpenRouter OAuth PKCE
+    if provider_lower == "openrouter":
+        from .auth.oauth_pkce import authenticate_with_openrouter
+
+        api_key = authenticate_with_openrouter(callback_port=port)
+
+        if not api_key:
+            console.print("\n[red]Login failed[/red]")
+            raise typer.Exit(code=1)
+
+        keystore = get_keystore()
+        keystore.set_key("openrouter", api_key)
+
+        console.print("\n[green]Successfully logged in to OpenRouter![/green]")
+        console.print("\n[dim]You can now use:[/dim]")
+        console.print("  [cyan]ctxai chat --provider openrouter[/cyan]")
+
+    # GitHub Copilot OAuth Device Code
+    elif provider_lower == "github-copilot":
+        from .auth.github_copilot import authenticate_with_github_copilot
+
+        token_data = authenticate_with_github_copilot()
+
+        if not token_data:
+            console.print("\n[red]Login failed[/red]")
+            raise typer.Exit(code=1)
+
+        keystore = get_keystore()
+        keystore.set_key("github-copilot", token_data)
+
+        console.print("\n[green]Successfully logged in to GitHub Copilot![/green]")
+        console.print("\n[dim]You can now use:[/dim]")
+        console.print("  [cyan]ctxai chat --provider github-copilot[/cyan]")
+
+    else:
+        console.print(f"[red]OAuth login not supported for '{provider}'[/red]")
+        console.print("\n[dim]Supported providers:[/dim]")
+        console.print("  [dim]• openrouter - OAuth PKCE flow[/dim]")
+        console.print("  [dim]• github-copilot - OAuth device code flow[/dim]")
+        console.print("\n[dim]For other providers, use environment variables:[/dim]")
+        console.print("  [dim]• ANTHROPIC_API_KEY for Anthropic[/dim]")
+        console.print("  [dim]• OPENAI_API_KEY for OpenAI[/dim]")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def logout(
+    provider: str = typer.Argument(
+        ...,
+        help="Provider to logout from (e.g., 'openrouter')",
+    ),
+):
+    """
+    Remove stored credentials for a provider.
+
+    Examples:
+        ctxai logout openrouter
+        ctxai logout anthropic
+
+    This removes the stored API key for the specified provider.
+    You'll need to login again or set environment variables to use the provider.
+    """
+    from .auth.keystore import get_keystore
+    from rich.console import Console
+
+    console = Console()
+
+    keystore = get_keystore()
+
+    if keystore.delete_key(provider):
+        console.print(f"\n[green]Logged out from {provider}[/green]")
+    else:
+        console.print(f"\n[yellow]No stored credentials for {provider}[/yellow]")
+        raise typer.Exit(code=1)
 
 
 def main():

@@ -37,19 +37,19 @@ console = Console(legacy_windows=False)
 def print_banner():
     """Print welcome banner."""
     banner = """
-    ╔═══════════════════════════════════════════════════════╗
-    ║              ctxai - AI Coding Agent                 ║
-    ║                                                       ║
-    ║  Your autonomous coding assistant powered by AI       ║
-    ║                                                       ║
-    ║  Commands:                                            ║
-    ║    /help    - Show help                              ║
-    ║    /clear   - Clear conversation                     ║
-    ║    /exit    - Exit chat                              ║
-    ║    /save    - Save session                           ║
-    ║                                                       ║
-    ║  Just type your request and press Enter!             ║
-    ╚═══════════════════════════════════════════════════════╝
+    =========================================================
+                 ctxai - AI Coding Agent
+
+      Your autonomous coding assistant powered by AI
+
+      Commands:
+        /help    - Show help
+        /clear   - Clear conversation
+        /exit    - Exit chat
+        /save    - Save session
+
+      Just type your request and press Enter!
+    =========================================================
     """
     console.print(banner, style="cyan")
 
@@ -86,6 +86,13 @@ def print_help():
 
 async def interactive_chat(
     working_directory: Path,
+    provider: str = "openrouter",
+    model: Optional[str] = None,
+    architect_editor: bool = False,
+    architect_model: Optional[str] = None,
+    editor_model: Optional[str] = None,
+    preset: str = "default",
+    use_repomap: bool = True,
     verbose: bool = False,
     max_iterations: int = 10,
 ):
@@ -94,33 +101,93 @@ async def interactive_chat(
 
     Args:
         working_directory: Working directory for the agent
+        provider: LLM provider (openrouter, ollama, anthropic, openai)
+        model: Model name
+        architect_editor: Use architect/editor pattern
+        architect_model: Model for architect
+        editor_model: Model for editor
+        preset: Preset for architect/editor (default, budget, local, mixed)
+        use_repomap: Use repository mapping for context
         verbose: Enable verbose output
         max_iterations: Max iterations per request
     """
-    # Check for API key
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        console.print("❌ [red]ANTHROPIC_API_KEY environment variable not set[/red]")
-        console.print("\nPlease set your API key:")
-        console.print("  export ANTHROPIC_API_KEY=your-key-here")
-        console.print("\nGet your key at: https://console.anthropic.com/")
+    from ..agent.llm.factory import LLMProviderFactory
+
+    # Check provider availability
+    LLMProviderFactory.print_provider_status()
+
+    available, message = LLMProviderFactory.check_provider_availability(provider)
+    if not available:
+        console.print(f"[red]{message}[/red]")
+        console.print(LLMProviderFactory.get_setup_instructions())
         return
 
     # Print banner
     print_banner()
 
     # Initialize agent
-    console.print("🤖 Initializing agent...", style="dim")
+    console.print("Initializing agent...", style="dim")
 
-    # Configure LLM
-    llm_config = AgentLLMConfig(
-        provider="anthropic",
-        model="claude-3-5-sonnet-20241022",
-        temperature=0.7,
-        max_tokens=4096,
-    )
+    # Create repository map if enabled
+    repo_map = None
+    if use_repomap:
+        try:
+            from ..agent.repomap import create_repository_map
+            console.print("[cyan]Creating repository map...[/cyan]")
+            repo_map = create_repository_map(working_directory, max_tokens=1000)
+            console.print("[green]Repository map created[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠ Could not create repository map: {e}[/yellow]")
 
-    # Initialize provider
-    llm = AnthropicProvider(llm_config)
+    # Initialize LLM provider(s)
+    if architect_editor:
+        # Use architect/editor pattern
+        from ..agent.architect_editor import ArchitectEditorAgent, ArchitectEditorConfig
+
+        # Get architect and editor configs
+        if architect_model and editor_model:
+            # Custom models
+            arch_config = AgentLLMConfig(
+                provider=provider,
+                model=architect_model,
+                temperature=0.3,
+            )
+            edit_config = AgentLLMConfig(
+                provider=provider,
+                model=editor_model,
+                temperature=0.7,
+            )
+        else:
+            # Use preset
+            arch_config, edit_config = LLMProviderFactory.get_architect_editor_pair(preset)
+
+        # Create providers
+        architect = LLMProviderFactory.create_provider(arch_config)
+        editor = LLMProviderFactory.create_provider(edit_config)
+
+        # Create architect/editor agent
+        ae_config = ArchitectEditorConfig(
+            architect_provider=architect,
+            editor_provider=editor,
+        )
+
+        console.print(f"[green]Using architect/editor pattern[/green]")
+        console.print(f"  Architect: {architect}")
+        console.print(f"  Editor: {editor}")
+
+        # Note: For chat, we'll primarily use editor, architect for complex tasks
+        llm = editor
+
+    else:
+        # Single model
+        llm_config = AgentLLMConfig(
+            provider=provider,
+            model=model,
+            temperature=0.7,
+            max_tokens=4096,
+        )
+        llm = LLMProviderFactory.create_provider(llm_config)
+        console.print(f"[green]Using: {llm}[/green]")
 
     # Create agent config
     agent_config = AgentConfig()
@@ -151,8 +218,8 @@ async def interactive_chat(
     )
     agent = Agent(loop_config)
 
-    console.print(f"✓ Agent ready with {len(tools)} tools", style="green")
-    console.print(f"✓ Working directory: {working_directory}", style="dim")
+    console.print(f"Agent ready with {len(tools)} tools", style="green")
+    console.print(f"Working directory: {working_directory}", style="dim")
     console.print()
 
     # Chat loop
@@ -169,7 +236,7 @@ async def interactive_chat(
                 command = user_input.lower()
 
                 if command in ["/exit", "/quit", "/bye"]:
-                    console.print("\n👋 Goodbye!", style="cyan")
+                    console.print("\nGoodbye!", style="cyan")
                     break
 
                 elif command == "/help":
@@ -178,28 +245,28 @@ async def interactive_chat(
 
                 elif command == "/clear":
                     agent.clear_conversation()
-                    console.print("✓ Conversation cleared", style="green")
+                    console.print("Conversation cleared", style="green")
                     continue
 
                 elif command == "/status":
                     summary = agent.get_conversation_summary()
-                    console.print(f"\n📊 Agent Status:", style="cyan")
+                    console.print(f"\nAgent Status:", style="cyan")
                     console.print(f"  {summary}")
                     continue
 
                 elif command == "/tools":
-                    console.print("\n🔧 Available Tools:", style="cyan")
+                    console.print("\nAvailable Tools:", style="cyan")
                     for tool_name in tools.list_tools():
                         tool_desc = tools.get_tool_description(tool_name)
                         console.print(f"  • {tool_name}: {tool_desc}")
                     continue
 
                 elif command == "/save":
-                    console.print("💾 Session save not yet implemented", style="yellow")
+                    console.print("Session save not yet implemented", style="yellow")
                     continue
 
                 else:
-                    console.print(f"❌ Unknown command: {command}", style="red")
+                    console.print(f"Unknown command: {command}", style="red")
                     console.print("Type /help for available commands", style="dim")
                     continue
 
@@ -214,21 +281,28 @@ async def interactive_chat(
                 console.print(Markdown(response))
 
             except Exception as e:
-                console.print(f"\n❌ [red]Error: {str(e)}[/red]")
+                console.print(f"\n[red]Error: {str(e)}[/red]")
                 if verbose:
                     console.print_exception()
 
         except KeyboardInterrupt:
-            console.print("\n\n👋 Goodbye!", style="cyan")
+            console.print("\n\nGoodbye!", style="cyan")
             break
 
         except EOFError:
-            console.print("\n\n👋 Goodbye!", style="cyan")
+            console.print("\n\nGoodbye!", style="cyan")
             break
 
 
 def start_chat(
     working_directory: Optional[Path] = None,
+    provider: str = "openrouter",
+    model: Optional[str] = None,
+    architect_editor: bool = False,
+    architect_model: Optional[str] = None,
+    editor_model: Optional[str] = None,
+    preset: str = "default",
+    use_repomap: bool = True,
     verbose: bool = False,
     max_iterations: int = 10,
 ):
@@ -237,6 +311,13 @@ def start_chat(
 
     Args:
         working_directory: Working directory (default: current directory)
+        provider: LLM provider (openrouter, ollama, anthropic, openai)
+        model: Model name
+        architect_editor: Use architect/editor pattern
+        architect_model: Model for architect
+        editor_model: Model for editor
+        preset: Preset for architect/editor
+        use_repomap: Use repository mapping
         verbose: Enable verbose output
         max_iterations: Max iterations per request
     """
@@ -244,4 +325,17 @@ def start_chat(
         working_directory = Path.cwd()
 
     # Run async chat loop
-    asyncio.run(interactive_chat(working_directory, verbose, max_iterations))
+    asyncio.run(
+        interactive_chat(
+            working_directory=working_directory,
+            provider=provider,
+            model=model,
+            architect_editor=architect_editor,
+            architect_model=architect_model,
+            editor_model=editor_model,
+            preset=preset,
+            use_repomap=use_repomap,
+            verbose=verbose,
+            max_iterations=max_iterations,
+        )
+    )
