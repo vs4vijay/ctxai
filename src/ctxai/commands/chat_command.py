@@ -9,10 +9,12 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import HTML
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
 
 from ..agent.config import AgentConfig, AgentLLMConfig
 from ..agent.context import ConversationContext
@@ -34,6 +36,37 @@ from ..agent.tools.registry import ToolRegistry
 console = Console(legacy_windows=False)
 
 
+class ChatCommandCompleter(Completer):
+    """Autocompleter for chat commands."""
+
+    def __init__(self):
+        self.commands = {
+            "/help": "Show help message",
+            "/clear": "Clear conversation history",
+            "/model": "Change the LLM model",
+            "/exit": "Exit the chat",
+            "/quit": "Exit the chat",
+            "/bye": "Exit the chat",
+            "/save": "Save current session",
+            "/status": "Show agent status",
+            "/tools": "List available tools",
+        }
+
+    def get_completions(self, document, complete_event):
+        """Get completions for the current input."""
+        text = document.text_before_cursor
+
+        # Only provide completions if text starts with /
+        if text.startswith("/"):
+            for cmd, description in self.commands.items():
+                if cmd.startswith(text):
+                    yield Completion(
+                        cmd,
+                        start_position=-len(text),
+                        display_meta=description,
+                    )
+
+
 def print_banner():
     """Print welcome banner."""
     banner = """
@@ -45,6 +78,7 @@ def print_banner():
       Commands:
         /help    - Show help
         /clear   - Clear conversation
+        /model   - Change model
         /exit    - Exit chat
         /save    - Save session
 
@@ -62,6 +96,7 @@ def print_help():
 ## Chat Commands
 - `/help` - Show this help message
 - `/clear` - Clear conversation history
+- `/model [model-name]` - Change the LLM model (shows available models if no name)
 - `/exit`, `/quit`, `/bye` - Exit the chat
 - `/save` - Save current session
 - `/status` - Show agent status
@@ -92,7 +127,7 @@ async def interactive_chat(
     architect_model: Optional[str] = None,
     editor_model: Optional[str] = None,
     preset: str = "default",
-    use_repomap: bool = True,
+    use_repomap: bool = False,
     verbose: bool = False,
     max_iterations: int = 10,
 ):
@@ -222,11 +257,16 @@ async def interactive_chat(
     console.print(f"Working directory: {working_directory}", style="dim")
     console.print()
 
+    # Create prompt session with autocomplete
+    session = PromptSession(completer=ChatCommandCompleter())
+
     # Chat loop
     while True:
         try:
-            # Get user input
-            user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]").strip()
+            # Get user input with autocomplete
+            user_input = (await session.prompt_async(
+                HTML("\n<cyan><b>You</b></cyan>: ")
+            )).strip()
 
             if not user_input:
                 continue
@@ -263,6 +303,50 @@ async def interactive_chat(
 
                 elif command == "/save":
                     console.print("Session save not yet implemented", style="yellow")
+                    continue
+
+                elif command.startswith("/model"):
+                    # Parse model name
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) == 1:
+                        # Show available models
+                        from ..agent.llm.factory import LLMProviderFactory
+                        from ..agent.llm.openrouter_provider import OPENROUTER_MODELS
+
+                        console.print("\n[cyan]Available Models:[/cyan]")
+                        console.print("\n[yellow]Quick aliases (use with /model <alias>):[/yellow]")
+                        for alias, full_name in OPENROUTER_MODELS.items():
+                            console.print(f"  • {alias:<20} → {full_name}")
+
+                        console.print("\n[yellow]Or use full model name from OpenRouter:[/yellow]")
+                        console.print("  • Visit: https://openrouter.ai/models")
+                        console.print(f"\n[dim]Current model: {llm.model}[/dim]")
+                        continue
+
+                    # Change model
+                    new_model = parts[1].strip()
+
+                    # Check if it's an alias
+                    from ..agent.llm.openrouter_provider import OPENROUTER_MODELS
+                    if new_model in OPENROUTER_MODELS:
+                        new_model = OPENROUTER_MODELS[new_model]
+
+                    try:
+                        # Create new LLM provider with the new model
+                        llm_config = AgentLLMConfig(
+                            provider=provider,
+                            model=new_model,
+                            temperature=0.7,
+                            max_tokens=4096,
+                        )
+                        llm = LLMProviderFactory.create_provider(llm_config)
+
+                        # Update agent with new provider
+                        loop_config.llm_provider = llm
+
+                        console.print(f"[green]✓ Switched to model: {new_model}[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Error changing model: {str(e)}[/red]")
                     continue
 
                 else:
@@ -302,7 +386,7 @@ def start_chat(
     architect_model: Optional[str] = None,
     editor_model: Optional[str] = None,
     preset: str = "default",
-    use_repomap: bool = True,
+    use_repomap: bool = False,
     verbose: bool = False,
     max_iterations: int = 10,
 ):

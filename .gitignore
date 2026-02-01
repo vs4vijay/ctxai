@@ -163,3 +163,5 @@ cython_debug/
 .ctxai/
 
 .claude/settings.local.json
+
+tmpclaude-*

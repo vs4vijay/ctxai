@@ -53,8 +53,8 @@ class OpenRouterProvider(BaseLLMProvider):
             )
 
         # Set model with default
-        # anthropic/claude-3.5-sonnet is the best for coding
-        self.model = config.model or "anthropic/claude-3.5-sonnet"
+        # Using deepseek-r1:free as default - completely free and good quality
+        self.model = config.model or "deepseek/deepseek-r1:free"
 
         # Optional: Site URL and App Name for OpenRouter tracking
         self.site_url = os.getenv("OPENROUTER_SITE_URL", "https://github.com/ctxai")
@@ -234,7 +234,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
-        return "anthropic/claude-3.5-sonnet"
+        return "deepseek/deepseek-r1:free"
 
     def requires_api_key(self) -> bool:
         """Check if provider requires an API key."""

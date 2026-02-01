@@ -6,8 +6,34 @@ import typer
 app = typer.Typer(
     name="ctxai",
     help="A semantic code search engine for intelligent code discovery",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
 )
+
+
+@app.callback()
+def main_callback(ctx: typer.Context):
+    """
+    ctxai - A semantic code search engine for intelligent code discovery
+
+    When run without a command, starts interactive chat mode.
+    Use 'ctxai --help' to see all available commands.
+    """
+    # If no subcommand was invoked, default to chat
+    if ctx.invoked_subcommand is None:
+        from .commands.chat_command import start_chat
+        start_chat(
+            working_directory=Path.cwd(),
+            provider="openrouter",
+            model=None,  # Use default model
+            architect_editor=False,
+            architect_model=None,
+            editor_model=None,
+            preset="default",
+            use_repomap=False,
+            verbose=False,
+            max_iterations=10,
+        )
 
 
 @app.command()
@@ -333,9 +359,9 @@ def chat(
         help="Custom editor model (requires --architect-model)",
     ),
     use_repomap: bool = typer.Option(
-        True,
+        False,
         "--repomap/--no-repomap",
-        help="Use repository mapping for context",
+        help="Use repository mapping for context (disabled by default)",
     ),
     verbose: bool = typer.Option(
         False,

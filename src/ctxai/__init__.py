@@ -28,27 +28,6 @@ For more information, visit: https://github.com/vs4vijay/ctxai
 __version__ = "0.0.1"
 __author__ = "vs4vijay"
 
-from .chunking import CodeChunk, CodeChunker
-from .config import Config, ConfigManager, EmbeddingConfig, IndexConfig
-from .embeddings import (
-    BaseEmbeddingProvider,
-    EmbeddingsFactory,
-    HuggingFaceEmbeddingProvider,
-    LocalEmbeddingProvider,
-    OpenAIEmbeddingProvider,
-)
-from .size_validator import ProjectSizeLimitError, ProjectSizeValidator, ProjectStats
-from .traversal import CodeTraversal
-from .utils import (
-    ensure_ctxai_home,
-    get_config_path,
-    get_ctxai_home,
-    get_ctxai_home_info,
-    get_indexes_dir,
-    is_using_global_home,
-)
-from .vector_store import VectorStore
-
 __all__ = [
     "CodeChunker",
     "CodeChunk",
@@ -73,3 +52,46 @@ __all__ = [
     "get_ctxai_home_info",
     "VectorStore",
 ]
+
+# Lazy import mapping for performance optimization
+_LAZY_IMPORTS = {
+    # Chunking
+    "CodeChunk": ("ctxai.chunking", "CodeChunk"),
+    "CodeChunker": ("ctxai.chunking", "CodeChunker"),
+    # Config
+    "Config": ("ctxai.config", "Config"),
+    "ConfigManager": ("ctxai.config", "ConfigManager"),
+    "EmbeddingConfig": ("ctxai.config", "EmbeddingConfig"),
+    "IndexConfig": ("ctxai.config", "IndexConfig"),
+    # Embeddings
+    "BaseEmbeddingProvider": ("ctxai.embeddings", "BaseEmbeddingProvider"),
+    "EmbeddingsFactory": ("ctxai.embeddings", "EmbeddingsFactory"),
+    "HuggingFaceEmbeddingProvider": ("ctxai.embeddings", "HuggingFaceEmbeddingProvider"),
+    "LocalEmbeddingProvider": ("ctxai.embeddings", "LocalEmbeddingProvider"),
+    "OpenAIEmbeddingProvider": ("ctxai.embeddings", "OpenAIEmbeddingProvider"),
+    # Size validator
+    "ProjectSizeLimitError": ("ctxai.size_validator", "ProjectSizeLimitError"),
+    "ProjectSizeValidator": ("ctxai.size_validator", "ProjectSizeValidator"),
+    "ProjectStats": ("ctxai.size_validator", "ProjectStats"),
+    # Traversal
+    "CodeTraversal": ("ctxai.traversal", "CodeTraversal"),
+    # Utils
+    "ensure_ctxai_home": ("ctxai.utils", "ensure_ctxai_home"),
+    "get_config_path": ("ctxai.utils", "get_config_path"),
+    "get_ctxai_home": ("ctxai.utils", "get_ctxai_home"),
+    "get_ctxai_home_info": ("ctxai.utils", "get_ctxai_home_info"),
+    "get_indexes_dir": ("ctxai.utils", "get_indexes_dir"),
+    "is_using_global_home": ("ctxai.utils", "is_using_global_home"),
+    # Vector store
+    "VectorStore": ("ctxai.vector_store", "VectorStore"),
+}
+
+
+def __getattr__(name: str):
+    """Lazy import attributes to improve startup performance."""
+    if name in _LAZY_IMPORTS:
+        module_name, attr_name = _LAZY_IMPORTS[name]
+        import importlib
+        module = importlib.import_module(module_name)
+        return getattr(module, attr_name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

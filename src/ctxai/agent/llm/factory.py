@@ -112,6 +112,12 @@ class LLMProviderFactory:
                 "description": "Fast and affordable",
                 "cost": "$",
             },
+            "free_default": {
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-r1:free",
+                "description": "Free model with reasoning (default)",
+                "cost": "Free",
+            },
             "very_cheap": {
                 "provider": "openrouter",
                 "model": "deepseek/deepseek-chat",
