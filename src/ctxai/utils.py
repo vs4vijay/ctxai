@@ -69,9 +69,9 @@ def get_config_path(project_path: Path | None = None) -> Path:
         project_path: Optional project root path
 
     Returns:
-        Path to config.json file
+        Path to config.toml file
     """
-    return get_ctxai_home(project_path) / "config.json"
+    return get_ctxai_home(project_path) / "config.toml"
 
 
 def ensure_ctxai_home(project_path: Path | None = None) -> Path:
