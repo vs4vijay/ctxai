@@ -4,17 +4,19 @@ End-to-end tests for agent workflows with tool execution.
 Tests the agent loop with real tool execution but mocked LLM responses.
 """
 
-import pytest
 import asyncio
 from pathlib import Path
-from ctxai.agent.core import Agent, AgentLoopConfig
+
+import pytest
+
 from ctxai.agent.config import AgentConfig
-from ctxai.agent.tools.registry import ToolRegistry
+from ctxai.agent.core import Agent, AgentLoopConfig
 from ctxai.agent.tools.file_ops import (
+    ListFilesTool,
     ReadFileTool,
     WriteFileTool,
-    ListFilesTool,
 )
+from ctxai.agent.tools.registry import ToolRegistry
 from tests.mocks.mock_llm import MockLLMProvider, create_mock_response
 
 

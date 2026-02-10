@@ -17,15 +17,14 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import requests
 from rich.console import Console
 
-
 console = Console()
 
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     """HTTP handler for OAuth callback."""
 
-    authorization_code: Optional[str] = None
-    error: Optional[str] = None
+    authorization_code: str | None = None
+    error: str | None = None
 
     def do_GET(self):
         """Handle GET request to callback endpoint."""
@@ -163,7 +162,7 @@ class PKCEFlow:
 
         return f"{self.OPENROUTER_AUTH_URL}?{urlencode(params)}"
 
-    def start_callback_server(self) -> Tuple[bool, Optional[str], Optional[str]]:
+    def start_callback_server(self) -> tuple[bool, str | None, str | None]:
         """
         Start local HTTP server to receive OAuth callback.
 
@@ -193,7 +192,7 @@ class PKCEFlow:
 
         return False, None, "No authorization code received"
 
-    def exchange_code_for_key(self, code: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    def exchange_code_for_key(self, code: str) -> tuple[bool, str | None, str | None]:
         """
         Exchange authorization code for API key.
 
@@ -239,7 +238,7 @@ class PKCEFlow:
         except requests.RequestException as e:
             return False, None, f"Request failed: {str(e)}"
 
-    def run_flow(self) -> Tuple[bool, Optional[str], Optional[str]]:
+    def run_flow(self) -> tuple[bool, str | None, str | None]:
         """
         Run the complete OAuth PKCE flow.
 
@@ -284,7 +283,7 @@ class PKCEFlow:
         return True, api_key, None
 
 
-def authenticate_with_openrouter(callback_port: int = 8080) -> Optional[str]:
+def authenticate_with_openrouter(callback_port: int = 8080) -> str | None:
     """
     Authenticate with OpenRouter using OAuth PKCE flow.
 

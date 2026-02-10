@@ -16,7 +16,6 @@ from rich.console import Console
 from .llm.base import BaseLLMProvider
 from .planning import Plan, PlanStep, create_plan
 
-
 console = Console()
 
 
@@ -56,9 +55,9 @@ class ArchitectEditorAgent:
     async def process_task(
         self,
         task: str,
-        context: Dict,
-        tools: List[dict],
-    ) -> Dict:
+        context: dict,
+        tools: list[dict],
+    ) -> dict:
         """
         Process a task using architect/editor pattern.
 
@@ -121,8 +120,8 @@ class ArchitectEditorAgent:
     async def _architect_plan(
         self,
         task: str,
-        context: Dict,
-    ) -> Optional[Plan]:
+        context: dict,
+    ) -> Plan | None:
         """
         Use architect to create a plan.
 
@@ -178,9 +177,9 @@ class ArchitectEditorAgent:
     async def _editor_implement(
         self,
         task: str,
-        context: Dict,
-        tools: List[dict],
-    ) -> Dict:
+        context: dict,
+        tools: list[dict],
+    ) -> dict:
         """
         Use editor to implement a task.
 
@@ -212,9 +211,9 @@ class ArchitectEditorAgent:
     async def _architect_review(
         self,
         task: str,
-        results: List[Dict],
-        context: Dict,
-    ) -> Dict:
+        results: list[dict],
+        context: dict,
+    ) -> dict:
         """
         Use architect to review implementation.
 
@@ -245,7 +244,7 @@ class ArchitectEditorAgent:
             "needs_changes": needs_changes,
         }
 
-    def _build_planning_prompt(self, task: str, context: Dict) -> str:
+    def _build_planning_prompt(self, task: str, context: dict) -> str:
         """Build prompt for planning."""
         return f"""Task: {task}
 
@@ -263,7 +262,7 @@ Format:
 ...
 """
 
-    def _build_implementation_prompt(self, task: str, context: Dict) -> str:
+    def _build_implementation_prompt(self, task: str, context: dict) -> str:
         """Build prompt for implementation."""
         return f"""Task: {task}
 
@@ -274,7 +273,7 @@ Implement this step using the available tools.
 Be precise and efficient.
 """
 
-    def _build_review_prompt(self, task: str, results: List[Dict], context: Dict) -> str:
+    def _build_review_prompt(self, task: str, results: list[dict], context: dict) -> str:
         """Build prompt for review."""
         results_text = "\n\n".join([
             f"Step {i+1}: {r.get('content', '')[:200]}..."
@@ -326,8 +325,8 @@ def create_architect_editor_agent(
     Returns:
         Configured ArchitectEditorAgent
     """
-    from .llm.openrouter_provider import OpenRouterProvider
     from .config import AgentLLMConfig
+    from .llm.openrouter_provider import OpenRouterProvider
 
     # Create architect provider (reasoning model)
     architect_config = AgentLLMConfig(

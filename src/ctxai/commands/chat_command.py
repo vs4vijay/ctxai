@@ -32,7 +32,6 @@ from ..agent.tools.file_ops import (
 )
 from ..agent.tools.registry import ToolRegistry
 
-
 console = Console(legacy_windows=False)
 
 
@@ -114,10 +113,10 @@ def print_help():
 async def interactive_chat(
     working_directory: Path,
     provider: str = "openrouter",
-    model: Optional[str] = None,
+    model: str | None = None,
     architect_editor: bool = False,
-    architect_model: Optional[str] = None,
-    editor_model: Optional[str] = None,
+    architect_model: str | None = None,
+    editor_model: str | None = None,
     preset: str = "default",
     use_repomap: bool = False,
     verbose: bool = False,
@@ -197,7 +196,7 @@ async def interactive_chat(
         )
 
         if verbose:
-            console.print(f"[dim green]✓ Architect/Editor pattern[/dim green]")
+            console.print("[dim green]✓ Architect/Editor pattern[/dim green]")
             console.print(f"[dim]  Architect: {architect}[/dim]")
             console.print(f"[dim]  Editor: {editor}[/dim]")
 
@@ -286,7 +285,7 @@ async def interactive_chat(
 
                 elif command == "/status":
                     summary = agent.get_conversation_summary()
-                    console.print(f"\nAgent Status:", style="cyan")
+                    console.print("\nAgent Status:", style="cyan")
                     console.print(f"  {summary}")
                     continue
 
@@ -375,12 +374,12 @@ async def interactive_chat(
 
 
 def start_chat(
-    working_directory: Optional[Path] = None,
+    working_directory: Path | None = None,
     provider: str = "openrouter",
-    model: Optional[str] = None,
+    model: str | None = None,
     architect_editor: bool = False,
-    architect_model: Optional[str] = None,
-    editor_model: Optional[str] = None,
+    architect_model: str | None = None,
+    editor_model: str | None = None,
     preset: str = "default",
     use_repomap: bool = False,
     verbose: bool = False,

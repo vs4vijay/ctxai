@@ -9,11 +9,12 @@ Supports hierarchical config: global (~/.config/ctxai/config.toml) and project (
 import json
 import os
 import shutil
-import tomlkit
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+import tomlkit
 from rich.console import Console
 
 from .utils import get_config_path, get_ctxai_home

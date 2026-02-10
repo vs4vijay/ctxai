@@ -28,7 +28,7 @@ class GitStatusTool(BaseTool):
             ],
         )
 
-    async def execute(self, path: str = ".") -> Dict[str, Any]:
+    async def execute(self, path: str = ".") -> dict[str, Any]:
         """
         Execute git status.
 
@@ -140,7 +140,7 @@ class GitDiffTool(BaseTool):
         path: str = "",
         staged: bool = False,
         repo_path: str = ".",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute git diff.
 
@@ -240,7 +240,7 @@ class GitCommitTool(BaseTool):
         self,
         message: str,
         repo_path: str = ".",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute git commit.
 
@@ -325,7 +325,7 @@ class GitAddTool(BaseTool):
         self,
         files: list,
         repo_path: str = ".",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute git add.
 
@@ -414,7 +414,7 @@ class GitBranchTool(BaseTool):
         action: str,
         branch_name: str = None,
         repo_path: str = ".",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute git branch operation.
 
@@ -528,7 +528,7 @@ class GitLogTool(BaseTool):
         self,
         limit: int = 10,
         repo_path: str = ".",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute git log.
 

@@ -2,10 +2,10 @@
 Semantic code search tool using ctxai's vector store.
 """
 
-from typing import Dict, Any
 from pathlib import Path
+from typing import Any, Dict
 
-from .base import BaseTool, ToolSchema, ToolParameter, ToolParameterType
+from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
 
 class SemanticSearchTool(BaseTool):
@@ -42,13 +42,13 @@ class SemanticSearchTool(BaseTool):
             ]
         )
 
-    async def execute(self, query: str, index_name: str = None, n_results: int = 5) -> Dict[str, Any]:
+    async def execute(self, query: str, index_name: str = None, n_results: int = 5) -> dict[str, Any]:
         try:
             # Import ctxai components
             from ctxai.config import ConfigManager
             from ctxai.embeddings import EmbeddingsFactory
-            from ctxai.vector_store import VectorStore
             from ctxai.utils import get_ctxai_home
+            from ctxai.vector_store import VectorStore
 
             # Load config
             config_manager = ConfigManager(self.project_path)

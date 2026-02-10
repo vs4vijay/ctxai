@@ -6,12 +6,13 @@ Provides local model execution through Ollama.
 
 import json
 import os
-from typing import Iterator, List, Optional
+from collections.abc import Iterator
+from typing import List, Optional
 
 import requests
 
-from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
 from ..config import AgentLLMConfig
+from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -54,8 +55,8 @@ class OllamaProvider(BaseLLMProvider):
 
     def chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> LLMResponse:
         """
@@ -125,8 +126,8 @@ class OllamaProvider(BaseLLMProvider):
 
     def stream_chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> Iterator[str]:
         """
@@ -187,7 +188,7 @@ class OllamaProvider(BaseLLMProvider):
         # Rough estimate for local models: 1 token ≈ 4 characters
         return len(text) // 4
 
-    def _convert_messages(self, messages: List[dict]) -> List[dict]:
+    def _convert_messages(self, messages: list[dict]) -> list[dict]:
         """
         Convert OpenAI-format messages to Ollama format.
 
@@ -226,7 +227,7 @@ class OllamaProvider(BaseLLMProvider):
 
         return ollama_messages
 
-    def _convert_tools_to_ollama(self, tools: List[dict]) -> List[dict]:
+    def _convert_tools_to_ollama(self, tools: list[dict]) -> list[dict]:
         """
         Convert OpenAI-format tools to Ollama format.
 
@@ -240,7 +241,7 @@ class OllamaProvider(BaseLLMProvider):
         # This is a pass-through for now, but can be customized
         return tools
 
-    def list_available_models(self) -> List[str]:
+    def list_available_models(self) -> list[str]:
         """
         List all models available in Ollama.
 

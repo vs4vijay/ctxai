@@ -5,9 +5,10 @@ This module defines the abstract interface that all LLM providers must implement
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Generator
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class MessageRole(str, Enum):
@@ -22,7 +23,7 @@ class ToolCall:
     """Represents a tool call made by the LLM."""
     id: str
     name: str
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
 
 
 @dataclass
@@ -30,11 +31,11 @@ class Message:
     """Represents a message in the conversation."""
     role: MessageRole
     content: str
-    tool_calls: Optional[List[ToolCall]] = None
-    tool_call_id: Optional[str] = None  # For tool result messages
-    name: Optional[str] = None  # Tool name for tool result messages
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None  # For tool result messages
+    name: str | None = None  # Tool name for tool result messages
 
-    def to_dict(self, format: str = "openai") -> Dict[str, Any]:
+    def to_dict(self, format: str = "openai") -> dict[str, Any]:
         """
         Convert message to dictionary format.
 
@@ -89,10 +90,10 @@ class Message:
 class LLMResponse:
     """Represents a response from the LLM."""
     content: str
-    tool_calls: List[ToolCall] = field(default_factory=list)
+    tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"  # "stop", "tool_calls", "length", "error"
-    usage: Dict[str, int] = field(default_factory=dict)
-    raw_response: Optional[Dict[str, Any]] = None
+    usage: dict[str, int] = field(default_factory=dict)
+    raw_response: dict[str, Any] | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -129,8 +130,8 @@ class BaseLLMProvider(ABC):
     @abstractmethod
     def chat(
         self,
-        messages: List[Message],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs
     ) -> LLMResponse:
         """
@@ -152,8 +153,8 @@ class BaseLLMProvider(ABC):
     @abstractmethod
     def stream_chat(
         self,
-        messages: List[Message],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs
     ) -> Generator[str, None, None]:
         """
@@ -182,7 +183,7 @@ class BaseLLMProvider(ABC):
         """
         pass
 
-    def _format_messages(self, messages: List[Message], format: str = "openai") -> List[Dict[str, Any]]:
+    def _format_messages(self, messages: list[Message], format: str = "openai") -> list[dict[str, Any]]:
         """
         Format messages for the provider.
 
@@ -195,7 +196,7 @@ class BaseLLMProvider(ABC):
         """
         return [msg.to_dict(format=format) for msg in messages]
 
-    def _extract_system_message(self, messages: List[Message]) -> tuple[Optional[str], List[Message]]:
+    def _extract_system_message(self, messages: list[Message]) -> tuple[str | None, list[Message]]:
         """
         Extract system message from messages list.
 

@@ -2,18 +2,18 @@
 Core agent implementation with tool calling and planning.
 """
 
-from dataclasses import dataclass
-from typing import Optional
-from pathlib import Path
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
 
 from rich.console import Console
 
-from .llm.base import BaseLLMProvider, MessageRole, ToolCall
-from .tools.registry import ToolRegistry
-from .context import ConversationContext
 from .config import AgentConfig
+from .context import ConversationContext
+from .llm.base import BaseLLMProvider, MessageRole, ToolCall
 from .prompts import get_system_prompt, get_tool_error_recovery_prompt
+from .tools.registry import ToolRegistry
 
 
 @dataclass
@@ -198,7 +198,7 @@ class Agent:
             Formatted result string
         """
         if result.get("success"):
-            output = f"Tool executed successfully.\n\n"
+            output = "Tool executed successfully.\n\n"
             if result.get("result"):
                 output += str(result["result"])
             if result.get("metadata"):

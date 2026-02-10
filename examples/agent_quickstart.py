@@ -5,19 +5,16 @@ This demonstrates how to use the agent programmatically.
 """
 
 import asyncio
-from pathlib import Path
 import os
+from pathlib import Path
 
+from ctxai.agent.config import AgentConfig, AgentLLMConfig
 from ctxai.agent.core import Agent, AgentLoopConfig
 from ctxai.agent.llm.anthropic_provider import AnthropicProvider
-from ctxai.agent.tools.registry import ToolRegistry
-from ctxai.agent.tools.file_ops import (
-    ReadFileTool, WriteFileTool, EditFileTool,
-    ListFilesTool, GlobTool, GrepTool
-)
 from ctxai.agent.tools.bash_tool import BashTool
 from ctxai.agent.tools.code_search import SemanticSearchTool
-from ctxai.agent.config import AgentLLMConfig, AgentConfig
+from ctxai.agent.tools.file_ops import EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool
+from ctxai.agent.tools.registry import ToolRegistry
 
 
 async def main():

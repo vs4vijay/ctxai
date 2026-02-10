@@ -5,8 +5,8 @@ Test script for OAuth PKCE implementation.
 This tests the PKCE flow components without running the full OAuth flow.
 """
 
-from src.ctxai.auth.oauth_pkce import PKCEFlow
 from src.ctxai.auth.keystore import KeyStore
+from src.ctxai.auth.oauth_pkce import PKCEFlow
 
 
 def test_pkce_generation():
@@ -67,10 +67,11 @@ def test_integration():
     """Test integration between components."""
     print("Testing integration...")
 
-    from src.ctxai.agent.config import AgentLLMConfig
-    from src.ctxai.auth.keystore import KeyStore
     import tempfile
     from pathlib import Path
+
+    from src.ctxai.agent.config import AgentLLMConfig
+    from src.ctxai.auth.keystore import KeyStore
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Store a test key

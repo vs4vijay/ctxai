@@ -40,14 +40,14 @@ class GitHubCopilotAuth:
 
     def __init__(self):
         """Initialize GitHub Copilot authentication."""
-        self.device_code: Optional[str] = None
-        self.user_code: Optional[str] = None
-        self.verification_uri: Optional[str] = None
+        self.device_code: str | None = None
+        self.user_code: str | None = None
+        self.verification_uri: str | None = None
         self.interval: int = 5
-        self.access_token: Optional[str] = None
-        self.refresh_token: Optional[str] = None
+        self.access_token: str | None = None
+        self.refresh_token: str | None = None
 
-    def get_device_code(self) -> Tuple[bool, Optional[str]]:
+    def get_device_code(self) -> tuple[bool, str | None]:
         """
         Step 1: Request a device code from GitHub.
 
@@ -92,7 +92,7 @@ class GitHubCopilotAuth:
         except (json.JSONDecodeError, KeyError) as e:
             return False, f"Invalid response: {str(e)}"
 
-    def poll_for_token(self, timeout: int = 300) -> Tuple[bool, Optional[str]]:
+    def poll_for_token(self, timeout: int = 300) -> tuple[bool, str | None]:
         """
         Step 2: Poll GitHub for access token after user authorizes.
 
@@ -172,7 +172,7 @@ class GitHubCopilotAuth:
 
         return False, "Authorization timed out"
 
-    def get_copilot_token(self) -> Tuple[bool, Optional[str], Optional[dict]]:
+    def get_copilot_token(self) -> tuple[bool, str | None, dict | None]:
         """
         Step 3: Exchange GitHub access token for Copilot API token.
 
@@ -219,7 +219,7 @@ class GitHubCopilotAuth:
         except (json.JSONDecodeError, KeyError) as e:
             return False, f"Invalid response: {str(e)}", None
 
-    def run_flow(self) -> Tuple[bool, Optional[dict], Optional[str]]:
+    def run_flow(self) -> tuple[bool, dict | None, str | None]:
         """
         Run the complete OAuth device code flow.
 
@@ -272,7 +272,7 @@ class GitHubCopilotAuth:
         return True, token_data, None
 
 
-def authenticate_with_github_copilot() -> Optional[dict]:
+def authenticate_with_github_copilot() -> dict | None:
     """
     Authenticate with GitHub Copilot using OAuth device code flow.
 

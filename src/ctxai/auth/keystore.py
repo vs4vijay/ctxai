@@ -11,14 +11,13 @@ from typing import Optional
 
 from rich.console import Console
 
-
 console = Console()
 
 
 class KeyStore:
     """Manages secure storage of API keys."""
 
-    def __init__(self, config_dir: Optional[Path] = None):
+    def __init__(self, config_dir: Path | None = None):
         """
         Initialize key store.
 
@@ -44,9 +43,9 @@ class KeyStore:
             return {}
 
         try:
-            with open(self.keystore_file, "r") as f:
+            with open(self.keystore_file) as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             console.print(f"[yellow]Warning: Could not load keystore: {e}[/yellow]")
             return {}
 
@@ -60,7 +59,7 @@ class KeyStore:
             if os.name != "nt":  # Unix-like systems
                 os.chmod(self.keystore_file, 0o600)
 
-        except IOError as e:
+        except OSError as e:
             console.print(f"[red]Error saving keystore: {e}[/red]")
 
     def set_key(self, provider: str, api_key: str | dict):
@@ -77,7 +76,7 @@ class KeyStore:
 
         console.print(f"[green]Saved API key for {provider}[/green]")
 
-    def get_key(self, provider: str) -> Optional[str]:
+    def get_key(self, provider: str) -> str | None:
         """
         Get an API key for a provider.
 

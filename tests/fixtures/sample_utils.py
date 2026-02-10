@@ -6,7 +6,7 @@ from typing import List, Optional
 
 def read_file(path: str) -> str:
     """Read file contents."""
-    with open(path, 'r') as f:
+    with open(path) as f:
         return f.read()
 
 
@@ -16,7 +16,7 @@ def write_file(path: str, content: str) -> None:
         f.write(content)
 
 
-def list_files(directory: str, pattern: Optional[str] = None) -> List[str]:
+def list_files(directory: str, pattern: str | None = None) -> list[str]:
     """List files in directory."""
     files = []
     for item in os.listdir(directory):

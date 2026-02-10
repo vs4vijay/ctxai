@@ -487,21 +487,20 @@ def code(
         ctxai code "Add error handling to the main.py file"
         ctxai code "Generate unit tests for the User class"
     """
-    from .commands.chat_command import interactive_chat
     import asyncio
 
+    from .commands.chat_command import interactive_chat
+
     async def run_task():
+        from rich.console import Console
+
+        from .agent.config import AgentConfig, AgentLLMConfig
         from .agent.core import Agent, AgentLoopConfig
         from .agent.llm.anthropic_provider import AnthropicProvider
-        from .agent.config import AgentLLMConfig, AgentConfig
-        from .agent.tools.registry import ToolRegistry
-        from .agent.tools.file_ops import (
-            ReadFileTool, WriteFileTool, EditFileTool,
-            ListFilesTool, GlobTool, GrepTool
-        )
         from .agent.tools.bash_tool import BashTool
         from .agent.tools.code_search import SemanticSearchTool
-        from rich.console import Console
+        from .agent.tools.file_ops import EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool
+        from .agent.tools.registry import ToolRegistry
 
         console = Console()
 
@@ -583,8 +582,9 @@ def login(
     After authentication, credentials are securely stored and
     automatically used for chat sessions.
     """
-    from .auth.keystore import get_keystore
     from rich.console import Console
+
+    from .auth.keystore import get_keystore
 
     console = Console()
 
@@ -652,8 +652,9 @@ def logout(
     This removes the stored API key for the specified provider.
     You'll need to login again or set environment variables to use the provider.
     """
-    from .auth.keystore import get_keystore
     from rich.console import Console
+
+    from .auth.keystore import get_keystore
 
     console = Console()
 

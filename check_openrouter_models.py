@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Check available OpenRouter models."""
 
-import sys
 import json
-import requests
+import sys
 from pathlib import Path
+
+import requests
 
 # Fix Windows encoding
 if sys.platform == "win32":

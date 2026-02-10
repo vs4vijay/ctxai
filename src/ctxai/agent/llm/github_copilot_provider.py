@@ -7,12 +7,13 @@ authenticated tokens from OAuth device code flow.
 
 import json
 import os
-from typing import Iterator, List, Optional
+from collections.abc import Iterator
+from typing import List, Optional
 
 import requests
 
-from .base import BaseLLMProvider, LLMResponse, ToolCall
 from ..config import AgentLLMConfig
+from .base import BaseLLMProvider, LLMResponse, ToolCall
 
 
 class GitHubCopilotProvider(BaseLLMProvider):
@@ -67,7 +68,7 @@ class GitHubCopilotProvider(BaseLLMProvider):
         # Set model with default
         self.model = config.model or "gpt-4"
 
-    def _get_token_data(self, config: AgentLLMConfig) -> Optional[dict | str]:
+    def _get_token_data(self, config: AgentLLMConfig) -> dict | str | None:
         """
         Get Copilot token from config or keystore.
 
@@ -97,8 +98,8 @@ class GitHubCopilotProvider(BaseLLMProvider):
 
     def chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> LLMResponse:
         """
@@ -182,8 +183,8 @@ class GitHubCopilotProvider(BaseLLMProvider):
 
     def stream_chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> Iterator[str]:
         """

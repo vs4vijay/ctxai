@@ -4,10 +4,12 @@ Shared pytest fixtures for all tests.
 This module provides common fixtures used across both unit and E2E tests.
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
+
+import pytest
+
 from ctxai.config import EmbeddingConfig
 from tests.mocks.mock_embeddings import MockEmbeddingProvider
 

@@ -6,9 +6,11 @@ making tests 100x faster while maintaining the same interface.
 """
 
 import hashlib
+
 import numpy as np
-from ctxai.embeddings import BaseEmbeddingProvider
+
 from ctxai.config import EmbeddingConfig
+from ctxai.embeddings import BaseEmbeddingProvider
 
 
 class MockEmbeddingProvider(BaseEmbeddingProvider):

@@ -4,11 +4,11 @@ Bash command execution tool.
 
 import asyncio
 import subprocess
-from typing import Dict, Any
 from pathlib import Path
+from typing import Any, Dict
 
-from .base import BaseTool, ToolSchema, ToolParameter, ToolParameterType
 from ..config import AgentToolsConfig
+from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
 
 class BashTool(BaseTool):
@@ -40,7 +40,7 @@ class BashTool(BaseTool):
             ]
         )
 
-    async def execute(self, command: str, working_directory: str = ".") -> Dict[str, Any]:
+    async def execute(self, command: str, working_directory: str = ".") -> dict[str, Any]:
         try:
             # Check if command is allowed
             if not self.config.is_bash_command_allowed(command):

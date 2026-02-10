@@ -24,7 +24,7 @@ class Symbol:
     file_path: str
     line_number: int
     code_snippet: str
-    references: Set[str] = None  # Other files that reference this symbol
+    references: set[str] = None  # Other files that reference this symbol
 
     def __post_init__(self):
         if self.references is None:
@@ -39,9 +39,9 @@ class FileNode:
     """Represents a file in the dependency graph."""
 
     path: str
-    symbols: List[Symbol]
-    dependencies: Set[str]  # Files this file depends on
-    dependents: Set[str]  # Files that depend on this file
+    symbols: list[Symbol]
+    dependencies: set[str]  # Files this file depends on
+    dependents: set[str]  # Files that depend on this file
     importance: float = 0.0  # PageRank-style importance score
 
     def __post_init__(self):
@@ -68,7 +68,7 @@ class RepositoryMap:
         self,
         root_dir: Path,
         max_tokens: int = 1000,
-        include_patterns: Optional[List[str]] = None,
+        include_patterns: list[str] | None = None,
     ):
         """
         Initialize repository mapper.
@@ -82,9 +82,9 @@ class RepositoryMap:
         self.max_tokens = max_tokens
         self.include_patterns = include_patterns or ["*.py", "*.js", "*.ts", "*.go", "*.java"]
 
-        self.files: Dict[str, FileNode] = {}
-        self.symbols: List[Symbol] = []
-        self.dependency_graph: Dict[str, Set[str]] = defaultdict(set)
+        self.files: dict[str, FileNode] = {}
+        self.symbols: list[Symbol] = []
+        self.dependency_graph: dict[str, set[str]] = defaultdict(set)
 
     def build_map(self) -> str:
         """
@@ -122,7 +122,7 @@ class RepositoryMap:
                 # Skip files that can't be parsed
                 pass
 
-    def _get_files(self) -> List[Path]:
+    def _get_files(self) -> list[Path]:
         """Get all files matching patterns."""
         # Directories to skip
         skip_dirs = {
@@ -148,7 +148,7 @@ class RepositoryMap:
 
         return files
 
-    def _extract_symbols(self, file_path: Path) -> List[Symbol]:
+    def _extract_symbols(self, file_path: Path) -> list[Symbol]:
         """
         Extract symbols from a file using tree-sitter.
 
@@ -167,7 +167,7 @@ class RepositoryMap:
             parser = get_parser(language)
 
             # Read file
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 code = f.read()
 
             # Parse
@@ -182,7 +182,7 @@ class RepositoryMap:
         except Exception:
             return []
 
-    def _get_language_for_file(self, file_path: Path) -> Optional[str]:
+    def _get_language_for_file(self, file_path: Path) -> str | None:
         """Get tree-sitter language for file extension."""
         ext = file_path.suffix.lower()
         language_map = {
@@ -198,7 +198,7 @@ class RepositoryMap:
         }
         return language_map.get(ext)
 
-    def _visit_node(self, node, file_path: Path, code: str, symbols: List[Symbol]):
+    def _visit_node(self, node, file_path: Path, code: str, symbols: list[Symbol]):
         """
         Visit tree-sitter node and extract symbols.
 

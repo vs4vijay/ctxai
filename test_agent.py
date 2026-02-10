@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Direct test of the agent with OpenRouter."""
 
-import sys
 import asyncio
+import sys
 from pathlib import Path
 
 # Fix Windows encoding
@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from ctxai.agent.config import AgentConfig, AgentLLMConfig
 from ctxai.agent.core import Agent, AgentLoopConfig
 from ctxai.agent.llm.factory import LLMProviderFactory
+from ctxai.agent.tools.file_ops import ListFilesTool, ReadFileTool
 from ctxai.agent.tools.registry import ToolRegistry
-from ctxai.agent.tools.file_ops import ReadFileTool, ListFilesTool
 
 
 async def test_agent():
@@ -33,20 +33,20 @@ async def test_agent():
         max_tokens=4096,
     )
 
-    print(f"\nCreating LLM provider...")
+    print("\nCreating LLM provider...")
     llm = LLMProviderFactory.create_provider(llm_config)
     print(f"  Provider: {llm}")
     print(f"  Model: {llm.model}")
 
     # Create tools
-    print(f"\nRegistering tools...")
+    print("\nRegistering tools...")
     tools = ToolRegistry(verbose=False)
     tools.register(ReadFileTool())
     tools.register(ListFilesTool())
     print(f"  Registered {len(tools.list_tools())} tools")
 
     # Create agent
-    print(f"\nCreating agent...")
+    print("\nCreating agent...")
     agent_config = AgentConfig()
     loop_config = AgentLoopConfig(
         llm_provider=llm,
@@ -67,9 +67,9 @@ async def test_agent():
 
     try:
         response = await agent.process_message("Hello! What's up?")
-        print(f"\n[OK] Agent Response:")
+        print("\n[OK] Agent Response:")
         print(f"{response}")
-        print(f"\n[OK] Test 1 passed - no max iterations error!")
+        print("\n[OK] Test 1 passed - no max iterations error!")
     except Exception as e:
         print(f"\n[ERROR] Test 1 failed: {e}")
         return False
@@ -81,9 +81,9 @@ async def test_agent():
 
     try:
         response = await agent.process_message("List the files in the current directory")
-        print(f"\n[OK] Agent Response:")
+        print("\n[OK] Agent Response:")
         print(f"{response}")
-        print(f"\n[OK] Test 2 passed!")
+        print("\n[OK] Test 2 passed!")
     except Exception as e:
         print(f"\n[ERROR] Test 2 failed: {e}")
         return False

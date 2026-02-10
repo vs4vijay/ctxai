@@ -5,14 +5,16 @@ This mock provider returns predefined responses instead of making real API calls
 enabling fast, deterministic testing without costs.
 """
 
-from typing import List, Dict, Any, Optional, Generator
+from collections.abc import Generator
+from typing import Any, Dict, List, Optional
+
+from ctxai.agent.config import AgentLLMConfig
 from ctxai.agent.llm.base import (
     BaseLLMProvider,
     LLMResponse,
     Message,
     ToolCall,
 )
-from ctxai.agent.config import AgentLLMConfig
 
 
 class MockLLMProvider(BaseLLMProvider):
@@ -23,7 +25,7 @@ class MockLLMProvider(BaseLLMProvider):
     Supports configuring exact sequences of responses including tool calls.
     """
 
-    def __init__(self, config: AgentLLMConfig = None, responses: List[Dict[str, Any]] = None):
+    def __init__(self, config: AgentLLMConfig = None, responses: list[dict[str, Any]] = None):
         """
         Initialize mock LLM provider.
 
@@ -55,8 +57,8 @@ class MockLLMProvider(BaseLLMProvider):
 
     def chat(
         self,
-        messages: List[Message],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs
     ) -> LLMResponse:
         """
@@ -122,8 +124,8 @@ class MockLLMProvider(BaseLLMProvider):
 
     def stream_chat(
         self,
-        messages: List[Message],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs
     ) -> Generator[str, None, None]:
         """
@@ -172,7 +174,7 @@ class MockLLMProvider(BaseLLMProvider):
         self.call_history = []
 
 
-def create_mock_response(content: str = "", tool_calls: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+def create_mock_response(content: str = "", tool_calls: list[dict[str, Any]] = None) -> dict[str, Any]:
     """
     Helper function to create a mock response configuration.
 

@@ -2,8 +2,9 @@
 Anthropic Claude provider implementation.
 """
 
-from typing import List, Dict, Any, Optional, Generator
 import uuid
+from collections.abc import Generator
+from typing import Any, Dict, List, Optional
 
 try:
     from anthropic import Anthropic, AnthropicError
@@ -11,8 +12,8 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from .base import BaseLLMProvider, Message, LLMResponse, ToolCall, MessageRole
 from ..config import AgentLLMConfig
+from .base import BaseLLMProvider, LLMResponse, Message, MessageRole, ToolCall
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -52,8 +53,8 @@ class AnthropicProvider(BaseLLMProvider):
 
     def chat(
         self,
-        messages: List[Message],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs
     ) -> LLMResponse:
         """
@@ -107,8 +108,8 @@ class AnthropicProvider(BaseLLMProvider):
 
     def stream_chat(
         self,
-        messages: List[Message],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
         **kwargs
     ) -> Generator[str, None, None]:
         """
@@ -153,7 +154,7 @@ class AnthropicProvider(BaseLLMProvider):
         except Exception as e:
             yield f"\n[Error: {str(e)}]"
 
-    def _format_messages_for_anthropic(self, messages: List[Message]) -> List[Dict[str, Any]]:
+    def _format_messages_for_anthropic(self, messages: list[Message]) -> list[dict[str, Any]]:
         """
         Format messages for Anthropic API.
 

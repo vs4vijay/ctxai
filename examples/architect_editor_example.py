@@ -61,8 +61,8 @@ async def example_ollama_local():
     console.print("\n[bold cyan]Example 2: Ollama Local Models[/bold cyan]\n")
 
     try:
-        from ctxai.agent.llm.ollama_provider import OllamaProvider, OLLAMA_CODING_MODELS
         from ctxai.agent.config import AgentLLMConfig
+        from ctxai.agent.llm.ollama_provider import OLLAMA_CODING_MODELS, OllamaProvider
 
         # Create Ollama provider
         config = AgentLLMConfig(
@@ -73,7 +73,7 @@ async def example_ollama_local():
 
         ollama = OllamaProvider(config)
 
-        console.print(f"[green]✓ Connected to Ollama[/green]")
+        console.print("[green]✓ Connected to Ollama[/green]")
         console.print(f"Model: {ollama.model}")
 
         # List available models
@@ -127,10 +127,10 @@ async def example_mixed_providers():
         return
 
     try:
-        from ctxai.agent.llm.openrouter_provider import OpenRouterProvider
-        from ctxai.agent.llm.ollama_provider import OllamaProvider
-        from ctxai.agent.config import AgentLLMConfig
         from ctxai.agent.architect_editor import ArchitectEditorAgent, ArchitectEditorConfig
+        from ctxai.agent.config import AgentLLMConfig
+        from ctxai.agent.llm.ollama_provider import OllamaProvider
+        from ctxai.agent.llm.openrouter_provider import OpenRouterProvider
 
         # Architect: OpenRouter with reasoning model
         architect_config = AgentLLMConfig(

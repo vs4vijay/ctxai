@@ -4,11 +4,11 @@ File operation tools for agent.
 Includes: read, write, edit, list, glob, grep
 """
 
-from pathlib import Path
-from typing import Dict, Any, List, Optional
+import glob as glob_module
 import os
 import re
-import glob as glob_module
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 try:
     import aiofiles
@@ -16,7 +16,7 @@ try:
 except ImportError:
     AIOFILES_AVAILABLE = False
 
-from .base import BaseTool, ToolSchema, ToolParameter, ToolParameterType
+from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
 
 class ReadFileTool(BaseTool):
@@ -52,7 +52,7 @@ class ReadFileTool(BaseTool):
             ]
         )
 
-    async def execute(self, file_path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> Dict[str, Any]:
+    async def execute(self, file_path: str, start_line: int | None = None, end_line: int | None = None) -> dict[str, Any]:
         try:
             path = Path(file_path).resolve()
 
@@ -73,10 +73,10 @@ class ReadFileTool(BaseTool):
 
             # Read file
             if AIOFILES_AVAILABLE:
-                async with aiofiles.open(path, 'r', encoding='utf-8', errors='replace') as f:
+                async with aiofiles.open(path, encoding='utf-8', errors='replace') as f:
                     content = await f.read()
             else:
-                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                with open(path, encoding='utf-8', errors='replace') as f:
                     content = f.read()
 
             lines = content.split('\n')
@@ -139,7 +139,7 @@ class WriteFileTool(BaseTool):
             ]
         )
 
-    async def execute(self, file_path: str, content: str) -> Dict[str, Any]:
+    async def execute(self, file_path: str, content: str) -> dict[str, Any]:
         try:
             path = Path(file_path).resolve()
 
@@ -217,7 +217,7 @@ class EditFileTool(BaseTool):
             ]
         )
 
-    async def execute(self, file_path: str, old_text: str, new_text: str, use_regex: bool = False) -> Dict[str, Any]:
+    async def execute(self, file_path: str, old_text: str, new_text: str, use_regex: bool = False) -> dict[str, Any]:
         try:
             path = Path(file_path).resolve()
 
@@ -226,10 +226,10 @@ class EditFileTool(BaseTool):
 
             # Read file
             if AIOFILES_AVAILABLE:
-                async with aiofiles.open(path, 'r', encoding='utf-8') as f:
+                async with aiofiles.open(path, encoding='utf-8') as f:
                     content = await f.read()
             else:
-                with open(path, 'r', encoding='utf-8') as f:
+                with open(path, encoding='utf-8') as f:
                     content = f.read()
 
             # Perform replacement
@@ -294,7 +294,7 @@ class ListFilesTool(BaseTool):
             ]
         )
 
-    async def execute(self, directory_path: str, show_hidden: bool = False) -> Dict[str, Any]:
+    async def execute(self, directory_path: str, show_hidden: bool = False) -> dict[str, Any]:
         try:
             path = Path(directory_path).resolve()
 
@@ -376,7 +376,7 @@ class GlobTool(BaseTool):
             ]
         )
 
-    async def execute(self, pattern: str, base_path: str = ".", max_results: int = 100) -> Dict[str, Any]:
+    async def execute(self, pattern: str, base_path: str = ".", max_results: int = 100) -> dict[str, Any]:
         try:
             base = Path(base_path).resolve()
 
@@ -459,7 +459,7 @@ class GrepTool(BaseTool):
         base_path: str = ".",
         case_insensitive: bool = False,
         max_results: int = 50
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         try:
             base = Path(base_path).resolve()
 
@@ -481,7 +481,7 @@ class GrepTool(BaseTool):
                 files_searched += 1
 
                 try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    with open(file_path, encoding='utf-8', errors='ignore') as f:
                         for line_num, line in enumerate(f, 1):
                             if regex.search(line):
                                 matches.append({

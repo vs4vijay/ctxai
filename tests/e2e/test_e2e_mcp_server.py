@@ -4,9 +4,10 @@ End-to-end tests for MCP server integration.
 Tests MCP server tools with real implementations.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 # Skip all tests if MCP is not available
 pytest.importorskip("mcp", reason="MCP not installed")

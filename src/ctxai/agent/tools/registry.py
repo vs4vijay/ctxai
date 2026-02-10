@@ -2,8 +2,9 @@
 Tool registry for managing and executing tools.
 """
 
-from typing import Dict, List, Optional, Any
 import asyncio
+from typing import Any, Dict, List, Optional
+
 from rich.console import Console
 
 from .base import BaseTool, ToolSchema
@@ -23,7 +24,7 @@ class ToolRegistry:
         Args:
             verbose: If True, print debug information
         """
-        self._tools: Dict[str, BaseTool] = {}
+        self._tools: dict[str, BaseTool] = {}
         self.verbose = verbose
         self.console = Console(legacy_windows=False) if verbose else None
 
@@ -48,7 +49,7 @@ class ToolRegistry:
         if self.verbose:
             self.console.print(f"[green][OK] Registered tool:[/green] {tool.name}")
 
-    def register_multiple(self, tools: List[BaseTool]) -> None:
+    def register_multiple(self, tools: list[BaseTool]) -> None:
         """
         Register multiple tools at once.
 
@@ -75,7 +76,7 @@ class ToolRegistry:
             return True
         return False
 
-    def get_tool(self, name: str) -> Optional[BaseTool]:
+    def get_tool(self, name: str) -> BaseTool | None:
         """
         Get a tool by name.
 
@@ -99,7 +100,7 @@ class ToolRegistry:
         """
         return name in self._tools
 
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         """
         Get list of registered tool names.
 
@@ -108,7 +109,7 @@ class ToolRegistry:
         """
         return list(self._tools.keys())
 
-    def get_all_schemas(self, format: str = "anthropic") -> List[Dict[str, Any]]:
+    def get_all_schemas(self, format: str = "anthropic") -> list[dict[str, Any]]:
         """
         Get schemas for all registered tools.
 
@@ -137,7 +138,7 @@ class ToolRegistry:
 
         return schemas
 
-    def get_schema(self, tool_name: str, format: str = "anthropic") -> Optional[Dict[str, Any]]:
+    def get_schema(self, tool_name: str, format: str = "anthropic") -> dict[str, Any] | None:
         """
         Get schema for a specific tool.
 
@@ -165,7 +166,7 @@ class ToolRegistry:
         self,
         name: str,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute a tool by name.
 
@@ -204,8 +205,8 @@ class ToolRegistry:
 
     async def execute_multiple(
         self,
-        tool_calls: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        tool_calls: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Execute multiple tool calls concurrently.
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Quick test of DeepSeek chat model."""
 
-import sys
 import json
-import requests
+import sys
 from pathlib import Path
+
+import requests
 
 # Fix Windows encoding
 if sys.platform == "win32":
@@ -90,7 +91,7 @@ if response.status_code == 200:
     message = data["choices"][0]["message"]
 
     if message.get("tool_calls"):
-        print(f"[OK] Model requested tool call:")
+        print("[OK] Model requested tool call:")
         for tc in message["tool_calls"]:
             print(f"  Function: {tc['function']['name']}")
             print(f"  Arguments: {tc['function']['arguments']}")

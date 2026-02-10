@@ -5,12 +5,13 @@ Supports GPT-4, GPT-4o, and other OpenAI models with tool calling.
 """
 
 import os
-from typing import Iterator, List, Optional
+from collections.abc import Iterator
+from typing import List, Optional
 
 from openai import OpenAI
 
-from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
 from ..config import AgentLLMConfig
+from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -49,8 +50,8 @@ class OpenAIProvider(BaseLLMProvider):
 
     def chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> LLMResponse:
         """
@@ -110,8 +111,8 @@ class OpenAIProvider(BaseLLMProvider):
 
     def stream_chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> Iterator[str]:
         """

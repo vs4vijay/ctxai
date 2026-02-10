@@ -10,12 +10,13 @@ Provides access to 100+ models through a single API:
 """
 
 import os
-from typing import Iterator, List, Optional
+from collections.abc import Iterator
+from typing import List, Optional
 
 import requests
 
-from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
 from ..config import AgentLLMConfig
+from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
 
 
 class OpenRouterProvider(BaseLLMProvider):
@@ -62,8 +63,8 @@ class OpenRouterProvider(BaseLLMProvider):
 
     def chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> LLMResponse:
         """
@@ -147,8 +148,8 @@ class OpenRouterProvider(BaseLLMProvider):
 
     def stream_chat(
         self,
-        messages: List[dict],
-        tools: Optional[List[dict]] = None,
+        messages: list[dict],
+        tools: list[dict] | None = None,
         **kwargs,
     ) -> Iterator[str]:
         """

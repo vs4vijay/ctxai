@@ -2,9 +2,9 @@
 Agent configuration classes.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional
-import os
 
 
 @dataclass
@@ -12,15 +12,15 @@ class AgentLLMConfig:
     """Configuration for LLM provider."""
 
     provider: str = "openrouter"  # "openrouter", "ollama", "anthropic", "openai"
-    model: Optional[str] = None  # Provider-specific default if None
-    api_key: Optional[str] = None  # API key, will try env vars if None
-    base_url: Optional[str] = None  # Base URL (for Ollama, custom endpoints)
-    fallback_providers: List[str] = field(default_factory=lambda: ["openrouter", "ollama"])
+    model: str | None = None  # Provider-specific default if None
+    api_key: str | None = None  # API key, will try env vars if None
+    base_url: str | None = None  # Base URL (for Ollama, custom endpoints)
+    fallback_providers: list[str] = field(default_factory=lambda: ["openrouter", "ollama"])
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 60
 
-    def get_api_key_for_provider(self, provider: str) -> Optional[str | dict]:
+    def get_api_key_for_provider(self, provider: str) -> str | dict | None:
         """Get API key for specific provider, checking environment variables and keystore."""
         if self.api_key:
             return self.api_key
@@ -80,9 +80,9 @@ class AgentLLMConfig:
 class AgentToolsConfig:
     """Configuration for agent tools."""
 
-    enabled_tools: Optional[List[str]] = None  # None = all tools enabled
-    bash_allowed_commands: Optional[List[str]] = None  # Whitelist (None = use blacklist)
-    bash_blocked_commands: List[str] = field(default_factory=lambda: [
+    enabled_tools: list[str] | None = None  # None = all tools enabled
+    bash_allowed_commands: list[str] | None = None  # Whitelist (None = use blacklist)
+    bash_blocked_commands: list[str] = field(default_factory=lambda: [
         "rm -rf /",
         "dd if=",
         "mkfs",

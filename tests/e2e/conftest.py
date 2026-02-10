@@ -5,13 +5,15 @@ This module provides fixtures for end-to-end testing that require
 more complex setup (indexed codebases, configured agents, etc.).
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import patch
-from ctxai.vector_store import VectorStore
+
+import pytest
+
+from ctxai.agent.config import AgentConfig, AgentLLMConfig
 from ctxai.chunking import CodeChunker
 from ctxai.traversal import CodeTraversal
-from ctxai.agent.config import AgentLLMConfig, AgentConfig
+from ctxai.vector_store import VectorStore
 from tests.mocks.mock_embeddings import MockEmbeddingProvider
 from tests.mocks.mock_llm import MockLLMProvider
 

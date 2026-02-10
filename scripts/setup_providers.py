@@ -94,8 +94,8 @@ def test_provider(provider_name: str):
 
     console.print(f"\n[bold cyan]Testing {provider_name}...[/bold cyan]\n")
 
-    from ctxai.agent.llm.factory import LLMProviderFactory
     from ctxai.agent.config import AgentLLMConfig
+    from ctxai.agent.llm.factory import LLMProviderFactory
 
     try:
         # Check availability first

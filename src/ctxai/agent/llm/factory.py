@@ -9,9 +9,8 @@ from typing import Optional
 
 from rich.console import Console
 
-from .base import BaseLLMProvider
 from ..config import AgentLLMConfig
-
+from .base import BaseLLMProvider
 
 console = Console()
 
@@ -64,7 +63,7 @@ class LLMProviderFactory:
     @staticmethod
     def create_from_name(
         provider_name: str,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         **kwargs,
     ) -> BaseLLMProvider:
         """

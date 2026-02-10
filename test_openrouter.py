@@ -3,11 +3,12 @@
 Test script to verify OpenRouter API connectivity and functionality.
 """
 
+import json
 import os
 import sys
-import json
-import requests
 from pathlib import Path
+
+import requests
 
 # Fix Windows encoding issues
 if sys.platform == "win32":

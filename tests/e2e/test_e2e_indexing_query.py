@@ -4,13 +4,15 @@ End-to-end tests for indexing and query workflows.
 Tests the complete pipeline from code traversal to semantic search.
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+
 from ctxai.commands.index_command import index_codebase
 from ctxai.commands.query_command import query_codebase
-from ctxai.vector_store import VectorStore
 from ctxai.utils import get_indexes_dir
+from ctxai.vector_store import VectorStore
 
 
 @pytest.mark.e2e

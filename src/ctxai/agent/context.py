@@ -3,8 +3,8 @@ Conversation context management for agent.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from .llm.base import Message, MessageRole, ToolCall
 
@@ -13,12 +13,12 @@ from .llm.base import Message, MessageRole, ToolCall
 class ConversationContext:
     """Manages conversation history and context."""
 
-    messages: List[Message] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    messages: list[Message] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
-    current_plan: Optional[Any] = None  # Plan object from planning.py
+    current_plan: Any | None = None  # Plan object from planning.py
 
-    def add_message(self, role: MessageRole, content: str, tool_calls: List[ToolCall] = None) -> None:
+    def add_message(self, role: MessageRole, content: str, tool_calls: list[ToolCall] = None) -> None:
         """Add a message to conversation history."""
         message = Message(
             role=role,
@@ -31,7 +31,7 @@ class ConversationContext:
         """Add user message."""
         self.add_message(MessageRole.USER, content)
 
-    def add_assistant_message(self, content: str, tool_calls: List[ToolCall] = None) -> None:
+    def add_assistant_message(self, content: str, tool_calls: list[ToolCall] = None) -> None:
         """Add assistant message."""
         self.add_message(MessageRole.ASSISTANT, content, tool_calls)
 
@@ -49,7 +49,7 @@ class ConversationContext:
         )
         self.messages.append(message)
 
-    def get_messages_for_llm(self) -> List[Message]:
+    def get_messages_for_llm(self) -> list[Message]:
         """Get messages formatted for LLM."""
         return self.messages.copy()
 

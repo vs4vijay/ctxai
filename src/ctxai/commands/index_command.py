@@ -3,8 +3,8 @@ Index command implementation.
 Orchestrates the entire indexing pipeline: traversal, chunking, embedding, and storage.
 """
 
-from pathlib import Path
 import platform
+from pathlib import Path
 from typing import Optional
 
 from rich.console import Console

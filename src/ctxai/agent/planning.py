@@ -43,13 +43,13 @@ class PlanStep:
     step_id: str
     description: str
     agent_type: str  # explorer, coder, reviewer, orchestrator
-    tools_needed: List[str] = field(default_factory=list)
-    dependencies: List[str] = field(default_factory=list)  # step_ids
+    tools_needed: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)  # step_ids
     status: StepStatus = StepStatus.PENDING
-    result: Optional[str] = None
-    error: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    result: str | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
     def start(self) -> None:
         """Mark step as started."""
@@ -88,7 +88,7 @@ class PlanStep:
         """
         return all(dep in completed_steps for dep in self.dependencies)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
             "step_id": self.step_id,
@@ -115,12 +115,12 @@ class Plan:
 
     plan_id: str
     goal: str
-    steps: List[PlanStep] = field(default_factory=list)
+    steps: list[PlanStep] = field(default_factory=list)
     status: PlanStatus = PlanStatus.DRAFT
     created_at: datetime = field(default_factory=datetime.now)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    metadata: Dict = field(default_factory=dict)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    metadata: dict = field(default_factory=dict)
 
     def start(self) -> None:
         """Mark plan as started."""
@@ -142,7 +142,7 @@ class Plan:
         self.status = PlanStatus.CANCELLED
         self.completed_at = datetime.now()
 
-    def get_next_steps(self) -> List[PlanStep]:
+    def get_next_steps(self) -> list[PlanStep]:
         """
         Get next steps that are ready to execute.
 
@@ -161,7 +161,7 @@ class Plan:
             if step.status == StepStatus.PENDING and step.is_ready(completed_steps)
         ]
 
-    def get_step(self, step_id: str) -> Optional[PlanStep]:
+    def get_step(self, step_id: str) -> PlanStep | None:
         """
         Get step by ID.
 
@@ -180,7 +180,7 @@ class Plan:
         """Add a step to the plan."""
         self.steps.append(step)
 
-    def get_progress(self) -> Dict:
+    def get_progress(self) -> dict:
         """
         Get plan progress.
 
@@ -202,7 +202,7 @@ class Plan:
             "percentage": (completed / total * 100) if total > 0 else 0,
         }
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {
             "plan_id": self.plan_id,
@@ -233,7 +233,7 @@ class PlanExecutor:
         """
         self.plan = plan
 
-    async def execute(self, step_executor: callable) -> Dict:
+    async def execute(self, step_executor: callable) -> dict:
         """
         Execute the plan.
 
@@ -312,7 +312,7 @@ class PlanExecutor:
             }
 
 
-def create_plan(goal: str, steps: List[Dict]) -> Plan:
+def create_plan(goal: str, steps: list[dict]) -> Plan:
     """
     Create a plan from goal and step descriptions.
 

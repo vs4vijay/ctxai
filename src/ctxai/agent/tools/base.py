@@ -6,8 +6,8 @@ This module defines the abstract interface that all tools must implement.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class ToolParameterType(str, Enum):
@@ -27,12 +27,12 @@ class ToolParameter:
     type: ToolParameterType
     description: str
     required: bool = True
-    enum: Optional[List[str]] = None
-    default: Optional[Any] = None
-    properties: Optional[Dict[str, "ToolParameter"]] = None  # For object type
+    enum: list[str] | None = None
+    default: Any | None = None
+    properties: dict[str, "ToolParameter"] | None = None  # For object type
     items: Optional["ToolParameter"] = None  # For array type
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         param_dict = {
             "type": self.type.value,
@@ -61,9 +61,9 @@ class ToolSchema:
     """Schema definition for a tool."""
     name: str
     description: str
-    parameters: List[ToolParameter] = field(default_factory=list)
+    parameters: list[ToolParameter] = field(default_factory=list)
 
-    def to_openai_format(self) -> Dict[str, Any]:
+    def to_openai_format(self) -> dict[str, Any]:
         """Convert to OpenAI function schema format."""
         properties = {}
         required = []
@@ -86,7 +86,7 @@ class ToolSchema:
             },
         }
 
-    def to_anthropic_format(self) -> Dict[str, Any]:
+    def to_anthropic_format(self) -> dict[str, Any]:
         """Convert to Anthropic tool schema format."""
         properties = {}
         required = []
@@ -106,7 +106,7 @@ class ToolSchema:
             },
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to generic dictionary format."""
         return {
             "name": self.name,
@@ -163,7 +163,7 @@ class BaseTool(ABC):
         pass
 
     @abstractmethod
-    async def execute(self, **kwargs) -> Dict[str, Any]:
+    async def execute(self, **kwargs) -> dict[str, Any]:
         """
         Execute the tool.
 
@@ -181,7 +181,7 @@ class BaseTool(ABC):
         """
         pass
 
-    def validate_parameters(self, **kwargs) -> tuple[bool, Optional[str]]:
+    def validate_parameters(self, **kwargs) -> tuple[bool, str | None]:
         """
         Validate parameters before execution.
 
@@ -206,7 +206,7 @@ class BaseTool(ABC):
 
         return True, None
 
-    async def safe_execute(self, **kwargs) -> Dict[str, Any]:
+    async def safe_execute(self, **kwargs) -> dict[str, Any]:
         """
         Execute tool with parameter validation and error handling.
 
