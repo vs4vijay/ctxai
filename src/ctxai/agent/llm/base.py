@@ -34,25 +34,54 @@ class Message:
     tool_call_id: Optional[str] = None  # For tool result messages
     name: Optional[str] = None  # Tool name for tool result messages
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert message to dictionary format."""
+    def to_dict(self, format: str = "openai") -> Dict[str, Any]:
+        """
+        Convert message to dictionary format.
+
+        Args:
+            format: Format to use ("openai" or "anthropic")
+
+        Returns:
+            Message dictionary
+        """
         msg = {
             "role": self.role.value,
-            "content": self.content,
+            "content": self.content or "",
         }
+
         if self.tool_calls:
-            msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "name": tc.name,
-                    "parameters": tc.parameters
-                }
-                for tc in self.tool_calls
-            ]
+            if format == "openai":
+                # OpenAI/OpenRouter format
+                import json
+                msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.parameters)
+                        }
+                    }
+                    for tc in self.tool_calls
+                ]
+            else:
+                # Anthropic format
+                msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "parameters": tc.parameters
+                    }
+                    for tc in self.tool_calls
+                ]
+
         if self.tool_call_id:
+            # Tool result message
+            msg["role"] = "tool"
             msg["tool_call_id"] = self.tool_call_id
-        if self.name:
-            msg["name"] = self.name
+            if self.name:
+                msg["name"] = self.name
+
         return msg
 
 
@@ -153,17 +182,18 @@ class BaseLLMProvider(ABC):
         """
         pass
 
-    def _format_messages(self, messages: List[Message]) -> List[Dict[str, Any]]:
+    def _format_messages(self, messages: List[Message], format: str = "openai") -> List[Dict[str, Any]]:
         """
         Format messages for the provider.
 
         Args:
             messages: List of Message objects
+            format: Format to use ("openai" or "anthropic")
 
         Returns:
             List of message dictionaries
         """
-        return [msg.to_dict() for msg in messages]
+        return [msg.to_dict(format=format) for msg in messages]
 
     def _extract_system_message(self, messages: List[Message]) -> tuple[Optional[str], List[Message]]:
         """

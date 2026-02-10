@@ -53,8 +53,8 @@ class OpenRouterProvider(BaseLLMProvider):
             )
 
         # Set model with default
-        # Using deepseek-r1:free as default - completely free and good quality
-        self.model = config.model or "deepseek/deepseek-r1:free"
+        # Using deepseek/deepseek-chat as default - zero-cost, fast, and reliable
+        self.model = config.model or "deepseek/deepseek-chat"
 
         # Optional: Site URL and App Name for OpenRouter tracking
         self.site_url = os.getenv("OPENROUTER_SITE_URL", "https://github.com/ctxai")
@@ -70,13 +70,18 @@ class OpenRouterProvider(BaseLLMProvider):
         Send chat request to OpenRouter.
 
         Args:
-            messages: List of messages in OpenAI format
+            messages: List of messages (Message objects or dicts)
             tools: Optional list of tool schemas in OpenAI format
             **kwargs: Additional parameters
 
         Returns:
             LLMResponse with content and tool calls
         """
+        # Convert Message objects to dicts if needed
+        from .base import Message
+        if messages and isinstance(messages[0], Message):
+            messages = self._format_messages(messages)
+
         # Prepare headers
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -234,7 +239,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
-        return "deepseek/deepseek-r1:free"
+        return "deepseek/deepseek-chat"
 
     def requires_api_key(self) -> bool:
         """Check if provider requires an API key."""
@@ -263,14 +268,20 @@ OPENROUTER_MODELS = {
     # Reasoning models (architect for complex tasks)
     "o1": "openai/o1",
     "o1-mini": "openai/o1-mini",
-    "deepseek-r1": "deepseek/deepseek-r1",
+    "deepseek-r1": "deepseek/deepseek-r1-0528:free",
 
-    # Budget options (editor)
+    # Free models (completely free)
+    "llama-free": "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen-coder-free": "qwen/qwen3-coder:free",
+    "mistral-free": "mistralai/mistral-small-3.1-24b-instruct:free",
+    "gemma-27b-free": "google/gemma-3-27b-it:free",
+
+    # Budget options (zero-cost or cheap)
     "deepseek-chat": "deepseek/deepseek-chat",
+    "gemini-flash": "google/gemini-2.5-flash",
     "llama-70b": "meta-llama/llama-3.1-70b-instruct",
     "mixtral-8x7b": "mistralai/mixtral-8x7b-instruct",
 
     # Google models
-    "gemini-pro": "google/gemini-pro",
-    "gemini-flash": "google/gemini-flash-1.5",
+    "gemini-pro": "google/gemini-2.5-pro",
 }

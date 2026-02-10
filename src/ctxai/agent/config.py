@@ -42,12 +42,9 @@ class AgentLLMConfig:
 
         # If not in environment, check keystore
         try:
-            # Avoid circular import by importing here
-            import sys
-            if 'ctxai.auth.keystore' in sys.modules:
-                from ctxai.auth.keystore import get_keystore
-                keystore = get_keystore()
-                return keystore.get_key(provider.lower())
+            from ctxai.auth.keystore import get_keystore
+            keystore = get_keystore()
+            return keystore.get_key(provider.lower())
         except (ImportError, Exception):
             pass
 

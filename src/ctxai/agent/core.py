@@ -218,10 +218,10 @@ class Agent:
 
         if "anthropic" in provider_name:
             return "anthropic"
-        elif "openai" in provider_name:
+        elif "openai" in provider_name or "openrouter" in provider_name:
             return "openai"
         else:
-            return "anthropic"  # Default to Anthropic format
+            return "openai"  # Default to OpenAI format (most widely supported)
 
     def clear_conversation(self) -> None:
         """Clear conversation history (except system message)."""

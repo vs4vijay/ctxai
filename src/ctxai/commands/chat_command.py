@@ -67,25 +67,17 @@ class ChatCommandCompleter(Completer):
                     )
 
 
-def print_banner():
+def print_banner(model: str, verbose: bool = False):
     """Print welcome banner."""
-    banner = """
-    =========================================================
-                 ctxai - AI Coding Agent
-
-      Your autonomous coding assistant powered by AI
-
-      Commands:
-        /help    - Show help
-        /clear   - Clear conversation
-        /model   - Change model
-        /exit    - Exit chat
-        /save    - Save session
-
-      Just type your request and press Enter!
-    =========================================================
-    """
-    console.print(banner, style="cyan")
+    if verbose:
+        # Verbose mode: show full banner
+        console.print("\n[bold cyan]ctxai[/bold cyan] [dim]-[/dim] [cyan]AI Coding Agent[/cyan]")
+        console.print(f"[dim]Model:[/dim] {model}")
+        console.print("[dim]Commands: /help /clear /model /status /tools /exit[/dim]\n")
+    else:
+        # Minimal mode: just show we're ready
+        console.print(f"[dim]ctxai[/dim] [cyan]*[/cyan] [dim]{model}[/dim]")
+        console.print("[dim]Type /help for commands, /exit to quit[/dim]\n")
 
 
 def print_help():
@@ -148,29 +140,27 @@ async def interactive_chat(
     """
     from ..agent.llm.factory import LLMProviderFactory
 
-    # Check provider availability
-    LLMProviderFactory.print_provider_status()
-
+    # Check provider availability (silently unless verbose)
     available, message = LLMProviderFactory.check_provider_availability(provider)
     if not available:
-        console.print(f"[red]{message}[/red]")
+        console.print(f"\n[red]✗[/red] {message}\n")
         console.print(LLMProviderFactory.get_setup_instructions())
         return
 
-    # Print banner
-    print_banner()
-
-    # Initialize agent
-    console.print("Initializing agent...", style="dim")
+    # Show provider status only if verbose
+    if verbose:
+        LLMProviderFactory.print_provider_status()
 
     # Create repository map if enabled
     repo_map = None
     if use_repomap:
         try:
             from ..agent.repomap import create_repository_map
-            console.print("[cyan]Creating repository map...[/cyan]")
+            if verbose:
+                console.print("[dim]Creating repository map...[/dim]")
             repo_map = create_repository_map(working_directory, max_tokens=1000)
-            console.print("[green]Repository map created[/green]")
+            if verbose:
+                console.print("[dim green]✓ Repository map created[/dim green]")
         except Exception as e:
             console.print(f"[yellow]⚠ Could not create repository map: {e}[/yellow]")
 
@@ -206,12 +196,14 @@ async def interactive_chat(
             editor_provider=editor,
         )
 
-        console.print(f"[green]Using architect/editor pattern[/green]")
-        console.print(f"  Architect: {architect}")
-        console.print(f"  Editor: {editor}")
+        if verbose:
+            console.print(f"[dim green]✓ Architect/Editor pattern[/dim green]")
+            console.print(f"[dim]  Architect: {architect}[/dim]")
+            console.print(f"[dim]  Editor: {editor}[/dim]")
 
         # Note: For chat, we'll primarily use editor, architect for complex tasks
         llm = editor
+        model_display = f"{architect.model} + {editor.model}"
 
     else:
         # Single model
@@ -222,7 +214,9 @@ async def interactive_chat(
             max_tokens=4096,
         )
         llm = LLMProviderFactory.create_provider(llm_config)
-        console.print(f"[green]Using: {llm}[/green]")
+        model_display = llm.model
+        if verbose:
+            console.print(f"[dim green]✓ Model: {llm}[/dim green]")
 
     # Create agent config
     agent_config = AgentConfig()
@@ -253,9 +247,11 @@ async def interactive_chat(
     )
     agent = Agent(loop_config)
 
-    console.print(f"Agent ready with {len(tools)} tools", style="green")
-    console.print(f"Working directory: {working_directory}", style="dim")
-    console.print()
+    # Print banner
+    print_banner(model_display, verbose=verbose)
+
+    if verbose:
+        console.print(f"[dim]Ready • {len(tools)} tools • {working_directory}[/dim]\n")
 
     # Create prompt session with autocomplete
     session = PromptSession(completer=ChatCommandCompleter())
@@ -355,26 +351,26 @@ async def interactive_chat(
                     continue
 
             # Process message with agent
-            console.print("\n[bold green]Agent[/bold green]:", end=" ")
+            console.print()
 
             try:
-                with console.status("[dim]Thinking...[/dim]"):
+                with console.status("[dim]•••[/dim]", spinner="dots"):
                     response = await agent.process_message(user_input)
 
                 # Print response
                 console.print(Markdown(response))
 
             except Exception as e:
-                console.print(f"\n[red]Error: {str(e)}[/red]")
+                console.print(f"[red]✗ {str(e)}[/red]")
                 if verbose:
                     console.print_exception()
 
         except KeyboardInterrupt:
-            console.print("\n\nGoodbye!", style="cyan")
+            console.print("\n[dim]Bye![/dim]")
             break
 
         except EOFError:
-            console.print("\n\nGoodbye!", style="cyan")
+            console.print("\n[dim]Bye![/dim]")
             break
 
 
