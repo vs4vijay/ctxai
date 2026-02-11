@@ -135,7 +135,8 @@ def set_config(key: str, value: str, project_path: Path | None = None):
     # Parse the key
     parts = key.split(".")
     if len(parts) != 2:
-        console.print("[red][X][/red] Invalid key format. Use dot notation with two parts (e.g., 'embedding.provider')\n")
+        console.print("[red][X][/red] Invalid key format. Use dot notation with two parts ")
+        console.print("(e.g., 'embedding.provider')\n")
         return
 
     section, setting = parts
@@ -220,7 +221,8 @@ def unset_config(key: str, project_path: Path | None = None):
     # Parse the key
     parts = key.split(".")
     if len(parts) != 2:
-        console.print("[red][X][/red] Invalid key format. Use dot notation with two parts (e.g., 'embedding.api_key')\n")
+        console.print("[red][X][/red] Invalid key format. Use dot notation with two parts ")
+        console.print("(e.g., 'embedding.api_key')\n")
         return
 
     section, setting = parts

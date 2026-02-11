@@ -4,7 +4,7 @@ Anthropic Claude provider implementation.
 
 import uuid
 from collections.abc import Generator
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 try:
     from anthropic import Anthropic, AnthropicError
@@ -146,8 +146,7 @@ class AnthropicProvider(BaseLLMProvider):
 
             # Stream response
             with self.client.messages.stream(**request_params) as stream:
-                for text in stream.text_stream:
-                    yield text
+                yield from stream.text_stream
 
         except AnthropicError as e:
             yield f"\n[Anthropic API error: {str(e)}]"

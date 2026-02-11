@@ -11,7 +11,7 @@ import secrets
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
-from typing import Optional, Tuple
+from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests

@@ -5,7 +5,7 @@ Bash command execution tool.
 import asyncio
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from ..config import AgentToolsConfig
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
@@ -22,7 +22,7 @@ class BashTool(BaseTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
             name=self.name,
-            description="Execute a bash command and return the output. Use for running scripts, installing packages, git operations, etc.",
+            description="Execute a bash command and return output. Use for scripts, packages, git operations, etc.",
             parameters=[
                 ToolParameter(
                     name="command",

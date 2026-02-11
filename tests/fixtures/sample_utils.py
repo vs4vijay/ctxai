@@ -1,7 +1,7 @@
 """Utility functions for sample code."""
 
 import os
-from typing import List, Optional
+from typing import Optional
 
 
 def read_file(path: str) -> str:

@@ -9,7 +9,7 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 from tree_sitter import Language, Parser
 from tree_sitter_language_pack import get_language, get_parser

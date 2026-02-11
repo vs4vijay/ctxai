@@ -6,7 +6,7 @@ Provides git operations like status, diff, commit, branch, etc.
 
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
@@ -60,12 +60,12 @@ class GitStatusTool(BaseTool):
             # Parse status output
             status_lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
 
-            # Count file types
-            modified = len([l for l in status_lines if l.startswith(" M")])
-            added = len([l for l in status_lines if l.startswith("A ")])
-            deleted = len([l for l in status_lines if l.startswith(" D")])
-            untracked = len([l for l in status_lines if l.startswith("??")])
-            staged = len([l for l in status_lines if l[0] in "MADRC"])
+# Count file types
+            modified = len([line for line in status_lines if line.startswith(" M")])
+            added = len([line for line in status_lines if line.startswith("A ")])
+            deleted = len([line for line in status_lines if line.startswith(" D")])
+            untracked = len([line for line in status_lines if line.startswith("??")])
+            staged = len([line for line in status_lines if line[0] in "MADRC"])
 
             # Get branch info
             branch_result = subprocess.run(
@@ -181,10 +181,10 @@ class GitDiffTool(BaseTool):
 
             diff_output = result.stdout
 
-            # Count changes
+# Count changes
             lines = diff_output.split("\n")
-            additions = len([l for l in lines if l.startswith("+")])
-            deletions = len([l for l in lines if l.startswith("-")])
+            additions = len([line for line in lines if line.startswith("+")])
+            deletions = len([line for line in lines if line.startswith("-")])
 
             return {
                 "success": True,

@@ -8,7 +8,7 @@ import glob as glob_module
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 try:
     import aiofiles
@@ -52,7 +52,9 @@ class ReadFileTool(BaseTool):
             ]
         )
 
-    async def execute(self, file_path: str, start_line: int | None = None, end_line: int | None = None) -> dict[str, Any]:
+    async def execute(
+        self, file_path: str, start_line: int | None = None, end_line: int | None = None
+    ) -> dict[str, Any]:
         try:
             path = Path(file_path).resolve()
 
@@ -187,7 +189,7 @@ class EditFileTool(BaseTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
             name=self.name,
-            description="Edit a file by searching for old text and replacing with new text. Supports exact match or regex.",
+            description="Edit a file by replacing old text with new text. Supports exact match or regex.",
             parameters=[
                 ToolParameter(
                     name="file_path",

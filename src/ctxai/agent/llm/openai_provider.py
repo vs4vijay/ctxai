@@ -6,7 +6,7 @@ Supports GPT-4, GPT-4o, and other OpenAI models with tool calling.
 
 import os
 from collections.abc import Iterator
-from typing import List, Optional
+from typing import Optional
 
 from openai import OpenAI
 

@@ -7,7 +7,7 @@ allowing CLI authentication without browser interaction.
 
 import json
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 import requests
 from rich.console import Console

@@ -3,7 +3,7 @@ Tool registry for managing and executing tools.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from rich.console import Console
 

@@ -7,7 +7,7 @@ Provides local model execution through Ollama.
 import json
 import os
 from collections.abc import Iterator
-from typing import List, Optional
+from typing import Optional
 
 import requests
 

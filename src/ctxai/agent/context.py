@@ -4,7 +4,7 @@ Conversation context management for agent.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .llm.base import Message, MessageRole, ToolCall
 

@@ -3,7 +3,7 @@ Semantic code search tool using ctxai's vector store.
 """
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
@@ -18,7 +18,7 @@ class SemanticSearchTool(BaseTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
             name=self.name,
-            description="Search indexed codebase using natural language queries. Returns relevant code chunks with metadata.",
+            description="Search indexed codebase using natural language queries, return code chunks with metadata.",
             parameters=[
                 ToolParameter(
                     name="query",
@@ -101,10 +101,17 @@ class SemanticSearchTool(BaseTool):
             formatted = []
             for i, result in enumerate(results, 1):
                 metadata = result.get('metadata', {})
+                file_path = metadata.get('file_path', 'unknown')
+                start_line = metadata.get('start_line', '?')
+                end_line = metadata.get('end_line', '?')
+                chunk_type = metadata.get('chunk_type', 'unknown')
+                score = result.get('distance', 0)
+                document = result.get('document', '')[:200]
+                
                 formatted.append(
-                    f"[{i}] {metadata.get('file_path', 'unknown')}:{metadata.get('start_line', '?')}-{metadata.get('end_line', '?')}\n"
-                    f"    Type: {metadata.get('chunk_type', 'unknown')} | Score: {result.get('distance', 0):.3f}\n"
-                    f"    {result.get('document', '')[:200]}..."
+                    f"[{i}] {file_path}:{start_line}-{end_line}\n"
+                    f"    Type: {chunk_type} | Score: {score:.3f}\n"
+                    f"    {document}..."
                 )
 
             result_text = "\n\n".join(formatted)

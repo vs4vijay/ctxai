@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
 class MessageRole(str, Enum):
@@ -108,7 +108,7 @@ class BaseLLMProvider(ABC):
     All LLM providers (Anthropic, OpenAI, Ollama) must implement this interface.
     """
 
-    def __init__(self, config: 'AgentLLMConfig'):
+    def __init__(self, config: Any):
         """
         Initialize the provider.
 

@@ -9,7 +9,7 @@ This approach achieves better quality + lower cost than using a single model.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 from rich.console import Console
 
@@ -194,9 +194,10 @@ class ArchitectEditorAgent:
         # Build implementation prompt
         prompt = self._build_implementation_prompt(task, context)
 
-        # Call editor with tools
+# Call editor with tools
+        system_msg = "You are an expert code editor. Implement changes precisely and efficiently."
         messages = [
-            {"role": "system", "content": "You are an expert code editor. Implement changes precisely and efficiently."},
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": prompt},
         ]
 
@@ -228,8 +229,9 @@ class ArchitectEditorAgent:
         # Build review prompt
         prompt = self._build_review_prompt(task, results, context)
 
+        system_msg = "You are an expert code reviewer. Verify implementations are correct and complete."
         messages = [
-            {"role": "system", "content": "You are an expert code reviewer. Verify implementations are correct and complete."},
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": prompt},
         ]
 

@@ -6,7 +6,7 @@ enabling fast, deterministic testing without costs.
 """
 
 from collections.abc import Generator
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from ctxai.agent.config import AgentLLMConfig
 from ctxai.agent.llm.base import (
@@ -143,8 +143,7 @@ class MockLLMProvider(BaseLLMProvider):
         response = self.chat(messages, tools, **kwargs)
 
         # Yield content character by character to simulate streaming
-        for char in response.content:
-            yield char
+        yield from response.content
 
     def supports_function_calling(self) -> bool:
         """

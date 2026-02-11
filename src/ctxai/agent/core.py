@@ -141,8 +141,13 @@ class Agent:
                 iteration += 1
                 continue
 
-        # Max iterations reached
-        return f"⚠️ Max iterations ({self.config.max_iterations}) reached. The task may be too complex or an error occurred. Please try breaking it down into smaller steps."
+# Max iterations reached
+        error_msg = (
+            f"⚠️ Max iterations ({self.config.max_iterations}) reached. "
+            "The task may be too complex or an error occurred. "
+            "Please try breaking it down into smaller steps."
+        )
+        return error_msg
 
     async def _execute_tools(self, tool_calls: list[ToolCall]) -> list[dict]:
         """
