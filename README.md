@@ -840,3 +840,8 @@ MIT License - See LICENSE file for details.
 - Sentence Transformers for local embeddings
 - ChromaDB for vector storage
 - Anthropic, OpenAI, and other LLM providers
+
+---
+
+
+https://blog.can.ac/2026/02/12/the-harness-problem/

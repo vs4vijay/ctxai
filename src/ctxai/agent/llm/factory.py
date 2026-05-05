@@ -54,10 +54,18 @@ class LLMProviderFactory:
             from .github_copilot_provider import GitHubCopilotProvider
             return GitHubCopilotProvider(config)
 
+        elif provider == "custom":
+            from .custom_provider import CustomProvider
+            return CustomProvider(config)
+
+        elif provider == "nvidia":
+            from .custom_provider import CustomProvider
+            return CustomProvider(config)
+
         else:
             raise ValueError(
                 f"Unsupported provider: {provider}. "
-                f"Supported: openrouter, ollama, anthropic, openai, github-copilot"
+                f"Supported: openrouter, ollama, anthropic, openai, github-copilot, custom, nvidia"
             )
 
     @staticmethod
@@ -283,6 +291,53 @@ class LLMProviderFactory:
                 return False, "Not logged in (run: ctxai login github-copilot)"
             return True, "GitHub Copilot configured"
 
+        elif provider == "custom":
+            # Custom provider requires base_url and api_key
+            # Check environment first, then config file
+            api_key = os.getenv("CUSTOM_API_KEY") or os.getenv("MODAL_API_KEY")
+            base_url = os.getenv("CUSTOM_BASE_URL") or os.getenv("MODAL_BASE_URL")
+
+            # Also check config file if not provided
+            if not api_key or not base_url:
+                try:
+                    from ...config import ConfigManager
+                    cm = ConfigManager()
+                    cfg = cm.load()
+                    pconfig = cfg.get_provider_config("custom")
+                    if not api_key and pconfig.api_key:
+                        api_key = pconfig.api_key
+                    if not base_url and pconfig.base_url:
+                        base_url = pconfig.base_url
+                except Exception:
+                    pass
+
+            if not api_key:
+                return False, "CUSTOM_API_KEY/MODAL_API_KEY not set (or set providers.custom.api_key in config)"
+            if not base_url:
+                return False, "CUSTOM_BASE_URL/MODAL_BASE_URL not set (or set providers.custom.base_url in config)"
+            return True, "Custom provider configured"
+
+        elif provider == "nvidia":
+            # NVIDIA NIM provider requires base_url and api_key
+            api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("NVAPI_KEY")
+            base_url = os.getenv("NVIDIA_BASE_URL")
+
+            # Also check config file if not provided
+            if not api_key:
+                try:
+                    from ...config import ConfigManager
+                    cm = ConfigManager()
+                    cfg = cm.load()
+                    pconfig = cfg.get_provider_config("nvidia")
+                    if not api_key and pconfig.api_key:
+                        api_key = pconfig.api_key
+                except Exception:
+                    pass
+
+            if not api_key:
+                return False, "NVIDIA_API_KEY/NVAPI_KEY not set (or set providers.nvidia.api_key in config)"
+            return True, "NVIDIA provider configured"
+
         return False, f"Unknown provider: {provider}"
 
     @staticmethod
@@ -290,7 +345,7 @@ class LLMProviderFactory:
         """Print status of all providers."""
         console.print("\n[bold cyan]Provider Status:[/bold cyan]\n")
 
-        providers = ["openrouter", "github-copilot", "ollama", "anthropic", "openai"]
+        providers = ["openrouter", "github-copilot", "ollama", "anthropic", "openai", "nvidia", "custom"]
 
         for provider in providers:
             available, message = LLMProviderFactory.check_provider_availability(provider)
@@ -343,4 +398,28 @@ Setup Instructions:
    • Get API key: https://platform.openai.com/api-keys
    • Set: export OPENAI_API_KEY=your-key-here
    • Direct access to GPT models
+
+6. Custom (OpenAI-compatible endpoints like Modal):
+    • Get API key from your custom endpoint provider
+    • Set: export CUSTOM_API_KEY=your-key-here (or MODAL_API_KEY for Modal)
+    • Configure in code:
+      from ctxai.agent.config import AgentLLMConfig
+      config = AgentLLMConfig(
+          provider="custom",
+          model="your-model-name",
+          api_key="your-api-key",
+          base_url="https://api.us-west-2.modal.direct/v1"
+      )
+
+7. NVIDIA NIM (NVIDIA NIM endpoints):
+    • Get API key: https://build.nvidia.com/nim
+    • Set: export NVIDIA_API_KEY=your-key-here (or NVAPI_KEY)
+    • Configure in code or config:
+      from ctxai.agent.config import AgentLLMConfig
+      config = AgentLLMConfig(
+          provider="nvidia",
+          model="nvidia/your-model",
+          api_key="your-api-key",
+          base_url="https://integrate.api.nvidia.com/v1"
+      )
 """

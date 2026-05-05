@@ -25,8 +25,8 @@ def main_callback(ctx: typer.Context):
         from .commands.chat_command import start_chat
         start_chat(
             working_directory=Path.cwd(),
-            provider="openrouter",
-            model=None,  # Use default model
+            provider=None,  # Use default_provider from config
+            model=None,  # Use model from config
             architect_editor=False,
             architect_model=None,
             editor_model=None,
@@ -327,10 +327,10 @@ def config(
 @app.command()
 def chat(
     provider: str = typer.Option(
-        "openrouter",
+        None,  # Changed from "openrouter" to None - use config default
         "--provider",
         "-p",
-        help="LLM provider: openrouter, github-copilot, ollama, anthropic, openai",
+        help="LLM provider: openrouter, github-copilot, ollama, anthropic, openai, custom (uses config default if not specified)",
     ),
     model: str = typer.Option(
         None,

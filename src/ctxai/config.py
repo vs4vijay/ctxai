@@ -1,22 +1,75 @@
 """
 Configuration management for ctxai.
-Handles .ctxai/config.json for user preferences and settings.
+Handles .ctxai/config.toml for user preferences and settings.
 Respects CTXAI_HOME environment variable for custom .ctxai location.
+
+Supports multiple LLM provider configurations with:
+- default_provider: which provider to use by default
+- providers: dict of provider-specific settings
+
+TOML format only - more readable and maintainable.
 """
 
-import json
-from dataclasses import asdict, dataclass
+import os
+import sys
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from .utils import get_config_path, get_ctxai_home
+from .utils import get_ctxai_home
+
+if TYPE_CHECKING:
+    pass
+
+# Try to import tomllib (Python 3.11+) or toml
+_tomllib: Any = None
+_toml: Any = None
+
+if sys.version_info >= (3, 11):
+    import tomllib as _tomllib
+
+try:
+    import toml as _toml  # type: ignore[import-not-found]
+except ImportError:
+    pass
+
+
+def _load_toml(path: Path) -> dict:
+    """Load TOML file, using tomllib or toml package."""
+    if _tomllib is not None:
+        with open(path, "rb") as f:
+            return _tomllib.load(f)
+    elif _toml is not None:
+        with open(path, encoding="utf-8") as f:
+            return _toml.load(f)
+    else:
+        raise ImportError(
+            "TOML support requires Python 3.11+ (tomllib) or 'toml' package. "
+            "Install with: pip install toml"
+        )
+
+
+def _save_toml(path: Path, data: dict) -> None:
+    """Save TOML file using toml package."""
+    if _toml is not None:
+        with open(path, "w", encoding="utf-8") as f:
+            _toml.dump(data, f)
+    else:
+        raise ImportError(
+            "TOML saving requires 'toml' package. Install with: pip install toml"
+        )
+
+
+# ============================================================================
+# Configuration Data Classes
+# ============================================================================
 
 
 @dataclass
 class EmbeddingConfig:
     """Configuration for embedding generation."""
 
-    provider: str = "local"  # "local", "openai", "huggingface", "azure"
+    provider: str = "local"  # "local", "openai", "huggingface"
     model: str | None = None  # Model name, provider-specific default if None
     api_key: str | None = None  # API key for cloud providers
     batch_size: int = 100
@@ -35,33 +88,178 @@ class IndexConfig:
 
 
 @dataclass
+class ProviderConfig:
+    """Configuration for a single LLM provider."""
+
+    enabled: bool = True  # Whether this provider is available
+    model: str | None = None  # Default model for this provider
+    api_key: str | None = None  # API key (or use env vars)
+    base_url: str | None = None  # Base URL (for custom/Ollama endpoints)
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    timeout: int = 60
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ProviderConfig":
+        """Create from dictionary, ignoring unknown keys."""
+        return cls(
+            enabled=data.get("enabled", True),
+            model=data.get("model"),
+            api_key=data.get("api_key"),
+            base_url=data.get("base_url"),
+            temperature=data.get("temperature", 0.7),
+            max_tokens=data.get("max_tokens", 4096),
+            timeout=data.get("timeout", 60),
+        )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return asdict(self)
+
+
+@dataclass
 class Config:
-    """Main configuration for ctxai."""
+    """
+    Main configuration for ctxai.
 
-    embedding: EmbeddingConfig
-    indexing: IndexConfig
-    version: str = "1.0"
+    Supports multiple LLM providers with per-provider settings.
+    Use default_provider to specify which provider to use by default.
+    """
 
-    # Current index metadata
-    index_name: str | None = None  # Current/default index name
-    index_status: str | None = None  # "indexing", "completed", "failed"
-    index_files_count: int | None = None  # Number of files in index
-    index_size_mb: float | None = None  # Total size of indexed files in MB
-    index_chunks_count: int | None = None  # Total number of chunks
-    index_last_updated: str | None = None  # ISO format timestamp
+    # Provider configuration
+    default_provider: str = "openrouter"  # Which provider to use by default
+    providers: dict[str, ProviderConfig] = field(default_factory=dict)
+
+    # Other configurations
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    indexing: IndexConfig = field(default_factory=IndexConfig)
+    version: str = "2.0"
+
+    # Index metadata
+    index_name: str | None = None
+    index_status: str | None = None
+    index_files_count: int | None = None
+    index_size_mb: float | None = None
+    index_chunks_count: int | None = None
+    index_last_updated: str | None = None
 
     @classmethod
     def default(cls) -> "Config":
-        """Create default configuration."""
+        """Create default configuration with all providers."""
         return cls(
+            version="2.0",
+            default_provider="openrouter",
+            providers={
+                "openrouter": ProviderConfig(
+                    model="anthropic/claude-3.5-sonnet",
+                    timeout=120,
+                ),
+                "github-copilot": ProviderConfig(
+                    model="gpt-4",
+                ),
+                "ollama": ProviderConfig(
+                    model="codellama:13b",
+                    base_url="http://localhost:11434",
+                ),
+                "anthropic": ProviderConfig(
+                    model="claude-3-5-sonnet-20241022",
+                ),
+                "openai": ProviderConfig(
+                    model="gpt-4o",
+                ),
+                "nvidia": ProviderConfig(
+                    enabled=False,
+                    base_url="https://integrate.api.nvidia.com/v1",
+                ),
+                "custom": ProviderConfig(
+                    enabled=False,  # Disabled by default, enable when configured
+                ),
+            },
             embedding=EmbeddingConfig(),
             indexing=IndexConfig(),
         )
+
+    def get_provider_config(self, provider_name: str) -> ProviderConfig:
+        """
+        Get configuration for a specific provider.
+
+        Args:
+            provider_name: Name of the provider
+
+        Returns:
+            ProviderConfig for the provider (creates default if not exists)
+        """
+        if provider_name not in self.providers:
+            self.providers[provider_name] = ProviderConfig()
+        return self.providers[provider_name]
+
+    def set_provider_config(
+        self,
+        provider_name: str,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        enabled: bool | None = None,
+    ) -> None:
+        """
+        Set configuration for a specific provider.
+
+        Args:
+            provider_name: Name of the provider
+            model: Model name
+            api_key: API key
+            base_url: Base URL
+            temperature: Temperature
+            max_tokens: Max tokens
+            enabled: Whether provider is enabled
+        """
+        if provider_name not in self.providers:
+            self.providers[provider_name] = ProviderConfig()
+
+        config = self.providers[provider_name]
+        if model is not None:
+            config.model = model
+        if api_key is not None:
+            config.api_key = api_key
+        if base_url is not None:
+            config.base_url = base_url
+        if temperature is not None:
+            config.temperature = temperature
+        if max_tokens is not None:
+            config.max_tokens = max_tokens
+        if enabled is not None:
+            config.enabled = enabled
+
+    def list_providers(self) -> list[str]:
+        """Get list of all configured providers."""
+        return list(self.providers.keys())
+
+    def set_provider_model(self, provider_name: str, model: str) -> None:
+        """
+        Set the default model for a provider.
+
+        Args:
+            provider_name: Name of the provider
+            model: Model name to set as default
+        """
+        self.set_provider_config(provider_name, model=model)
+        
+        # If this is the default provider, also update it
+        if self.default_provider != provider_name:
+            self.default_provider = provider_name
+
+    def list_enabled_providers(self) -> list[str]:
+        """Get list of enabled providers."""
+        return [name for name, config in self.providers.items() if config.enabled]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "version": self.version,
+            "default_provider": self.default_provider,
+            "providers": {k: v.to_dict() for k, v in self.providers.items()},
             "embedding": asdict(self.embedding),
             "indexing": asdict(self.indexing),
             "index_name": self.index_name,
@@ -75,8 +273,15 @@ class Config:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Config":
         """Create from dictionary."""
+        # Handle providers dict
+        providers = {}
+        for name, pdata in data.get("providers", {}).items():
+            providers[name] = ProviderConfig.from_dict(pdata)
+
         return cls(
-            version=data.get("version", "1.0"),
+            version=data.get("version", "2.0"),
+            default_provider=data.get("default_provider", "openrouter"),
+            providers=providers,
             embedding=EmbeddingConfig(**data.get("embedding", {})),
             indexing=IndexConfig(**data.get("indexing", {})),
             index_name=data.get("index_name"),
@@ -88,10 +293,13 @@ class Config:
         )
 
 
-class ConfigManager:
-    """Manages configuration loading and saving."""
+# ============================================================================
+# Configuration Manager
+# ============================================================================
 
-    CONFIG_FILENAME = "config.json"
+
+class ConfigManager:
+    """Manages configuration loading and saving. Supports both JSON and TOML formats."""
 
     def __init__(self, project_path: Path | None = None):
         """
@@ -103,8 +311,28 @@ class ConfigManager:
         """
         self.project_path = project_path
         self.ctxai_home = get_ctxai_home(project_path)
-        self.config_path = get_config_path(project_path)
+        
+        # Determine config path - check for both formats, prefer TOML
+        self._detect_config_path()
+        
         self._config: Config | None = None
+
+    def _detect_config_path(self) -> None:
+        """Detect existing config file or set default path (TOML only)."""
+        toml_path = self.ctxai_home / "config.toml"
+        
+        # TOML only
+        if toml_path.exists():
+            self.config_path = toml_path
+            self._format = "toml"
+        else:
+            # Default to TOML for new configs
+            self.config_path = toml_path
+            self._format = "toml"
+
+    def get_config_path(self) -> Path:
+        """Get the config file path."""
+        return self.config_path
 
     def load(self) -> Config:
         """
@@ -118,8 +346,8 @@ class ConfigManager:
 
         if self.config_path.exists():
             try:
-                with open(self.config_path, encoding="utf-8") as f:
-                    data = json.load(f)
+                # Load TOML format
+                data = _load_toml(self.config_path)
                 self._config = Config.from_dict(data)
             except Exception as e:
                 print(f"Warning: Could not load config from {self.config_path}: {e}")
@@ -133,7 +361,7 @@ class ConfigManager:
 
     def save(self, config: Config | None = None) -> None:
         """
-        Save configuration to file.
+        Save configuration to TOML file.
 
         Args:
             config: Config to save, or use currently loaded config
@@ -148,10 +376,80 @@ class ConfigManager:
         self.ctxai_home.mkdir(parents=True, exist_ok=True)
 
         try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(self._config.to_dict(), f, indent=2)
+            data = self._config.to_dict()
+            
+            # Save TOML format only
+            _save_toml(self.config_path, data)
         except Exception as e:
             print(f"Warning: Could not save config to {self.config_path}: {e}")
+
+    # =========================================================================
+    # Provider Configuration Methods
+    # =========================================================================
+
+    def get_default_provider(self) -> str:
+        """Get the default provider name."""
+        return self.load().default_provider
+
+    def set_default_provider(self, provider: str) -> None:
+        """Set the default provider."""
+        config = self.load()
+        config.default_provider = provider
+        self.save(config)
+
+    def get_provider_config(self, provider_name: str) -> ProviderConfig:
+        """Get configuration for a specific provider."""
+        return self.load().get_provider_config(provider_name)
+
+    def set_provider_config(
+        self,
+        provider_name: str,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        enabled: bool | None = None,
+    ) -> None:
+        """
+        Set configuration for a specific provider.
+
+        Args:
+            provider_name: Name of the provider
+            model: Model name
+            api_key: API key
+            base_url: Base URL
+            temperature: Temperature
+            max_tokens: Max tokens
+            enabled: Whether provider is enabled
+        """
+        config = self.load()
+        config.set_provider_config(
+            provider_name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            enabled=enabled,
+        )
+        self.save(config)
+
+    def list_providers(self) -> list[str]:
+        """List all configured providers."""
+        return self.load().list_providers()
+
+    def list_enabled_providers(self) -> list[str]:
+        """List enabled providers."""
+        return self.load().list_enabled_providers()
+
+    # =========================================================================
+    # Embedding Configuration Methods
+    # =========================================================================
+
+    def get_embedding_config(self) -> EmbeddingConfig:
+        """Get embedding configuration."""
+        return self.load().embedding
 
     def update_embedding_provider(
         self,
@@ -159,14 +457,7 @@ class ConfigManager:
         model: str | None = None,
         api_key: str | None = None,
     ) -> None:
-        """
-        Update embedding provider configuration.
-
-        Args:
-            provider: Provider name ("local", "openai", etc.)
-            model: Optional model name
-            api_key: Optional API key
-        """
+        """Update embedding provider configuration."""
         config = self.load()
         config.embedding.provider = provider
         if model is not None:
@@ -175,9 +466,9 @@ class ConfigManager:
             config.embedding.api_key = api_key
         self.save(config)
 
-    def get_embedding_config(self) -> EmbeddingConfig:
-        """Get embedding configuration."""
-        return self.load().embedding
+    # =========================================================================
+    # Index Configuration Methods
+    # =========================================================================
 
     def get_index_config(self) -> IndexConfig:
         """Get indexing configuration."""
@@ -195,16 +486,7 @@ class ConfigManager:
         size_mb: float | None = None,
         chunks_count: int | None = None,
     ) -> None:
-        """
-        Update index metadata in configuration.
-
-        Args:
-            index_name: Name of the index
-            status: Status of the index ("indexing", "completed", "failed")
-            files_count: Number of files indexed
-            size_mb: Total size of indexed files in MB
-            chunks_count: Total number of chunks created
-        """
+        """Update index metadata in configuration."""
         from datetime import datetime
 
         config = self.load()
@@ -234,12 +516,7 @@ class ConfigManager:
         self.save(config)
 
     def get_index_metadata(self) -> dict[str, Any]:
-        """
-        Get current index metadata.
-
-        Returns:
-            Dictionary with index metadata
-        """
+        """Get current index metadata."""
         config = self.load()
         return {
             "index_name": config.index_name,
@@ -249,3 +526,34 @@ class ConfigManager:
             "index_chunks_count": config.index_chunks_count,
             "index_last_updated": config.index_last_updated,
         }
+
+
+# ============================================================================
+# Legacy Compatibility - LLMConfig (deprecated)
+# ============================================================================
+
+
+@dataclass
+class LLMConfig:
+    """
+    DEPRECATED: Use ProviderConfig instead.
+
+    This class exists for backward compatibility.
+    """
+
+    provider: str = "openrouter"
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+    temperature: float = 0.7
+    max_tokens: int = 4096
+
+    def to_provider_config(self) -> ProviderConfig:
+        """Convert to ProviderConfig."""
+        return ProviderConfig(
+            model=self.model,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )

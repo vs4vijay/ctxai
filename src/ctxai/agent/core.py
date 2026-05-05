@@ -5,7 +5,7 @@ Core agent implementation with tool calling and planning.
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 from rich.console import Console
 
@@ -73,6 +73,10 @@ class Agent:
         if self.config.verbose:
             self.console.print(f"[dim]Processing: {user_message}[/dim]")
 
+        # Track consecutive failed tool calls
+        consecutive_tool_failures = 0
+        last_tool_results: list[str] = []
+
         # Agent loop with tool calling
         iteration = 0
         while iteration < self.config.max_iterations:
@@ -91,7 +95,7 @@ class Agent:
                 response = self.llm.chat(messages, tools=tools)
 
                 if self.config.verbose:
-                    self.console.print(f"[dim]Response: {response.content[:100]}...[/dim]")
+                    self.console.print(f"[dim]LLM response: {response.content[:200] if response.content else '(empty)'}...[/dim]")
                     self.console.print(f"[dim]Tool calls: {len(response.tool_calls)}[/dim]")
 
                 # Check if LLM wants to use tools
@@ -106,14 +110,34 @@ class Agent:
                     tool_results = await self._execute_tools(response.tool_calls)
 
                     # Add tool results to context
+                    current_results: list[str] = []
                     for tool_call, result in zip(response.tool_calls, tool_results):
                         result_text = self._format_tool_result(result)
+                        current_results.append(result_text)
                         self.context.add_tool_result(
                             tool_call_id=tool_call.id,
                             tool_name=tool_call.name,
                             result=result_text
                         )
 
+                    # Check if tools are failing repeatedly (stuck in loop)
+                    if current_results == last_tool_results and current_results:
+                        consecutive_tool_failures += 1
+                        if consecutive_tool_failures >= 2:
+                            # Same results twice - likely stuck in a loop
+                            if self.config.verbose:
+                                self.console.print("[yellow]! Detected tool loop, breaking[/yellow]")
+                            return (
+                                f"I encountered an issue where the same tool "
+                                f"is being called repeatedly without progress. "
+                                f"Please try rephrasing your request or breaking "
+                                f"it into smaller steps.\n\n"
+                                f"Last response: {response.content[:500]}"
+                            )
+                    else:
+                        consecutive_tool_failures = 0
+                    
+                    last_tool_results = current_results
                     iteration += 1
                     continue
 
@@ -143,11 +167,127 @@ class Agent:
 
 # Max iterations reached
         error_msg = (
-            f"⚠️ Max iterations ({self.config.max_iterations}) reached. "
+            f"! Max iterations ({self.config.max_iterations}) reached. "
             "The task may be too complex or an error occurred. "
             "Please try breaking it down into smaller steps."
         )
         return error_msg
+
+    async def stream_message(self, user_message: str) -> AsyncGenerator[str, None]:
+        """
+        Process a user message with streaming response.
+        Yields response chunks as they arrive.
+
+        Args:
+            user_message: User's input message
+
+        Yields:
+            Response chunks as they arrive
+        """
+        # Add user message to context
+        self.context.add_user_message(user_message)
+
+        if self.config.verbose:
+            self.console.print(f"[dim]Processing: {user_message}[/dim]")
+
+        # Track consecutive failed tool calls
+        consecutive_tool_failures = 0
+        last_tool_results: list[str] = []
+
+        # Agent loop with tool calling
+        iteration = 0
+        while iteration < self.config.max_iterations:
+            if self.config.verbose:
+                self.console.print(f"[dim]Iteration {iteration + 1}/{self.config.max_iterations}[/dim]")
+
+            # Get messages for LLM
+            messages = self.context.get_messages_for_llm()
+
+            # Get tool schemas
+            tool_format = self._get_tool_format()
+            tools = self.tools.get_all_schemas(format=tool_format)
+
+            try:
+                # Use regular chat (simpler, more reliable)
+                response = self.llm.chat(messages, tools=tools)
+                
+                # Stream the content if available
+                if response.content:
+                    yield response.content
+
+                if self.config.verbose:
+                    self.console.print(f"[dim]Tool calls: {len(response.tool_calls)}[/dim]")
+
+                # Check if LLM wants to use tools
+                if response.has_tool_calls:
+                    # Add assistant message with tool calls
+                    self.context.add_assistant_message(
+                        response.content,
+                        tool_calls=response.tool_calls
+                    )
+
+                    # Execute tools
+                    tool_results = await self._execute_tools(response.tool_calls)
+
+                    # Add tool results to context
+                    current_results: list[str] = []
+                    for tool_call, result in zip(response.tool_calls, tool_results):
+                        result_text = self._format_tool_result(result)
+                        current_results.append(result_text)
+                        self.context.add_tool_result(
+                            tool_call_id=tool_call.id,
+                            tool_name=tool_call.name,
+                            result=result_text
+                        )
+
+                    # Check if tools are failing repeatedly (stuck in loop)
+                    if current_results == last_tool_results and current_results:
+                        consecutive_tool_failures += 1
+                        if consecutive_tool_failures >= 2:
+                            if self.config.verbose:
+                                self.console.print("[yellow]⚠ Detected tool loop, breaking[/yellow]")
+                            yield "\n[Stuck in tool loop - please try a different approach]"
+                            return
+                    else:
+                        consecutive_tool_failures = 0
+                    
+                    last_tool_results = current_results
+                    iteration += 1
+                    continue
+
+                else:
+                    # No tool calls - this is the final response
+                    self.context.add_assistant_message(response.content)
+
+                    # Truncate context if needed
+                    self.context.truncate_old_messages()
+
+                    # Stop yielding
+                    return
+
+            except Exception as e:
+                error_msg = f"Error during agent loop: {str(e)}"
+                if self.config.verbose:
+                    self.console.print(f"[red]{error_msg}[/red]")
+                else:
+                    yield f"[Error: {str(e)}]"
+
+                # Try to recover
+                recovery_prompt = get_tool_error_recovery_prompt(
+                    tool_name="LLM",
+                    error=str(e),
+                    original_goal=user_message
+                )
+                self.context.add_user_message(recovery_prompt)
+                iteration += 1
+                continue
+
+        # Max iterations reached
+        error_msg = (
+            f"⚠ Max iterations ({self.config.max_iterations}) reached. "
+            "The task may be too complex or an error occurred."
+        )
+        yield error_msg
 
     async def _execute_tools(self, tool_calls: list[ToolCall]) -> list[dict]:
         """
@@ -223,7 +363,9 @@ class Agent:
 
         if "anthropic" in provider_name:
             return "anthropic"
-        elif "openai" in provider_name or "openrouter" in provider_name:
+        elif "openai" in provider_name or "openrouter" in provider_name or "custom" in provider_name:
+            return "openai"
+        elif "ollama" in provider_name:
             return "openai"
         else:
             return "openai"  # Default to OpenAI format (most widely supported)
