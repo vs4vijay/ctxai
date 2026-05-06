@@ -636,6 +636,183 @@ def login(
         raise typer.Exit(code=1)
 
 
+models_app = typer.Typer(help="Manage and list LLM models")
+
+
+@models_app.command("list")
+def models_list(
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="Specific provider to list models for (default: all providers)",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Maximum number of models to show per provider",
+    ),
+    all: bool = typer.Option(
+        False,
+        "--all",
+        "-a",
+        help="Show all models (no limit)",
+    ),
+):
+    """
+    List available LLM models with their capabilities.
+
+    This command shows which models are available for each configured
+    provider. Some providers support model listing via API, while others
+    don't provide this functionality.
+
+    Supported providers:
+    - openrouter: Lists 100+ models with pricing
+    - ollama: Lists locally installed models
+    - openai: Lists GPT/o1 models (requires API key)
+    - anthropic: Model listing not available via API
+    - github-copilot: Model listing not available via API
+
+    Examples:
+        ctxai models                    # List models for all providers
+        ctxai models --provider openrouter  # List only OpenRouter models
+        ctxai models --limit 10         # Show top 10 models
+        ctxai models --all             # Show all available models
+    """
+    from .commands.models_command import list_models
+
+    list_models(provider=provider, limit=limit, show_all=all)
+
+
+@models_app.command("search")
+def models_search(
+    query: str = typer.Argument(
+        ...,
+        help="Search query (model name or description keywords)",
+    ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="Specific provider to search in",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-l",
+        help="Maximum number of results to show",
+    ),
+):
+    """
+    Search for models by name or description.
+
+    Examples:
+        ctxai models search coding
+        ctxai models search claude --provider openrouter
+        ctxai models search vision --limit 10
+    """
+    from .commands.models_command import search_models
+
+    search_models(query=query, provider=provider, limit=limit)
+
+
+@models_app.command("info")
+def models_info(
+    model: str = typer.Argument(
+        ...,
+        help="Model ID to get details for (e.g., 'claude-3.5-sonnet', 'deepseek/deepseek-chat')",
+    ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        "-p",
+        help="Specific provider to search in",
+    ),
+):
+    """
+    Show detailed information about a specific model.
+
+    Examples:
+        ctxai models info claude
+        ctxai models info deepseek/deepseek-chat --provider openrouter
+        ctxai models info codellama:13b --provider ollama
+    """
+    from .commands.models_command import show_model_details
+
+    show_model_details(model_id=model, provider=provider)
+
+
+@models_app.command("pull")
+def models_pull(
+    model: str = typer.Argument(
+        ...,
+        help="Model name to pull (e.g., 'codellama:13b', 'llama3.1')",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed download progress",
+    ),
+):
+    """
+    Pull a model from Ollama library.
+
+    Examples:
+        ctxai models pull codellama:13b
+        ctxai models pull llama3.1:70b
+        ctxai models pull qwen2.5-coder:7b --verbose
+    """
+    from .commands.models_command import pull_ollama_model
+
+    success = pull_ollama_model(model_name=model, verbose=verbose)
+    if not success:
+        import typer
+        raise typer.Exit(code=1)
+
+
+@models_app.command("library")
+def models_library(
+    limit: int = typer.Option(
+        30,
+        "--limit",
+        "-l",
+        help="Maximum number of models to show",
+    ),
+):
+    """
+    List popular models available in Ollama library.
+
+    These models can be downloaded using 'ctxai model-pull'.
+
+    Examples:
+        ctxai models library
+        ctxai models library --limit 10
+    """
+    from rich.console import Console
+    from rich.table import Table
+    from .commands.models_command import list_ollama_library_models
+
+    console = Console()
+    models = list_ollama_library_models(limit=limit)
+
+    console.print(f"\n[bold cyan]Popular Ollama Library Models:[/bold cyan]\n")
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Model Name", style="cyan")
+    table.add_column("Description", max_width=60)
+
+    for m in models:
+        table.add_row(m["name"], m["description"])
+
+    console.print(table)
+    console.print(f"\n[dim]To pull a model: ctxai models pull <name>[/dim]")
+
+
+app.add_typer(models_app, name="models")
+
+
 @app.command()
 def logout(
     provider: str = typer.Argument(
