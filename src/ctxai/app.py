@@ -792,12 +792,13 @@ def models_library(
     """
     from rich.console import Console
     from rich.table import Table
+
     from .commands.models_command import list_ollama_library_models
 
     console = Console()
     models = list_ollama_library_models(limit=limit)
 
-    console.print(f"\n[bold cyan]Popular Ollama Library Models:[/bold cyan]\n")
+    console.print("\n[bold cyan]Popular Ollama Library Models:[/bold cyan]\n")
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Model Name", style="cyan")
@@ -807,10 +808,25 @@ def models_library(
         table.add_row(m["name"], m["description"])
 
     console.print(table)
-    console.print(f"\n[dim]To pull a model: ctxai models pull <name>[/dim]")
+    console.print("\n[dim]To pull a model: ctxai models pull <name>[/dim]")
 
 
 app.add_typer(models_app, name="models")
+
+# Service subcommand (long-running daemon, REST/WS API).
+# Imported lazily so missing optional deps don't break the top-level CLI.
+try:
+    from .commands.service_command import service_app
+    app.add_typer(service_app, name="service")
+except Exception:
+    pass
+
+# Export subcommand (repo -> text/markdown/html/json/xml).
+try:
+    from .commands.export_command import export_app
+    app.add_typer(export_app, name="export")
+except Exception:
+    pass
 
 
 @app.command()

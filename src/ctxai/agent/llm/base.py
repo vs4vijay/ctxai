@@ -11,6 +11,35 @@ from enum import Enum
 from typing import Any, Optional
 
 
+class ProviderError(Exception):
+    """Base exception for LLM provider failures."""
+
+    def __init__(self, message: str, provider: str | None = None, status_code: int | None = None):
+        super().__init__(message)
+        self.provider = provider
+        self.status_code = status_code
+
+
+class RateLimitError(ProviderError):
+    """Provider rejected the request because we exceeded rate limits."""
+
+    def __init__(self, message: str, retry_after: float | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.retry_after = retry_after
+
+
+class ContextLengthError(ProviderError):
+    """The context exceeds the provider's maximum context window."""
+
+
+class AuthenticationError(ProviderError):
+    """API key invalid, expired, or missing."""
+
+
+class ProviderTimeoutError(ProviderError):
+    """The provider did not return a response within the timeout."""
+
+
 class MessageRole(str, Enum):
     """Message roles in conversation."""
     USER = "user"
@@ -261,6 +290,17 @@ class BaseLLMProvider(ABC):
             True if API key is required
         """
         pass
+
+    def health_check(self) -> bool:
+        """
+        Optional health check — subclasses may override with a cheap ping.
+
+        Default implementation just checks that config is present.
+        """
+        try:
+            return self.validate_config()
+        except Exception:
+            return False
 
     def __repr__(self) -> str:
         """String representation of provider."""

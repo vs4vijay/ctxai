@@ -14,7 +14,6 @@ from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 
-
 # ============================================================================
 # NEON COLOR PALETTE
 # ============================================================================
@@ -152,7 +151,7 @@ class NeonConsole:
     with the sci-fi neon blue aesthetic.
     """
     
-    def __init__(self, console: Optional[Console] = None):
+    def __init__(self, console: Console | None = None):
         """
         Initialize NeonConsole.
         
@@ -226,7 +225,7 @@ class NeonConsole:
     def print_panel(
         self,
         content: "str | Markdown",  # type: ignore[name-defined]
-        title: Optional[str] = None,
+        title: str | None = None,
         border_style: str = "primary",
         **kwargs
     ):
@@ -257,7 +256,7 @@ class NeonConsole:
         self,
         data: list[dict],
         columns: list[str],
-        title: Optional[str] = None
+        title: str | None = None
     ):
         """
         Print data as a neon-styled table.
@@ -321,7 +320,7 @@ def neon_text(text: str, style: str = "primary") -> str:
 
 def neon_panel(
     content: str,
-    title: Optional[str] = None,
+    title: str | None = None,
     border: str = "primary",
     **kwargs
 ) -> Panel:
@@ -346,7 +345,7 @@ def neon_panel(
     )
 
 
-def neon_divider(text: Optional[str] = None) -> str:
+def neon_divider(text: str | None = None) -> str:
     """
     Create a neon divider line.
     

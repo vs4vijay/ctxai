@@ -242,6 +242,112 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             logger.error(error_msg, exc_info=True)
             return error_msg
 
+    # ----- MCP Resources -----
+
+    @mcp.resource("file://{path}")
+    async def get_file_content(path: str) -> str:
+        """
+        Expose any file on disk as an MCP resource.
+
+        Path traversal is blocked using the SecurityManager.
+        """
+        from ..security import SecurityError, get_security_manager
+
+        try:
+            base = project_path or Path.cwd()
+            safe_path = get_security_manager().validate_file_path(path, base_dir=base)
+            return safe_path.read_text(encoding="utf-8", errors="replace")
+        except SecurityError as exc:
+            return f"Error: {exc}"
+        except Exception as exc:
+            return f"Error reading {path}: {exc}"
+
+    @mcp.resource("repo://{name}")
+    async def get_repo_map(name: str) -> str:
+        """Return a repository map (directory tree) of the working directory."""
+        try:
+            from ..agent.repomap import RepositoryMap
+
+            repo_path = project_path or Path.cwd()
+            repomap = RepositoryMap(root_dir=repo_path)
+            result = repomap.build_map()
+            return str(result)
+        except Exception as exc:
+            return f"Error generating repo map: {exc}"
+
+    @mcp.resource("index://{name}")
+    async def get_index_resource(name: str) -> str:
+        """Stats for an index, formatted as JSON."""
+        import json as _json
+
+        try:
+            indexes_dir = get_indexes_dir(project_path)
+            index_path = indexes_dir / name
+            if not index_path.exists():
+                return _json.dumps({"error": f"Index '{name}' not found"})
+            vector_store = VectorStore(storage_path=index_path, collection_name=name)
+            stats = vector_store.get_stats()
+            return _json.dumps(
+                {
+                    "name": name,
+                    "chunks": stats["total_chunks"],
+                    "path": str(index_path),
+                }
+            )
+        except Exception as exc:
+            return _json.dumps({"error": str(exc)})
+
+    # ----- MCP Prompts -----
+
+    @mcp.prompt("analyze_codebase")
+    async def analyze_codebase_prompt(language: str = "python", focus: str = "architecture") -> str:
+        return (
+            f"Analyze this {language} codebase with focus on {focus}.\n\n"
+            "Examine:\n"
+            "1. Project structure and organization\n"
+            "2. Key architectural patterns\n"
+            "3. Code quality and best practices\n"
+            "4. Potential improvements\n\n"
+            "Provide a detailed report with specific examples."
+        )
+
+    @mcp.prompt("refactor_code")
+    async def refactor_code_prompt(file_path: str, refactor_type: str = "general") -> str:
+        return (
+            f"Refactor the code in {file_path} ({refactor_type} refactoring).\n\n"
+            "Steps:\n"
+            "1. Read and understand current code\n"
+            "2. Identify refactoring opportunities\n"
+            "3. Apply improvements\n"
+            "4. Verify functionality preserved\n"
+            "5. Run tests to confirm"
+        )
+
+    @mcp.prompt("add_tests")
+    async def add_tests_prompt(file_path: str, test_framework: str = "pytest") -> str:
+        return (
+            f"Add comprehensive tests for {file_path} using {test_framework}.\n\n"
+            "Test coverage should include:\n"
+            "1. Happy path scenarios\n"
+            "2. Edge cases\n"
+            "3. Error conditions\n"
+            "4. Integration scenarios\n\n"
+            "Aim for 90%+ coverage."
+        )
+
+    @mcp.prompt("debug_issue")
+    async def debug_issue_prompt(description: str) -> str:
+        return (
+            f"Debug the following issue: {description}\n\n"
+            "Debugging process:\n"
+            "1. Reproduce the issue\n"
+            "2. Examine relevant code\n"
+            "3. Check logs and error messages\n"
+            "4. Identify root cause\n"
+            "5. Propose and implement fix\n"
+            "6. Verify fix works"
+        )
+
     @mcp.tool()
     async def get_index_stats(index_name: str) -> str:
         """

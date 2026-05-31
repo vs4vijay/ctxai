@@ -72,31 +72,41 @@ class ConversationContext:
     def truncate_old_messages(self, max_tokens: int = 100000) -> None:
         """
         Truncate old messages if context is too large.
-        Keeps system messages and recent messages.
+        Keeps system messages and recent messages, and tries to keep
+        tool_call/tool_result pairs together to avoid orphan tool results
+        confusing the LLM.
         """
         if self.get_token_count_estimate() <= max_tokens:
             return
 
-        # Keep system messages
         system_messages = [msg for msg in self.messages if msg.role == MessageRole.SYSTEM]
+        non_system = [msg for msg in self.messages if msg.role != MessageRole.SYSTEM]
 
-        # Keep recent messages
-        recent_messages = []
+        recent_messages: list[Message] = []
         token_count = 0
 
-        for msg in reversed(self.messages):
-            if msg.role == MessageRole.SYSTEM:
-                continue
-
-            msg_tokens = len(msg.content) // 4
+        for msg in reversed(non_system):
+            msg_tokens = max(1, len(msg.content) // 4)
             if token_count + msg_tokens > max_tokens:
                 break
-
             recent_messages.insert(0, msg)
             token_count += msg_tokens
 
-        # Combine
+        # If the first kept message is a tool result with no preceding assistant
+        # tool_call, drop it to avoid an orphan that some providers reject.
+        while recent_messages and recent_messages[0].tool_call_id:
+            recent_messages.pop(0)
+
         self.messages = system_messages + recent_messages
+
+    def prune_to_fit(self, max_tokens: int = 100000) -> int:
+        """
+        Aggressively prune until token budget is satisfied. Returns the
+        number of non-system messages dropped.
+        """
+        before = len(self.messages)
+        self.truncate_old_messages(max_tokens=max_tokens)
+        return before - len(self.messages)
 
     def clear(self) -> None:
         """Clear all messages except system messages."""

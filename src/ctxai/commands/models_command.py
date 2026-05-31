@@ -14,7 +14,7 @@ from ..auth.keystore import get_keystore
 console = Console()
 
 
-def get_api_key(provider: str) -> Optional[str]:
+def get_api_key(provider: str) -> str | None:
     """Get API key from environment or keystore."""
     env_mapping = {
         "openrouter": "OPENROUTER_API_KEY",
@@ -105,7 +105,7 @@ def list_openai_models() -> list[dict]:
     return []
 
 
-def get_ollama_model_info(model_name: str) -> Optional[dict]:
+def get_ollama_model_info(model_name: str) -> dict | None:
     """Get detailed info for an Ollama model."""
     try:
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -194,7 +194,7 @@ def format_size(size_bytes: int) -> str:
 
 
 def list_models(
-    provider: Optional[str] = None,
+    provider: str | None = None,
     limit: int = 20,
     show_all: bool = False,
 ):
@@ -220,29 +220,29 @@ def list_models(
         console.print(f"  Description: {cap['description']}")
 
         if api_key:
-            console.print(f"  [green]Status: Configured[/green]")
+            console.print("  [green]Status: Configured[/green]")
         elif p == "ollama":
-            console.print(f"  [dim]Status: Local (no API key needed)[/dim]")
+            console.print("  [dim]Status: Local (no API key needed)[/dim]")
         else:
             console.print(f"  [yellow]Status: Not configured (set {p.upper()}_API_KEY)[/yellow]")
 
-        console.print(f"  Capabilities:")
+        console.print("  Capabilities:")
         console.print(f"    Streaming: {'Yes' if cap['supports_streaming'] else 'No'}")
         console.print(f"    Tool Calling: {'Yes' if cap['supports_tools'] else 'No'}")
         console.print(f"    Vision: {'Yes' if cap['supports_vision'] else 'No'}")
         console.print(f"    Free Models: {'Yes' if cap['free_models'] else 'No' if cap['free_models'] is False else '?'}")
 
         if not cap["list_models"]:
-            console.print(f"  [dim]Model listing not available via API[/dim]")
-            console.print(f"  Known models: See documentation for available models")
+            console.print("  [dim]Model listing not available via API[/dim]")
+            console.print("  Known models: See documentation for available models")
             continue
 
-        console.print(f"  Models:")
+        console.print("  Models:")
 
         if p == "openrouter":
             models = list_openrouter_models()
             if not models:
-                console.print(f"    [yellow]Failed to fetch models[/yellow]")
+                console.print("    [yellow]Failed to fetch models[/yellow]")
                 continue
 
             if not show_all and len(models) > limit:
@@ -282,8 +282,8 @@ def list_models(
         elif p == "ollama":
             models = list_ollama_models()
             if not models:
-                console.print(f"    [yellow]Ollama not running or no models installed[/yellow]")
-                console.print(f"    Run 'ollama pull <model>' to download models")
+                console.print("    [yellow]Ollama not running or no models installed[/yellow]")
+                console.print("    Run 'ollama pull <model>' to download models")
                 continue
 
             if not show_all and len(models) > limit:
@@ -305,7 +305,7 @@ def list_models(
         elif p == "openai":
             models = list_openai_models()
             if not models:
-                console.print(f"    [yellow]Failed to fetch models (check OPENAI_API_KEY)[/yellow]")
+                console.print("    [yellow]Failed to fetch models (check OPENAI_API_KEY)[/yellow]")
                 continue
 
             if not show_all and len(models) > limit:
@@ -333,7 +333,7 @@ def list_models(
             console.print(table)
 
 
-def show_model_details(model_id: str, provider: Optional[str] = None):
+def show_model_details(model_id: str, provider: str | None = None):
     """Show detailed information about a specific model."""
     if provider:
         providers = [provider.lower()]
@@ -351,7 +351,7 @@ def show_model_details(model_id: str, provider: Optional[str] = None):
             for m in models:
                 if model_id.lower() in m.get("name", "").lower():
                     console.print(f"\n[bold cyan]Model: {m.get('name')}[/bold cyan]")
-                    console.print(f"  Provider: OpenRouter")
+                    console.print("  Provider: OpenRouter")
 
                     desc = m.get("description", "")
                     if desc:
@@ -372,7 +372,7 @@ def show_model_details(model_id: str, provider: Optional[str] = None):
                             output_price = f"${float(output_price):.4f}"
                         except (ValueError, TypeError):
                             output_price = "N/A"
-                        console.print(f"  Pricing (per 1M tokens):")
+                        console.print("  Pricing (per 1M tokens):")
                         console.print(f"    Input: {input_price}")
                         console.print(f"    Output: {output_price}")
 
@@ -388,7 +388,7 @@ def show_model_details(model_id: str, provider: Optional[str] = None):
             for m in models:
                 if model_id.lower() in m.get("name", "").lower():
                     console.print(f"\n[bold cyan]Model: {m.get('name')}[/bold cyan]")
-                    console.print(f"  Provider: Ollama (Local)")
+                    console.print("  Provider: Ollama (Local)")
                     console.print(f"  Size: {format_size(m.get('size', 0))}")
 
                     details = get_ollama_model_info(m.get("name"))
@@ -407,7 +407,7 @@ def show_model_details(model_id: str, provider: Optional[str] = None):
         console.print(f"[yellow]Model '{model_id}' not found[/yellow]")
 
 
-def search_models(query: str, provider: Optional[str] = None, limit: int = 20):
+def search_models(query: str, provider: str | None = None, limit: int = 20):
     """
     Search for models by name or description.
 
@@ -496,8 +496,8 @@ def pull_ollama_model(model_name: str, verbose: bool = False):
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
     try:
-        import threading
         import json
+        import threading
 
         console.print(f"[cyan]Pulling model: {model_name}[/cyan]")
 
@@ -558,7 +558,7 @@ def pull_ollama_model(model_name: str, verbose: bool = False):
 
     except requests.exceptions.ConnectionError:
         console.print(f"[red]Cannot connect to Ollama at {base_url}[/red]")
-        console.print(f"[dim]Make sure Ollama is running (ollama serve)[/dim]")
+        console.print("[dim]Make sure Ollama is running (ollama serve)[/dim]")
         return False
     except Exception as e:
         console.print(f"[red]Error pulling model: {e}[/red]")

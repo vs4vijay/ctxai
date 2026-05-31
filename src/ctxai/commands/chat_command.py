@@ -5,12 +5,12 @@ Provides a REPL interface for conversing with the AI coding agent.
 """
 
 import asyncio
-import os
 import logging
+import os
 import sys
-from pathlib import Path
-from typing import Optional, Deque
 from collections import deque
+from pathlib import Path
+from typing import Deque, Optional
 
 # Force UTF-8 encoding on Windows for Unicode support
 if sys.platform == "win32":
@@ -64,6 +64,12 @@ def _disable_cursor_blink():
         pass
 
 
+import sys
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -73,16 +79,16 @@ from ..agent.context import ConversationContext
 from ..agent.core import Agent, AgentLoopConfig
 from ..agent.llm.anthropic_provider import AnthropicProvider
 from ..agent.theme import (
-    NEON_CYAN,
-    NEON_BLUE,
-    NEON_GREEN,
-    NEON_GOLD,
-    NEON_RED,
-    NEON_PURPLE,
-    NEON_WHITE,
-    NEON_DIM,
     BG_DARK,
     BG_MID,
+    NEON_BLUE,
+    NEON_CYAN,
+    NEON_DIM,
+    NEON_GOLD,
+    NEON_GREEN,
+    NEON_PURPLE,
+    NEON_RED,
+    NEON_WHITE,
     NeonConsole,
     NeonCursor,
     create_prompt_text,  # type: ignore[attr-defined]
@@ -98,11 +104,6 @@ from ..agent.tools.file_ops import (
     WriteFileTool,
 )
 from ..agent.tools.registry import ToolRegistry
-from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.styles import Style
-from prompt_toolkit.cursor_shapes import CursorShape
-import sys
 
 console = NeonConsole(Console(legacy_windows=False))
 
@@ -191,7 +192,7 @@ class MessageQueue:
     """Thread-safe message queue for concurrent chat."""
     
     def __init__(self):
-        self._queue: Deque[str] = deque()
+        self._queue: deque[str] = deque()
         self._lock = asyncio.Lock()
         self._not_empty = asyncio.Condition(self._lock)
     
@@ -334,7 +335,7 @@ def show_providers_and_models(current_provider: str, current_model: str):
             console.print(f"  [dim]Auth: {info['auth']}[/dim]")
             
             if info["models"]:
-                console.print(f"  [dim]Popular models:[/dim]")
+                console.print("  [dim]Popular models:[/dim]")
                 for model_id, desc in info["models"][:5]:
                     if model_id == current_model and provider_id == current_provider:
                         console.print(f"    [bold {NEON_GOLD}]→[/bold {NEON_GOLD}] [bold {NEON_WHITE}]{model_id}[/bold {NEON_WHITE}] [dim]({desc})[/dim]")
@@ -697,7 +698,7 @@ async def interactive_chat(
         try:
             # Print thinking indicator
             console.print()
-            console.print(f"[dim]● Thinking...[/dim]")
+            console.print("[dim]● Thinking...[/dim]")
             
             # Create a Live display for thinking (if streaming is supported)
             from rich.live import Live

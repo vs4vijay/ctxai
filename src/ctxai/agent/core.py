@@ -3,9 +3,10 @@ Core agent implementation with tool calling and planning.
 """
 
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
 
@@ -14,6 +15,9 @@ from .context import ConversationContext
 from .llm.base import BaseLLMProvider, MessageRole, ToolCall
 from .prompts import get_system_prompt, get_tool_error_recovery_prompt
 from .tools.registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from .planners.base import BasePlanner
 
 
 @dataclass
@@ -28,6 +32,7 @@ class AgentLoopConfig:
     require_user_approval: bool = True
     max_iterations: int = 10
     verbose: bool = False
+    planner: Optional["BasePlanner"] = None
 
 
 class Agent:
@@ -47,6 +52,7 @@ class Agent:
         self.tools = config.tool_registry
         self.context = ConversationContext()
         self.console = Console(legacy_windows=False)
+        self.planner = config.planner
 
         # Initialize system message
         tool_descriptions = self.tools.get_tool_descriptions()
@@ -56,6 +62,27 @@ class Agent:
             tool_descriptions=tool_descriptions
         )
         self.context.add_system_message(system_prompt)
+
+    def set_planner(self, planner: "BasePlanner") -> None:
+        """Install a planner that will be consulted at the start of each user message."""
+        self.planner = planner
+
+    async def _maybe_create_plan(self, user_message: str):
+        """Run the configured planner if it judges this message needs planning."""
+        if not self.config.planning_enabled or self.planner is None:
+            return None
+        try:
+            if not self.planner.should_plan(user_message):
+                return None
+            plan = await self.planner.create_plan(user_message)
+            self.context.set_current_plan(plan)
+            if self.config.verbose:
+                self.console.print(f"[cyan]Created plan with {len(plan.steps)} step(s)[/cyan]")
+            return plan
+        except Exception as exc:
+            if self.config.verbose:
+                self.console.print(f"[yellow]Planner failed, skipping: {exc}[/yellow]")
+            return None
 
     async def process_message(self, user_message: str) -> str:
         """
@@ -72,6 +99,15 @@ class Agent:
 
         if self.config.verbose:
             self.console.print(f"[dim]Processing: {user_message}[/dim]")
+
+        # Optional planning step
+        plan = await self._maybe_create_plan(user_message)
+        if plan is not None:
+            plan_summary = "\n".join(f"- {step.description}" for step in plan.steps)
+            self.context.add_user_message(
+                f"[Planner produced this plan for the task above]\n{plan_summary}\n"
+                "Use the plan as a guide; you may revise it as you learn more."
+            )
 
         # Track consecutive failed tool calls
         consecutive_tool_failures = 0
