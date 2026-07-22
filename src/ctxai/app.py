@@ -575,9 +575,9 @@ def code(
         from .agent.tools.bash_tool import BashTool
         from .agent.tools.code_search import SemanticSearchTool
         from .agent.tools.file_ops import EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool
-        from .agent.tools.registry import ToolRegistry
         from .agent.tools.execution import ToolExecutionContext
         from .agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
+        from .agent.tools.registry import ToolRegistry
 
         console = Console()
 
@@ -611,16 +611,26 @@ def code(
         tools.register(GitStatusTool(context=execution_context))
         tools.register(GitDiffTool(context=execution_context))
         tools.register(GitLogTool(context=execution_context))
-        tools.register(SemanticSearchTool())
+        from .repository_context import discover_repository_indexes
+
+        tools.register(SemanticSearchTool(project_path=Path.cwd()))
 
         loop_config = AgentLoopConfig(
             llm_provider=llm,
             tool_registry=tools,
             agent_config=agent_config,
             working_directory=Path.cwd(),
-            available_indexes=[],
+            available_indexes=discover_repository_indexes(Path.cwd()),
+            planning_enabled=agent_config.behavior.planning_enabled,
+            require_user_approval=agent_config.behavior.require_user_approval,
             max_iterations=max_iterations,
             verbose=verbose,
+            approval_callback=(
+                lambda call: typer.confirm(
+                    f"Approve {call.name} on "
+                    f"{call.parameters.get('path') or call.parameters.get('file_path') or 'repository'}?"
+                )
+            ),
         )
         agent = Agent(loop_config)
 

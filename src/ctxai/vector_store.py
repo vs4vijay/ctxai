@@ -150,6 +150,21 @@ class VectorStore:
         except Exception as exc:
             raise VectorStoreQueryError(f"Failed to search index '{self.collection_name}': {exc}") from exc
 
+    def get_chunks(self) -> list[dict]:
+        """Return all stored chunks for local lexical and symbol retrieval."""
+        try:
+            results = self.collection.get(include=["documents", "metadatas"])
+            return [
+                {"id": chunk_id, "content": document, "metadata": metadata}
+                for chunk_id, document, metadata in zip(
+                    results.get("ids", []),
+                    results.get("documents", []),
+                    results.get("metadatas", []),
+                )
+            ]
+        except Exception as exc:
+            raise VectorStoreQueryError(f"Failed to read index '{self.collection_name}': {exc}") from exc
+
     def get_stats(self) -> dict:
         """
         Get statistics about the vector store.

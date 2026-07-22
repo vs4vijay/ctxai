@@ -1,6 +1,4 @@
-"""
-Semantic code search tool using ctxai's vector store.
-"""
+"""Grounded hybrid repository search tool."""
 
 from pathlib import Path
 from typing import Any
@@ -9,133 +7,70 @@ from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
 
 class SemanticSearchTool(BaseTool):
-    """Tool for semantic code search using indexed codebases."""
+    """Search the current repository's matching persistent index."""
 
-    def __init__(self, project_path: Path = None):
+    def __init__(self, project_path: Path | None = None, embedding_provider=None):
         super().__init__()
-        self.project_path = project_path
+        self.project_path = (project_path or Path.cwd()).resolve()
+        self.embedding_provider = embedding_provider
 
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
             name=self.name,
-            description="Search indexed codebase using natural language queries, return code chunks with metadata.",
+            description="Hybrid semantic, lexical, symbol, and repository-map search with file/line evidence.",
             parameters=[
+                ToolParameter("query", ToolParameterType.STRING, "Natural-language or symbol query", required=True),
                 ToolParameter(
-                    name="query",
-                    type=ToolParameterType.STRING,
-                    description="Natural language search query (e.g., 'authentication functions', 'error handling')",
-                    required=True
+                    "index_name", ToolParameterType.STRING, "Matching repository index override", required=False
                 ),
                 ToolParameter(
-                    name="index_name",
-                    type=ToolParameterType.STRING,
-                    description="Name of the index to search (optional, uses default if not specified)",
-                    required=False
+                    "n_results", ToolParameterType.INTEGER, "Results to return (default 5, max 20)",
+                    required=False, default=5,
                 ),
                 ToolParameter(
-                    name="n_results",
-                    type=ToolParameterType.INTEGER,
-                    description="Number of results to return (default: 5, max: 20)",
-                    required=False,
-                    default=5
+                    "token_budget", ToolParameterType.INTEGER, "Maximum approximate context tokens",
+                    required=False, default=2000,
                 ),
-            ]
+                ToolParameter(
+                    "debug", ToolParameterType.BOOLEAN, "Explain why context was selected",
+                    required=False, default=False,
+                ),
+            ],
         )
 
-    async def execute(self, query: str, index_name: str = None, n_results: int = 5) -> dict[str, Any]:
+    async def execute(
+        self, query: str, index_name: str | None = None, n_results: int = 5,
+        token_budget: int = 2000, debug: bool = False,
+    ) -> dict[str, Any]:
         try:
-            # Import ctxai components
             from ctxai.config import ConfigManager
             from ctxai.embeddings import EmbeddingsFactory
-            from ctxai.utils import get_ctxai_home
-            from ctxai.vector_store import VectorStore
+            from ctxai.repository_context import ContextAssembler, HybridRetriever
 
-            # Load config
-            config_manager = ConfigManager(self.project_path)
-            config = config_manager.load()
-
-            # Determine index name
-            if not index_name:
-                ctxai_home = get_ctxai_home(self.project_path)
-                indexes_dir = ctxai_home / "indexes"
-                if not indexes_dir.exists():
-                    return {
-                        "success": False,
-                        "result": None,
-                        "error": "No indexes found. Please index a codebase first using 'ctxai index'."
-                    }
-                # Use first available index
-                indexes = [d.name for d in indexes_dir.iterdir() if d.is_dir()]
-                if not indexes:
-                    return {
-                        "success": False,
-                        "result": None,
-                        "error": "No indexes found. Please index a codebase first."
-                    }
-                index_name = indexes[0]
-
-            # Limit n_results
-            n_results = min(n_results, 20)
-
-            # Initialize embedding provider
-            embedding_provider = EmbeddingsFactory.create(config.embedding)
-
-            # Initialize vector store
-            vector_store = VectorStore(index_name, embedding_provider)
-
-            # Generate query embedding
-            query_embedding = embedding_provider.embed([query])[0]
-
-            # Search
-            results = vector_store.search(query_embedding, n_results=n_results)
-
-            if not results:
-                return {
-                    "success": True,
-                    "result": "No matching code found.",
-                    "error": None,
-                    "metadata": {"matches": 0}
-                }
-
-            # Format results
-            formatted = []
-            for i, result in enumerate(results, 1):
-                metadata = result.get('metadata', {})
-                file_path = metadata.get('file_path', 'unknown')
-                start_line = metadata.get('start_line', '?')
-                end_line = metadata.get('end_line', '?')
-                chunk_type = metadata.get('chunk_type', 'unknown')
-                score = result.get('distance', 0)
-                document = result.get('document', '')[:200]
-                
-                formatted.append(
-                    f"[{i}] {file_path}:{start_line}-{end_line}\n"
-                    f"    Type: {chunk_type} | Score: {score:.3f}\n"
-                    f"    {document}..."
-                )
-
-            result_text = "\n\n".join(formatted)
-
+            provider = self.embedding_provider
+            if provider is None:
+                provider = EmbeddingsFactory.create(ConfigManager(self.project_path).load().embedding)
+            retriever = HybridRetriever(self.project_path, provider, index_name=index_name)
+            ranked = retriever.retrieve(query, limit=min(max(1, n_results), 20), debug=debug)
+            context = ContextAssembler(token_budget=max(1, token_budget), debug=debug).assemble(
+                retriever.index_name, ranked
+            )
             return {
                 "success": True,
-                "result": result_text,
+                "result": context.text or "No matching code found.",
                 "error": None,
                 "metadata": {
-                    "index_name": index_name,
+                    "index_name": context.index_name,
                     "query": query,
-                    "matches": len(results),
-                }
+                    "matches": len(context.items),
+                    "estimated_tokens": context.estimated_tokens,
+                    "citations": [item.citation for item in context.items],
+                },
             }
-
-        except ImportError as e:
+        except Exception as exc:
             return {
                 "success": False,
                 "result": None,
-                "error": f"Failed to import ctxai components: {str(e)}"
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "result": None,
-                "error": f"Search failed: {str(e)}"
+                "error": f"Search failed: {exc}",
+                "error_type": type(exc).__name__,
             }

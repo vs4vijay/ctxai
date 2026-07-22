@@ -3,9 +3,9 @@ Core agent implementation with tool calling and planning.
 """
 
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncGenerator, Optional
 
 from rich.console import Console
 
@@ -14,6 +14,7 @@ from .context import ConversationContext
 from .llm.base import BaseLLMProvider, MessageRole, ToolCall
 from .prompts import get_system_prompt, get_tool_error_recovery_prompt
 from .tools.registry import ToolRegistry
+from .workflow import ApprovalCallback, TaskRun, discover_verification_commands
 
 
 @dataclass
@@ -28,6 +29,7 @@ class AgentLoopConfig:
     require_user_approval: bool = True
     max_iterations: int = 10
     verbose: bool = False
+    approval_callback: ApprovalCallback | None = None
 
 
 class Agent:
@@ -47,13 +49,16 @@ class Agent:
         self.tools = config.tool_registry
         self.context = ConversationContext()
         self.console = Console(legacy_windows=False)
+        self.last_run: TaskRun | None = None
 
         # Initialize system message
         tool_descriptions = self.tools.get_tool_descriptions()
         system_prompt = get_system_prompt(
             working_directory=config.working_directory,
             available_indexes=config.available_indexes,
-            tool_descriptions=tool_descriptions
+            tool_descriptions=tool_descriptions,
+            planning_enabled=config.planning_enabled,
+            verification_commands=discover_verification_commands(config.working_directory),
         )
         self.context.add_system_message(system_prompt)
 
@@ -69,6 +74,8 @@ class Agent:
         """
         # Add user message to context
         self.context.add_user_message(user_message)
+        run = TaskRun(user_message, project_root=self.config.working_directory.resolve())
+        self.last_run = run
 
         if self.config.verbose:
             self.console.print(f"[dim]Processing: {user_message}[/dim]")
@@ -95,7 +102,8 @@ class Agent:
                 response = self.llm.chat(messages, tools=tools)
 
                 if self.config.verbose:
-                    self.console.print(f"[dim]LLM response: {response.content[:200] if response.content else '(empty)'}...[/dim]")
+                    preview = response.content[:200] if response.content else "(empty)"
+                    self.console.print(f"[dim]LLM response: {preview}...[/dim]")
                     self.console.print(f"[dim]Tool calls: {len(response.tool_calls)}[/dim]")
 
                 # Check if LLM wants to use tools
@@ -107,7 +115,7 @@ class Agent:
                     )
 
                     # Execute tools
-                    tool_results = await self._execute_tools(response.tool_calls)
+                    tool_results = await self._execute_tools(response.tool_calls, run=run)
 
                     # Add tool results to context
                     current_results: list[str] = []
@@ -148,7 +156,7 @@ class Agent:
                     # Truncate context if needed
                     self.context.truncate_old_messages()
 
-                    return response.content
+                    return run.final_report(response.content)
 
             except Exception as e:
                 error_msg = f"Error during agent loop: {str(e)}"
@@ -289,7 +297,9 @@ class Agent:
         )
         yield error_msg
 
-    async def _execute_tools(self, tool_calls: list[ToolCall]) -> list[dict]:
+    async def _execute_tools(
+        self, tool_calls: list[ToolCall], *, run: TaskRun | None = None
+    ) -> list[dict]:
         """
         Execute tool calls.
 
@@ -307,11 +317,20 @@ class Agent:
                 self.console.print(f"[dim]Parameters: {tool_call.parameters}[/dim]")
 
             try:
-                result = await self.tools.execute_tool(
-                    tool_call.name,
-                    **tool_call.parameters
+                denial = None
+                if run is not None:
+                    denial = run.before_tool(
+                        tool_call,
+                        planning_enabled=self.config.planning_enabled,
+                        require_approval=self.config.require_user_approval,
+                        approval_callback=self.config.approval_callback,
+                    )
+                result = denial or await self.tools.execute_tool(
+                    tool_call.name, **tool_call.parameters
                 )
                 results.append(result)
+                if run is not None:
+                    run.observe(tool_call, result)
 
                 if self.config.verbose:
                     if result.get("success"):

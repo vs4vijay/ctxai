@@ -67,6 +67,7 @@ def _disable_cursor_blink():
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.prompt import Confirm
 
 from ..agent.config import AgentConfig, AgentLLMConfig
 from ..agent.context import ConversationContext
@@ -97,9 +98,10 @@ from ..agent.tools.file_ops import (
     ReadFileTool,
     WriteFileTool,
 )
-from ..agent.tools.registry import ToolRegistry
 from ..agent.tools.execution import ToolExecutionContext
 from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
+from ..agent.tools.registry import ToolRegistry
+from ..repository_context import discover_repository_indexes
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.styles import Style
@@ -651,10 +653,10 @@ async def interactive_chat(
     tools.register(GitStatusTool(context=execution_context))
     tools.register(GitDiffTool(context=execution_context))
     tools.register(GitLogTool(context=execution_context))
-    tools.register(SemanticSearchTool())
+    tools.register(SemanticSearchTool(project_path=working_directory))
 
     # Get available indexes (if any)
-    available_indexes = []  # TODO: Load from config
+    available_indexes = discover_repository_indexes(working_directory)
 
     # Create agent
     loop_config = AgentLoopConfig(
@@ -663,8 +665,17 @@ async def interactive_chat(
         agent_config=agent_config,
         working_directory=working_directory,
         available_indexes=available_indexes,
+        planning_enabled=agent_config.behavior.planning_enabled,
+        require_user_approval=agent_config.behavior.require_user_approval,
         max_iterations=max_iterations,
         verbose=verbose,
+        approval_callback=(
+            lambda call: Confirm.ask(
+                f"Approve {call.name} on "
+                f"{call.parameters.get('path') or call.parameters.get('file_path') or 'repository'}?",
+                default=False,
+            )
+        ),
     )
     agent = Agent(loop_config)
 

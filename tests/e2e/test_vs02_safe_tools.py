@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
@@ -71,7 +72,7 @@ async def test_capabilities_and_command_policy_are_enforced(tmp_path):
     escaped_cwd = await bash.execute("python -V", working_directory="..")
     inline_code = await bash.execute("python -c 'print(42)'")
     git_mutation = await bash.execute("git reset --hard")
-    safe = await bash.execute("python -V")
+    safe = await bash.execute(f"{sys.executable} -V")
     assert all(not item["success"] for item in (dangerous, network, chained, escaped_cwd))
     assert dangerous["error_type"] == "PolicyDenied"
     assert network["error_type"] == "PolicyDenied"

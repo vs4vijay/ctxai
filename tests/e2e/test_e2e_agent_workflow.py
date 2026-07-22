@@ -140,7 +140,8 @@ async def test_agent_multi_tool_workflow(sample_python_code, temp_dir, mock_llm_
         working_directory=temp_dir,
         available_indexes=[],
         max_iterations=10,
-        verbose=False
+        verbose=False,
+        require_user_approval=False,
     )
 
     agent = Agent(loop_config)
@@ -317,7 +318,8 @@ async def test_agent_write_and_read_workflow(temp_dir, mock_llm_config):
         working_directory=temp_dir,
         available_indexes=[],
         max_iterations=10,
-        verbose=False
+        verbose=False,
+        require_user_approval=False,
     )
 
     agent = Agent(loop_config)

@@ -6,7 +6,13 @@ import os
 from pathlib import Path
 
 
-def get_system_prompt(working_directory: Path, available_indexes: list[str], tool_descriptions: str) -> str:
+def get_system_prompt(
+    working_directory: Path,
+    available_indexes: list[str],
+    tool_descriptions: str,
+    planning_enabled: bool = True,
+    verification_commands: list[str] | None = None,
+) -> str:
     """
     Generate system prompt for the agent.
 
@@ -19,6 +25,12 @@ def get_system_prompt(working_directory: Path, available_indexes: list[str], too
         System prompt string
     """
     indexes_str = ", ".join(available_indexes) if available_indexes else "None"
+    planning_instruction = (
+        "State a concise, evidence-backed plan before the first mutation."
+        if planning_enabled
+        else "Planning is disabled for this run; proceed directly from inspection to approved execution."
+    )
+    checks = ", ".join(verification_commands or []) or "No conventional project check detected"
 
     return f"""You are an expert AI coding assistant with access to powerful tools for software development.
 
@@ -34,6 +46,7 @@ You can:
 
 - Working Directory: {working_directory}
 - Available Code Indexes: {indexes_str}
+- Suggested Verification Commands: {checks}
 
 ## Available Tools
 
@@ -41,12 +54,15 @@ You can:
 
 ## Guidelines
 
-1. **Planning**: For complex tasks, break them down into clear steps
+1. **Planning**: {planning_instruction}
 2. **Code Understanding**: Use semantic search to understand existing patterns before making changes
 3. **Safety**: Always read files before editing them to understand the context
 4. **Testing**: When possible, run tests after making changes
 5. **Explanations**: Explain your reasoning and approach clearly
 6. **Error Handling**: If a tool fails, analyze the error and try alternative approaches
+7. **Evidence**: Ground repository answers and plans in retrieved evidence and cite `file:line-line`
+8. **Verified changes**: After mutation, inspect the returned diff and run the smallest relevant check;
+   never claim success after a failed check
 
 ## Best Practices
 
