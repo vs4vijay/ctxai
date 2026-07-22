@@ -100,6 +100,7 @@ class Agent:
 
             # Call LLM
             try:
+                self.llm.validate_request(messages, tools)
                 response = self.llm.chat(messages, tools=tools)
 
                 if self.config.verbose:
@@ -219,6 +220,7 @@ class Agent:
 
             try:
                 # Use regular chat (simpler, more reliable)
+                self.llm.validate_request(messages, tools)
                 response = self.llm.chat(messages, tools=tools)
                 
                 # Stream the content if available

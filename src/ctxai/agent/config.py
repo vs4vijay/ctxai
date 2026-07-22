@@ -16,6 +16,8 @@ class AgentLLMConfig:
     api_key: str | None = None  # API key, will try env vars if None
     base_url: str | None = None  # Base URL (for Ollama, custom endpoints)
     fallback_providers: list[str] = field(default_factory=lambda: ["openrouter", "ollama"])
+    fallback_enabled: bool = False
+    allow_fallback_boundary_crossing: bool = False
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 60
@@ -56,6 +58,8 @@ class AgentLLMConfig:
             "provider": self.provider,
             "model": self.model,
             "fallback_providers": self.fallback_providers,
+            "fallback_enabled": self.fallback_enabled,
+            "allow_fallback_boundary_crossing": self.allow_fallback_boundary_crossing,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "timeout": self.timeout,
@@ -70,6 +74,10 @@ class AgentLLMConfig:
             model=data.get("model"),
             api_key=None,  # Always load from env
             fallback_providers=data.get("fallback_providers", ["openai", "ollama"]),
+            fallback_enabled=data.get("fallback_enabled", False),
+            allow_fallback_boundary_crossing=data.get(
+                "allow_fallback_boundary_crossing", False
+            ),
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 4096),
             timeout=data.get("timeout", 60),

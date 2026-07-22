@@ -112,6 +112,27 @@ class ProviderCapabilities:
     context_size: int = 100_000
 
 
+class ProviderErrorKind(str, Enum):
+    """Stable error categories shared by every provider."""
+
+    AUTHENTICATION = "authentication"
+    RATE_LIMIT = "rate_limit"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    UNSUPPORTED = "unsupported"
+    TRANSPORT = "transport"
+    INVALID_RESPONSE = "invalid_response"
+
+
+class ProviderError(RuntimeError):
+    """Provider-independent failure exposed to orchestration code."""
+
+    def __init__(self, kind: ProviderErrorKind, message: str, *, provider: str | None = None):
+        super().__init__(message)
+        self.kind = kind
+        self.provider = provider
+
+
 class BaseLLMProvider(ABC):
     """
     Abstract base class for LLM providers.
@@ -200,6 +221,60 @@ class BaseLLMProvider(ABC):
             tools=self.supports_function_calling(),
             streaming=self.__class__.stream_chat is not BaseLLMProvider.stream_chat,
         )
+
+    def validate_request(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None = None,
+        *,
+        stream: bool = False,
+        images: bool = False,
+        structured_output: bool = False,
+        cancel_event: Any = None,
+    ) -> None:
+        """Reject unsupported requests before a network or local model call."""
+        capabilities = self.get_capabilities()
+        requested = {
+            "tools": bool(tools),
+            "streaming": stream,
+            "images": images,
+            "structured_output": structured_output,
+        }
+        for feature, enabled in requested.items():
+            if enabled and not getattr(capabilities, feature):
+                raise ProviderError(
+                    ProviderErrorKind.UNSUPPORTED,
+                    f"{self.__class__.__name__} does not support {feature}",
+                )
+        if cancel_event is not None and cancel_event.is_set():
+            raise ProviderError(ProviderErrorKind.CANCELLED, "Provider request cancelled")
+        if not messages:
+            raise ValueError("At least one message is required")
+
+    def normalize_messages(
+        self, messages: list[Message] | list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Convert the public Message contract to an OpenAI-compatible wire form."""
+        if messages and isinstance(messages[0], Message):
+            return self._format_messages(messages)  # type: ignore[arg-type]
+        return messages  # type: ignore[return-value]
+
+    def normalize_error(self, error: Exception) -> ProviderError:
+        """Map transport-specific exceptions into stable failure categories."""
+        if isinstance(error, ProviderError):
+            return error
+        name = error.__class__.__name__.lower()
+        message = str(error)
+        lowered = message.lower()
+        if "auth" in name or "api key" in lowered or "unauthorized" in lowered:
+            kind = ProviderErrorKind.AUTHENTICATION
+        elif "rate" in name or "429" in lowered:
+            kind = ProviderErrorKind.RATE_LIMIT
+        elif "timeout" in name or "timed out" in lowered:
+            kind = ProviderErrorKind.TIMEOUT
+        else:
+            kind = ProviderErrorKind.TRANSPORT
+        return ProviderError(kind, message, provider=self.__class__.__name__)
 
     def _format_messages(self, messages: list[Message], format: str = "openai") -> list[dict[str, Any]]:
         """

@@ -11,7 +11,7 @@ from typing import Optional
 from openai import OpenAI
 
 from ..config import AgentLLMConfig
-from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
+from .base import BaseLLMProvider, LLMResponse, ToolCall
 
 
 class OpenAIProvider(BaseLLMProvider):
@@ -65,6 +65,8 @@ class OpenAIProvider(BaseLLMProvider):
         Returns:
             LLMResponse with content and tool calls
         """
+        self.validate_request(messages, tools)
+        messages = self.normalize_messages(messages)
         # Prepare request
         request_params = {
             "model": self.model,
@@ -126,6 +128,8 @@ class OpenAIProvider(BaseLLMProvider):
         Yields:
             Content chunks as they arrive
         """
+        self.validate_request(messages, tools, stream=True)
+        messages = self.normalize_messages(messages)
         # Prepare request
         request_params = {
             "model": self.model,
@@ -166,6 +170,15 @@ class OpenAIProvider(BaseLLMProvider):
         except ImportError:
             # Fallback to rough estimate
             return len(text) // 4
+
+    def get_default_model(self) -> str:
+        return "gpt-4o"
+
+    def supports_function_calling(self) -> bool:
+        return True
+
+    def requires_api_key(self) -> bool:
+        return True
 
     def __repr__(self) -> str:
         """String representation."""

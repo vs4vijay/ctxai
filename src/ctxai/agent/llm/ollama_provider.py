@@ -12,7 +12,7 @@ from typing import Optional
 import requests
 
 from ..config import AgentLLMConfig
-from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
+from .base import BaseLLMProvider, LLMResponse, ToolCall
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -70,6 +70,8 @@ class OllamaProvider(BaseLLMProvider):
         Returns:
             LLMResponse with content and tool calls
         """
+        self.validate_request(messages, tools)
+        messages = self.normalize_messages(messages)
         # Convert messages to Ollama format if needed
         ollama_messages = self._convert_messages(messages)
 
@@ -141,6 +143,8 @@ class OllamaProvider(BaseLLMProvider):
         Yields:
             Content chunks as they arrive
         """
+        self.validate_request(messages, tools, stream=True)
+        messages = self.normalize_messages(messages)
         # Convert messages
         ollama_messages = self._convert_messages(messages)
 
@@ -256,6 +260,15 @@ class OllamaProvider(BaseLLMProvider):
         except Exception:
             pass
         return []
+
+    def get_default_model(self) -> str:
+        return "codellama:13b"
+
+    def supports_function_calling(self) -> bool:
+        return True
+
+    def requires_api_key(self) -> bool:
+        return False
 
     def pull_model(self, model_name: str) -> bool:
         """

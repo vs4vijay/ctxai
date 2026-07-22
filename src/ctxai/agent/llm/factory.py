@@ -20,6 +20,32 @@ class LLMProviderFactory:
 
     @staticmethod
     def create_provider(config: AgentLLMConfig) -> BaseLLMProvider:
+        """Create one provider or an explicitly enabled fallback chain."""
+        primary = LLMProviderFactory._create_single(config)
+        if not config.fallback_enabled:
+            return primary
+
+        from .fallback import FallbackProvider
+
+        providers = [(config.provider.lower(), primary)]
+        for name in config.fallback_providers:
+            if name.lower() == config.provider.lower():
+                continue
+            fallback_config = AgentLLMConfig(
+                provider=name,
+                api_key=config.get_api_key_for_provider(name),
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+                timeout=config.timeout,
+            )
+            providers.append((name.lower(), LLMProviderFactory._create_single(fallback_config)))
+        return FallbackProvider(
+            providers,
+            allow_boundary_crossing=config.allow_fallback_boundary_crossing,
+        )
+
+    @staticmethod
+    def _create_single(config: AgentLLMConfig) -> BaseLLMProvider:
         """
         Create LLM provider based on configuration.
 
