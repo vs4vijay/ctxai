@@ -3,8 +3,8 @@ Vector database storage module using ChromaDB.
 Stores and retrieves code embeddings for semantic search.
 """
 
+import hashlib
 from pathlib import Path
-from typing import Optional
 
 import chromadb
 from chromadb.config import Settings
@@ -23,6 +23,12 @@ class VectorStore:
             storage_path: Path to store the ChromaDB database
             collection_name: Name of the collection (index name)
         """
+        # The canonical layout is <indexes_dir>/<collection_name>.  Accepting
+        # the parent directory here preserves the public constructor used by
+        # older callers without opening a second, empty database.
+        storage_path = Path(storage_path)
+        if storage_path.name != collection_name:
+            storage_path = storage_path / collection_name
         self.storage_path = storage_path
         self.collection_name = collection_name
 
@@ -49,7 +55,7 @@ class VectorStore:
         chunks: list[CodeChunk],
         embeddings: list[list[float]],
         batch_size: int = 100,
-    ):
+    ) -> None:
         """
         Add code chunks with their embeddings to the vector store.
 
@@ -67,19 +73,36 @@ class VectorStore:
             batch_embeddings = embeddings[i : i + batch_size]
 
             # Prepare data for ChromaDB
-            ids = [self._generate_chunk_id(chunk, i + j) for j, chunk in enumerate(batch_chunks)]
+            ids = [self._generate_chunk_id(chunk) for chunk in batch_chunks]
             documents = [chunk.content for chunk in batch_chunks]
             metadatas = [self._chunk_to_metadata(chunk) for chunk in batch_chunks]
 
             try:
-                self.collection.add(
+                self.collection.upsert(
                     ids=ids,
                     embeddings=batch_embeddings,
                     documents=documents,
                     metadatas=metadatas,
                 )
-            except Exception as e:
-                print(f"Error adding batch {i // batch_size}: {e}")
+            except Exception as exc:
+                raise VectorStoreWriteError(f"Failed to store batch {i // batch_size}: {exc}") from exc
+
+    def delete_files(self, file_paths: list[str]) -> None:
+        """Delete all chunks belonging to the supplied canonical paths."""
+        for file_path in file_paths:
+            try:
+                self.collection.delete(where={"file_path": file_path})
+            except Exception as exc:
+                raise VectorStoreWriteError(f"Failed to delete stale chunks for {file_path}: {exc}") from exc
+
+    def clear(self) -> None:
+        """Remove all chunks while keeping the collection available."""
+        try:
+            existing = self.collection.get(include=[])
+            if existing["ids"]:
+                self.collection.delete(ids=existing["ids"])
+        except Exception as exc:
+            raise VectorStoreWriteError(f"Failed to clear index '{self.collection_name}': {exc}") from exc
 
     def search(
         self,
@@ -99,9 +122,12 @@ class VectorStore:
             List of dictionaries containing chunk information and similarity scores
         """
         try:
+            count = self.collection.count()
+            if count == 0:
+                return []
             results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=n_results,
+                n_results=min(n_results, count),
                 where=filter_dict,
                 include=["documents", "metadatas", "distances"],
             )
@@ -121,9 +147,8 @@ class VectorStore:
 
             return formatted_results
 
-        except Exception as e:
-            print(f"Error searching vector store: {e}")
-            return []
+        except Exception as exc:
+            raise VectorStoreQueryError(f"Failed to search index '{self.collection_name}': {exc}") from exc
 
     def get_stats(self) -> dict:
         """
@@ -154,34 +179,33 @@ class VectorStore:
             return {
                 "total_chunks": count,
                 "unique_files": len(unique_files),
+                "total_files": len(unique_files),
                 "languages": languages,
                 "collection_name": self.collection_name,
             }
-        except Exception as e:
-            print(f"Error getting stats: {e}")
-            return {}
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to read index statistics: {exc}") from exc
 
     def delete_collection(self):
         """Delete the entire collection."""
         try:
             self.client.delete_collection(self.collection_name)
-        except Exception as e:
-            print(f"Error deleting collection: {e}")
+        except Exception as exc:
+            raise VectorStoreWriteError(f"Failed to delete index '{self.collection_name}': {exc}") from exc
 
-    def _generate_chunk_id(self, chunk: CodeChunk, index: int) -> str:
+    def _generate_chunk_id(self, chunk: CodeChunk) -> str:
         """
         Generate a unique ID for a chunk.
 
         Args:
             chunk: CodeChunk object
-            index: Global index of the chunk
-
         Returns:
             Unique string ID
         """
-        # Create ID from file path and line numbers
-        file_name = chunk.file_path.name
-        return f"{file_name}_{chunk.start_line}_{chunk.end_line}_{index}"
+        identity = "\0".join(
+            (str(chunk.file_path.resolve()), str(chunk.start_line), str(chunk.end_line), chunk.content)
+        )
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def _chunk_to_metadata(self, chunk: CodeChunk) -> dict[str, str]:
         """
@@ -206,3 +230,15 @@ class VectorStore:
             metadata[f"meta_{key}"] = str(value)
 
         return metadata
+
+
+class VectorStoreError(RuntimeError):
+    """Base class for persistent index failures."""
+
+
+class VectorStoreWriteError(VectorStoreError):
+    """Raised when a vector-store mutation fails."""
+
+
+class VectorStoreQueryError(VectorStoreError):
+    """Raised when a vector-store query fails."""

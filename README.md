@@ -158,8 +158,18 @@ The indexing process will:
 1. Traverse your codebase recursively (respecting .gitignore by default)
 2. Parse code using tree-sitter for semantic understanding
 3. Chunk code intelligently (functions, classes, etc.)
-4. Generate embeddings using OpenAI's embedding API
-5. Store in a local ChromaDB vector database (`.ctxai` directory)
+4. Generate embeddings locally by default (or use the configured provider)
+5. Persist vectors and a versioned manifest in `.ctxai/indexes/<name>`
+6. Reuse unchanged files and replace only changed or deleted file chunks on later runs
+
+Index writes are verified before the manifest is published. Inspect and manage indexes with:
+
+```bash
+ctxai indexes list
+ctxai indexes info my-index
+ctxai indexes doctor my-index
+ctxai indexes delete my-index
+```
 
 ### CLI Commands
 
@@ -180,6 +190,7 @@ ctxai --help
 **Code Search:**
 - `index` - Index a codebase for semantic search
 - `query` - Query an indexed codebase using natural language
+- `indexes` - List, inspect, diagnose, and delete persistent indexes
 - `dashboard` - Start the web dashboard for browsing and querying
 
 **Configuration:**

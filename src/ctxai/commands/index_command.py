@@ -1,18 +1,19 @@
-"""
-Index command implementation.
-Orchestrates the entire indexing pipeline: traversal, chunking, embedding, and storage.
-"""
+"""Durable, incremental code indexing workflow."""
 
-import platform
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-from ..chunking import CodeChunker
-from ..config import ConfigManager, EmbeddingConfig
+from ..chunking import CodeChunk, CodeChunker
+from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
+from ..index_manifest import SCHEMA_VERSION, IndexedFile, IndexManifest, get_repository_revision
 from ..size_validator import ProjectSizeLimitError, ProjectSizeValidator
 from ..traversal import CodeTraversal
 from ..utils import get_ctxai_home, get_indexes_dir, is_using_global_home
@@ -21,266 +22,196 @@ from ..vector_store import VectorStore
 console = Console(legacy_windows=False)
 
 
+class IndexingError(RuntimeError):
+    """Raised when an index cannot be completed reliably."""
+
+
+@dataclass(frozen=True)
+class IndexingResult:
+    index_name: str
+    storage_path: Path
+    files: int
+    chunks: int
+    embedded_chunks: int
+    unchanged_files: int
+    changed_files: int
+    deleted_files: int
+
+
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _embedding_identity(config, provider) -> tuple[str, str, int]:
+    model = config.model or getattr(provider, "model", None) or "default"
+    return config.provider, str(model), provider.get_dimension()
+
+
+def _validate_embeddings(embeddings: list[list[float]], expected: int, dimension: int) -> None:
+    if len(embeddings) != expected:
+        raise IndexingError(f"Embedding provider returned {len(embeddings)} vectors for {expected} chunks")
+    if any(len(vector) != dimension for vector in embeddings):
+        raise IndexingError(f"Embedding provider returned a vector with a dimension other than {dimension}")
+    if expected and any(not any(value != 0 for value in vector) for vector in embeddings):
+        raise IndexingError("Embedding provider returned an empty/zero vector; refusing to publish the index")
+
+
 def index_codebase(
     path: Path,
     index_name: str | None = None,
     include_patterns: list[str] | None = None,
     exclude_patterns: list[str] | None = None,
     follow_gitignore: bool = True,
-):
-    """
-    Index a codebase for semantic search.
-
-    Args:
-        path: Path to the codebase directory
-        index_name: Name for the index (uses config default if not provided)
-        include_patterns: File patterns to include
-        exclude_patterns: Additional patterns to exclude
-        follow_gitignore: Whether to respect .gitignore
-    """
+) -> IndexingResult:
+    """Build or deterministically update a persistent repository index."""
+    path = path.resolve()
     console.print("\n[bold blue][*] Starting codebase indexing...[/bold blue]\n")
-
-    # Setup .ctxai directory and load configuration
     ctxai_home = get_ctxai_home(path)
-
-    # Show where .ctxai is located
-    if is_using_global_home():
-        console.print(f"[dim]Using global CTXAI_HOME: {ctxai_home}[/dim]")
-    else:
-        console.print(f"[dim]Using project .ctxai: {ctxai_home}[/dim]")
+    label = "global CTXAI_HOME" if is_using_global_home() else "project .ctxai"
+    console.print(f"[dim]Using {label}: {ctxai_home}[/dim]")
 
     config_manager = ConfigManager(path)
     config = config_manager.load()
-
-    # Determine index name: use provided or fall back to config
-    if index_name is None:
-        index_name = config.index_name
-        if index_name is None:
-            # Default to "{project_name}-index" if nothing is configured
-            project_name = path.resolve().name
-            index_name = f"{project_name}-index"
-            console.print(f"[yellow]⚠[/yellow] No index name provided or configured, using '{index_name}'\n")
-        else:
-            console.print(f"[dim]Using configured index: {index_name}[/dim]")
-
-    # Update status to "indexing" at the start
-    config_manager.update_index_metadata(
-        index_name=index_name,
-        status="indexing",
-    )
-
-    console.print("[cyan]Initializing components...[/cyan]")
-
-    # Show embedding provider info
-    embedding_config = config.embedding
-    console.print(f"[dim]Embedding provider: {embedding_config.provider}[/dim]")
-    if embedding_config.model:
-        console.print(f"[dim]Model: {embedding_config.model}[/dim]")
+    index_name = index_name or config.index_name or f"{path.name}-index"
+    config_manager.update_index_metadata(index_name=index_name, status="indexing")
 
     try:
-        # Initialize components
+        embedding_provider = EmbeddingsFactory.create(config.embedding)
+        provider_name, model_name, dimension = _embedding_identity(config.embedding, embedding_provider)
+        indexes_dir = get_indexes_dir(path)
+        storage_path = indexes_dir / index_name
+        vector_store = VectorStore(storage_path, index_name)
+        manifest = IndexManifest.load_optional(storage_path)
+
+        if manifest and (
+            Path(manifest.repository_root) != path
+            or manifest.embedding_provider != provider_name
+            or manifest.embedding_model != model_name
+            or manifest.embedding_dimension != dimension
+            or manifest.schema_version != SCHEMA_VERSION
+        ):
+            raise IndexingError(
+                "Existing index identity does not match this repository or embedding model; "
+                "delete it before rebuilding"
+            )
+
         traversal = CodeTraversal(
             root_path=path,
             include_patterns=include_patterns,
             exclude_patterns=exclude_patterns,
             follow_gitignore=follow_gitignore,
         )
+        files = sorted((file.resolve() for file in traversal.traverse()), key=str)
+        if not files:
+            raise IndexingError("No files found to index; check include and exclude patterns")
 
-        index_config = config.indexing
-        chunker = CodeChunker(
-            max_chunk_size=index_config.chunk_size,
-            overlap=index_config.chunk_overlap,
-        )
-
-        # Initialize embedding provider
-        try:
-            embeddings_generator = EmbeddingsFactory.create(embedding_config)
-            console.print(f"[green][OK][/green] Embedding provider '{embedding_config.provider}' initialized\n")
-        except ImportError as e:
-            console.print(f"[red][X][/red] Error: {e}\n")
-            console.print(
-                f"[yellow]Tip:[/yellow] Install the required package for '{embedding_config.provider}' provider\n"
-            )
-            return
-        except ValueError as e:
-            console.print(f"[red][X][/red] Error: {e}\n")
-            if embedding_config.provider == "openai":
-                console.print(
-                    "[yellow]Tip:[/yellow] Set your OpenAI API key: [cyan]export OPENAI_API_KEY=your-key-here[/cyan]\n"
-                )
-                console.print(
-                    "Or switch to local embeddings by editing [cyan].ctxai/config.json[/cyan]:\n"
-                    '  "embedding": {"provider": "local"}\n'
-                )
-            return
-
-        # Storage path in .ctxai directory (respects CTXAI_HOME)
-        indexes_dir = get_indexes_dir(path)
-        storage_path = indexes_dir / index_name
-        vector_store = VectorStore(storage_path=storage_path, collection_name=index_name)
-
-        # Phase 1: Traverse and collect files
-        console.print("[bold cyan]Phase 1: Traversing codebase[/bold cyan]")
-
-        files_to_process = []
-        with Progress(
-            *([] if platform.system() == "Windows" else [SpinnerColumn()]),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Scanning files...", total=None)
-            for file_path in traversal.traverse():
-                files_to_process.append(file_path)
-                progress.update(task, description=f"Found {len(files_to_process)} files...")
-
-        console.print(f"[green][OK][/green] Found {len(files_to_process)} files to process\n")
-
-        if not files_to_process:
-            console.print("[yellow]⚠[/yellow] No files found to index. Check your include/exclude patterns.\n")
-            return
-
-        # Validate project size
-        console.print("[bold cyan]Validating project size...[/bold cyan]")
-        validator = ProjectSizeValidator(index_config)
-        project_stats = validator.analyze_files(files_to_process)
-
-        # Show summary
-        for line in validator.get_summary(project_stats):
-            console.print(f"[dim]{line}[/dim]")
-        console.print()
-
-        # Check limits
-        is_valid, messages = validator.validate(project_stats)
-        if messages:
-            for message in messages:
-                console.print(message)
-            console.print()
-
-        if not is_valid:
-            console.print(
-                "[red][X] Project exceeds size limits. "
-                "Please reduce the project size or adjust limits in .ctxai/config.json[/red]\n"
-            )
+        validator = ProjectSizeValidator(config.indexing)
+        project_stats = validator.analyze_files(files)
+        valid, messages = validator.validate(project_stats)
+        if not valid:
             raise ProjectSizeLimitError(messages)
+        oversized = {item[0].resolve() for item in project_stats.oversized_files}
+        files = [file for file in files if file not in oversized]
 
-        # Filter out oversized files
-        if project_stats.oversized_files:
-            oversized_set = {f[0] for f in project_stats.oversized_files}
-            files_to_process = [f for f in files_to_process if f not in oversized_set]
-            console.print(f"[yellow]⚠[/yellow] Skipped {len(oversized_set)} oversized file(s)\n")
+        hashes = {str(file): _file_hash(file) for file in files}
+        old_files = manifest.files if manifest else {}
+        changed = [file for file in files if hashes[str(file)] != getattr(old_files.get(str(file)), "sha256", None)]
+        unchanged_count = len(files) - len(changed)
+        deleted = sorted(set(old_files) - set(hashes))
 
-        # Phase 2: Chunk files
-        console.print("[bold cyan]Phase 2: Chunking code[/bold cyan]")
+        # A legacy database has no trustworthy file state, so rebuild it once.
+        if manifest is None and vector_store.get_stats()["total_chunks"]:
+            vector_store.clear()
 
-        all_chunks = []
+        chunker = CodeChunker(
+            max_chunk_size=config.indexing.chunk_size,
+            overlap=config.indexing.chunk_overlap,
+        )
+        chunks_by_file: dict[str, list[CodeChunk]] = {}
         with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+            BarColumn(), TaskProgressColumn(), console=console,
         ) as progress:
-            task = progress.add_task("Chunking files...", total=len(files_to_process))
-
-            for file_path in files_to_process:
+            task = progress.add_task("Chunking changed files...", total=len(changed))
+            for file in changed:
                 try:
-                    chunks = chunker.chunk_file(file_path)
-                    all_chunks.extend(chunks)
-                    progress.update(
-                        task,
-                        advance=1,
-                        description=f"Chunking files... ({len(all_chunks)} chunks so far)",
-                    )
-                except Exception as e:
-                    console.print(f"[red][X][/red] Error chunking {file_path}: {e}")
+                    chunks_by_file[str(file)] = chunker.chunk_file(file)
+                except Exception as exc:
+                    raise IndexingError(f"Failed to chunk {file}: {exc}") from exc
+                progress.update(task, advance=1)
 
-        console.print(f"[green][OK][/green] Created {len(all_chunks)} code chunks\n")
+        changed_chunks = [chunk for file in changed for chunk in chunks_by_file[str(file)]]
+        embeddings: list[list[float]] = []
+        batch_size = max(1, config.embedding.batch_size)
+        for offset in range(0, len(changed_chunks), batch_size):
+            batch = changed_chunks[offset : offset + batch_size]
+            try:
+                embeddings.extend(embedding_provider.generate_embeddings([chunk.content for chunk in batch]))
+            except Exception as exc:
+                raise IndexingError(f"Embedding generation failed: {exc}") from exc
+        _validate_embeddings(embeddings, len(changed_chunks), dimension)
 
-        if not all_chunks:
-            console.print("[yellow]⚠[/yellow] No chunks created. Nothing to index.\n")
-            return
+        # Mutate storage only after all changed content has valid embeddings.
+        vector_store.delete_files(deleted + [str(file) for file in changed])
+        vector_store.add_chunks(changed_chunks, embeddings)
+        stats = vector_store.get_stats()
 
-        # Phase 3: Generate embeddings
-        console.print("[bold cyan]Phase 3: Generating embeddings[/bold cyan]")
+        changed_paths = {str(file) for file in changed}
+        file_state = {
+            key: value for key, value in old_files.items() if key in hashes and key not in changed_paths
+        }
+        for file in changed:
+            file_state[str(file)] = IndexedFile(sha256=hashes[str(file)], chunks=len(chunks_by_file[str(file)]))
 
-        chunk_texts = [chunk.content for chunk in all_chunks]
+        expected_chunks = sum(item.chunks for item in file_state.values())
+        expected_stored_files = sum(item.chunks > 0 for item in file_state.values())
+        if stats["total_chunks"] != expected_chunks or stats["unique_files"] != expected_stored_files:
+            raise IndexingError(
+                "Index integrity check failed: stored counts do not match the files prepared for publication"
+            )
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Generating embeddings...", total=len(chunk_texts))
+        if manifest is None:
+            manifest = IndexManifest.create(
+                index_name=index_name,
+                repository_root=path,
+                embedding_provider=provider_name,
+                embedding_model=model_name,
+                embedding_dimension=dimension,
+            )
+        manifest.repository_revision = get_repository_revision(path)
+        manifest.updated_at = datetime.now(timezone.utc).isoformat()
+        manifest.files = file_state
+        manifest.file_count = len(file_state)
+        manifest.chunk_count = expected_chunks
+        manifest.save(storage_path)
 
-            # Process in batches to show progress
-            batch_size = 100
-            all_embeddings = []
-
-            for i in range(0, len(chunk_texts), batch_size):
-                batch = chunk_texts[i : i + batch_size]
-                try:
-                    batch_embeddings = embeddings_generator.generate_embeddings(batch)
-                    all_embeddings.extend(batch_embeddings)
-                    progress.update(task, advance=len(batch))
-                except Exception as e:
-                    console.print(f"[red][X][/red] Error generating embeddings: {e}")
-                    return
-
-        console.print(f"[green][OK][/green] Generated {len(all_embeddings)} embeddings\n")
-
-        # Phase 4: Store in vector database
-        console.print("[bold cyan]Phase 4: Storing in vector database[/bold cyan]")
-
-        with Progress(
-            *([] if platform.system() == "Windows" else [SpinnerColumn()]),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Storing embeddings...", total=None)
-            vector_store.add_chunks(all_chunks, all_embeddings)
-
-        console.print("[green][OK][/green] Stored embeddings in vector database\n")
-
-        # Print summary
-        vector_stats = vector_store.get_stats()
-        console.print("[bold green][OK] Indexing complete![/bold green]\n")
-        console.print("[bold]Summary:[/bold]")
-        console.print(f"  • Index name: [cyan]{index_name}[/cyan]")
-        console.print(f"  • Storage path: [cyan]{storage_path}[/cyan]")
-        console.print(f"  • Total files: [cyan]{len(files_to_process)}[/cyan]")
-        console.print(f"  • Total size: [cyan]{project_stats.total_size_mb:.2f} MB[/cyan]")
-        console.print(f"  • Total chunks: [cyan]{vector_stats.get('total_chunks', 0)}[/cyan]")
-        console.print(f"  • Unique files: [cyan]{vector_stats.get('unique_files', 0)}[/cyan]")
-
-        languages = vector_stats.get("languages", {})
-        if languages:
-            console.print(f"  • Languages: [cyan]{', '.join(languages.keys())}[/cyan]")
-
-        console.print()
-
-        # Update config with successful indexing metadata
         config_manager.update_index_metadata(
             index_name=index_name,
             status="completed",
-            files_count=len(files_to_process),
+            files_count=len(file_state),
             size_mb=project_stats.total_size_mb,
-            chunks_count=vector_stats.get("total_chunks", 0),
+            chunks_count=expected_chunks,
         )
-
-    except ProjectSizeLimitError:
-        # Already handled, just mark as failed
-        config_manager.update_index_metadata(
+        result = IndexingResult(
             index_name=index_name,
-            status="failed",
+            storage_path=storage_path,
+            files=len(file_state),
+            chunks=expected_chunks,
+            embedded_chunks=len(changed_chunks),
+            unchanged_files=unchanged_count,
+            changed_files=len(changed),
+            deleted_files=len(deleted),
         )
-        raise
-    except Exception as e:
-        # Mark indexing as failed
-        config_manager.update_index_metadata(
-            index_name=index_name,
-            status="failed",
+        console.print("[bold green][OK] Indexing complete![/bold green]")
+        console.print(
+            f"[dim]{result.files} files, {result.chunks} chunks; "
+            f"embedded {result.embedded_chunks} changed chunks, removed {result.deleted_files} stale files[/dim]\n"
         )
-        console.print(f"\n[red][X][/red] Indexing failed: {e}\n")
+        return result
+    except Exception:
+        config_manager.update_index_metadata(index_name=index_name, status="failed")
         raise

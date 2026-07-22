@@ -11,6 +11,80 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
+indexes_app = typer.Typer(help="Inspect and manage persistent code indexes")
+
+
+@indexes_app.command("list")
+def indexes_list(
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """List indexes and their repository, file, and chunk counts."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from .commands.indexes_command import list_indexes
+
+    manifests = list_indexes(project_path)
+    table = Table("Name", "Repository", "Files", "Chunks", "Updated")
+    for manifest in manifests:
+        table.add_row(
+            manifest.index_name,
+            manifest.repository_root,
+            str(manifest.file_count),
+            str(manifest.chunk_count),
+            manifest.updated_at,
+        )
+    Console().print(table)
+
+
+@indexes_app.command("info")
+def indexes_info(
+    name: str = typer.Argument(...),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Show the complete versioned manifest for an index."""
+    import json
+    from dataclasses import asdict
+
+    from .commands.indexes_command import get_index_info
+
+    typer.echo(json.dumps(asdict(get_index_info(name, project_path)), indent=2))
+
+
+@indexes_app.command("doctor")
+def indexes_doctor(
+    name: str = typer.Argument(...),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Check manifest, vector storage, and repository freshness."""
+    from .commands.indexes_command import doctor_index
+
+    health = doctor_index(name, project_path)
+    if health.healthy:
+        typer.echo(f"[OK] Index '{name}' is healthy")
+        return
+    for problem in health.problems:
+        typer.echo(f"[X] {problem}", err=True)
+    raise typer.Exit(code=1)
+
+
+@indexes_app.command("delete")
+def indexes_delete(
+    name: str = typer.Argument(...),
+    yes: bool = typer.Option(False, "--yes", help="Delete without interactive confirmation"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Permanently delete a named index."""
+    from .commands.indexes_command import delete_index
+
+    if not yes and not typer.confirm(f"Delete index '{name}'?"):
+        raise typer.Abort()
+    path = delete_index(name, project_path)
+    typer.echo(f"Deleted index '{name}' at {path}")
+
+
+app.add_typer(indexes_app, name="indexes")
+
 
 @app.callback()
 def main_callback(ctx: typer.Context):

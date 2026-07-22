@@ -1,0 +1,22 @@
+[
+  {"query":"agent iteration loop","expected_locations":["src/ctxai/agent/core.py"],"retrieved_locations":["src/ctxai/agent/core.py","src/ctxai/agent/context.py"]},
+  {"query":"conversation truncation","expected_locations":["src/ctxai/agent/context.py"],"retrieved_locations":["src/ctxai/agent/core.py","src/ctxai/agent/context.py"]},
+  {"query":"anthropic tool calls","expected_locations":["src/ctxai/agent/llm/anthropic_provider.py"],"retrieved_locations":["src/ctxai/agent/llm/anthropic_provider.py"]},
+  {"query":"provider factory","expected_locations":["src/ctxai/agent/llm/factory.py"],"retrieved_locations":["src/ctxai/agent/llm/base.py","src/ctxai/agent/llm/factory.py"]},
+  {"query":"bash command safety","expected_locations":["src/ctxai/agent/tools/bash_tool.py"],"retrieved_locations":["src/ctxai/agent/tools/bash_tool.py"]},
+  {"query":"read file tool","expected_locations":["src/ctxai/agent/tools/file_ops.py"],"retrieved_locations":["src/ctxai/agent/tools/file_ops.py"]},
+  {"query":"semantic code search","expected_locations":["src/ctxai/agent/tools/code_search.py"],"retrieved_locations":["src/ctxai/agent/tools/code_search.py"]},
+  {"query":"tool schema registry","expected_locations":["src/ctxai/agent/tools/registry.py"],"retrieved_locations":["src/ctxai/agent/tools/base.py","src/ctxai/agent/tools/registry.py"]},
+  {"query":"tree sitter chunks","expected_locations":["src/ctxai/chunking.py"],"retrieved_locations":["src/ctxai/chunking.py"]},
+  {"query":"embedding providers","expected_locations":["src/ctxai/embeddings.py"],"retrieved_locations":["src/ctxai/embeddings.py"]},
+  {"query":"gitignore traversal","expected_locations":["src/ctxai/traversal.py"],"retrieved_locations":["src/ctxai/traversal.py"]},
+  {"query":"project size limits","expected_locations":["src/ctxai/size_validator.py"],"retrieved_locations":["src/ctxai/config.py","src/ctxai/size_validator.py"]},
+  {"query":"persistent vector search","expected_locations":["src/ctxai/vector_store.py"],"retrieved_locations":["src/ctxai/vector_store.py"]},
+  {"query":"index cli workflow","expected_locations":["src/ctxai/commands/index_command.py"],"retrieved_locations":["src/ctxai/commands/index_command.py"]},
+  {"query":"query output formatting","expected_locations":["src/ctxai/commands/query_command.py"],"retrieved_locations":["src/ctxai/commands/query_command.py"]},
+  {"query":"mcp query tool","expected_locations":["src/ctxai/commands/server_command.py"],"retrieved_locations":["src/ctxai/server.py","src/ctxai/commands/server_command.py"]},
+  {"query":"dashboard index statistics","expected_locations":["src/ctxai/commands/dashboard_command.py"],"retrieved_locations":["src/ctxai/commands/dashboard_command.py"]},
+  {"query":"toml configuration","expected_locations":["src/ctxai/config.py"],"retrieved_locations":["src/ctxai/config.py"]},
+  {"query":"repository map","expected_locations":["src/ctxai/agent/repomap.py"],"retrieved_locations":["src/ctxai/agent/prompts.py","src/ctxai/agent/repomap.py"]},
+  {"query":"structured planning","expected_locations":["src/ctxai/agent/planning.py"],"retrieved_locations":["src/ctxai/agent/planning.py"]}
+]

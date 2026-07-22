@@ -13,6 +13,7 @@ from rich.table import Table
 
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
+from ..index_manifest import IndexManifest
 from ..utils import get_indexes_dir
 from ..vector_store import VectorStore
 
@@ -71,6 +72,21 @@ def query_codebase(
             return
 
         vector_store = VectorStore(storage_path=storage_path, collection_name=index_name)
+
+        # Manifests are mandatory for newly built indexes. Keep legacy indexes
+        # queryable so users can inspect or migrate them instead of losing data.
+        manifest = IndexManifest.load_optional(storage_path)
+        if manifest is not None:
+            configured_model = config.embedding.model or getattr(embeddings_generator, "model", None) or "default"
+            if (
+                manifest.embedding_provider != config.embedding.provider
+                or manifest.embedding_model != str(configured_model)
+                or manifest.embedding_dimension != embeddings_generator.get_dimension()
+            ):
+                raise ValueError(
+                    "The configured embedding provider/model does not match this index. "
+                    "Use the recorded manifest settings or rebuild the index."
+                )
 
         # Generate query embedding
         console.print("[cyan]Generating query embedding...[/cyan]")
@@ -161,6 +177,4 @@ def query_codebase(
 
     except Exception as e:
         console.print(f"[red][X] Error querying index: {e}[/red]\n")
-        import traceback
-
-        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise

@@ -11,53 +11,41 @@ TOML format only - more readable and maintainable.
 """
 
 import os
-import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+
+import tomlkit
 
 from .utils import get_ctxai_home
 
 if TYPE_CHECKING:
     pass
 
-# Try to import tomllib (Python 3.11+) or toml
-_tomllib: Any = None
-_toml: Any = None
-
-if sys.version_info >= (3, 11):
-    import tomllib as _tomllib
-
 try:
-    import toml as _toml  # type: ignore[import-not-found]
-except ImportError:
-    pass
+    import tomllib
+except ImportError:  # pragma: no cover - Python 3.10 compatibility
+    tomllib = None
 
 
 def _load_toml(path: Path) -> dict:
-    """Load TOML file, using tomllib or toml package."""
-    if _tomllib is not None:
+    """Load TOML using the standard library or the declared tomlkit fallback."""
+    if tomllib is not None:
         with open(path, "rb") as f:
-            return _tomllib.load(f)
-    elif _toml is not None:
-        with open(path, encoding="utf-8") as f:
-            return _toml.load(f)
-    else:
-        raise ImportError(
-            "TOML support requires Python 3.11+ (tomllib) or 'toml' package. "
-            "Install with: pip install toml"
-        )
+            return tomllib.load(f)
+    return dict(tomlkit.parse(path.read_text(encoding="utf-8")))
 
 
 def _save_toml(path: Path, data: dict) -> None:
-    """Save TOML file using toml package."""
-    if _toml is not None:
-        with open(path, "w", encoding="utf-8") as f:
-            _toml.dump(data, f)
-    else:
-        raise ImportError(
-            "TOML saving requires 'toml' package. Install with: pip install toml"
-        )
+    """Save TOML with the directly declared tomlkit dependency."""
+    def without_none(value):
+        if isinstance(value, dict):
+            return {key: without_none(item) for key, item in value.items() if item is not None}
+        if isinstance(value, list):
+            return [without_none(item) for item in value]
+        return value
+
+    path.write_text(tomlkit.dumps(without_none(data)), encoding="utf-8")
 
 
 # ============================================================================
@@ -375,13 +363,8 @@ class ConfigManager:
         # Ensure directory exists
         self.ctxai_home.mkdir(parents=True, exist_ok=True)
 
-        try:
-            data = self._config.to_dict()
-            
-            # Save TOML format only
-            _save_toml(self.config_path, data)
-        except Exception as e:
-            print(f"Warning: Could not save config to {self.config_path}: {e}")
+        data = self._config.to_dict()
+        _save_toml(self.config_path, data)
 
     # =========================================================================
     # Provider Configuration Methods
