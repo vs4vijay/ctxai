@@ -416,7 +416,7 @@ def chat(
         False,
         "--architect-editor",
         "-ae",
-        help="Use architect/editor pattern (better quality + lower cost)",
+        help="Experimental architect/editor mode (disabled pending benchmark evidence)",
     ),
     preset: str = typer.Option(
         "default",
@@ -578,6 +578,7 @@ def code(
         from .agent.tools.execution import ToolExecutionContext
         from .agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
         from .agent.tools.registry import ToolRegistry
+        from .agent.workflow import format_approval_prompt
 
         console = Console()
 
@@ -626,10 +627,7 @@ def code(
             max_iterations=max_iterations,
             verbose=verbose,
             approval_callback=(
-                lambda call: typer.confirm(
-                    f"Approve {call.name} on "
-                    f"{call.parameters.get('path') or call.parameters.get('file_path') or 'repository'}?"
-                )
+                lambda call: typer.confirm(format_approval_prompt(call))
             ),
         )
         agent = Agent(loop_config)

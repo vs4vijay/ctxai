@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -33,6 +35,48 @@ class FailureKind(str, Enum):
 
 
 ApprovalCallback = Callable[[ToolCall], bool]
+
+
+def format_approval_prompt(call: ToolCall) -> str:
+    """Render the exact action presented to a human approval callback."""
+    target = call.parameters.get("approval_target") or call.name
+    proposed_diff = call.parameters.get("proposed_diff")
+    prompt = f"Approve {call.name}: {target}?"
+    if proposed_diff:
+        prompt = f"Proposed diff:\n{proposed_diff}\n{prompt}"
+    return prompt
+
+
+@dataclass
+class PlannedAction:
+    """One measurable, evidence-backed action proposed by the model."""
+
+    action_id: str
+    description: str
+    tool: str
+    parameters: dict[str, Any]
+    evidence: list[str]
+    completion_criteria: str
+    status: str = "pending"
+    result: str | None = None
+
+    def matches(self, call: ToolCall) -> bool:
+        return self.tool == call.name and all(
+            call.parameters.get(key) == value for key, value in self.parameters.items()
+        )
+
+
+@dataclass
+class StructuredPlan:
+    goal: str
+    reasoning: str
+    actions: list[PlannedAction]
+
+    @property
+    def progress(self) -> str:
+        completed = sum(action.status == "completed" for action in self.actions)
+        failed = sum(action.status == "failed" for action in self.actions)
+        return f"{completed}/{len(self.actions)} completed, {failed} failed"
 
 
 def discover_verification_commands(project_root: Path) -> list[str]:
@@ -70,6 +114,9 @@ class TaskRun:
     failure_kind: FailureKind | None = None
     failure_message: str | None = None
     transitions: list[TaskState] = field(default_factory=lambda: [TaskState.UNDERSTAND])
+    plan_required: bool = False
+    plan: StructuredPlan | None = None
+    approvals: list[dict[str, Any]] = field(default_factory=list)
 
     MUTATION_TOOLS = frozenset({"write_file", "edit_file"})
     INSPECTION_TOOLS = frozenset({"read_file", "semantic_search", "grep", "glob", "list_files"})
@@ -78,6 +125,94 @@ class TaskRun:
 
     def __post_init__(self) -> None:
         self.project_root = Path(os.path.realpath(self.project_root))
+        self.plan_required = self.requires_plan(self.goal)
+
+    @staticmethod
+    def requires_plan(goal: str) -> bool:
+        """Classify requests whose scope, uncertainty, or risk merits a plan."""
+        normalized = goal.lower()
+        signals = (
+            "refactor", "migrate", "redesign", "across", "multiple files",
+            "end to end", "architecture", "breaking change", "delete", "remove all",
+            "security", "database", "dependency upgrade",
+        )
+        return any(signal in normalized for signal in signals)
+
+    def submit_plan(
+        self, *, goal: str, reasoning: str, actions: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Validate and store a task-specific plan grounded in inspected evidence."""
+        if not goal.strip() or not reasoning.strip() or not actions:
+            return self._deny(
+                FailureKind.INCOMPLETE_WORKFLOW,
+                "Plan requires a goal, reasoning, and at least one action",
+            )
+        planned: list[PlannedAction] = []
+        for index, item in enumerate(actions, start=1):
+            evidence = item.get("evidence") or []
+            criteria = str(item.get("completion_criteria", "")).strip()
+            tool = str(item.get("tool", "")).strip()
+            parameters = item.get("parameters") or {}
+            if not tool or not criteria or not evidence or not isinstance(parameters, dict):
+                return self._deny(
+                    FailureKind.INCOMPLETE_WORKFLOW,
+                    f"Plan action {index} requires tool, parameters, evidence, and completion criteria",
+                )
+            for citation in evidence:
+                match = re.fullmatch(r"(.+):(\d+)-(\d+)", str(citation))
+                if not match:
+                    return self._deny(
+                        FailureKind.INCOMPLETE_WORKFLOW,
+                        f"Invalid plan evidence citation: {citation}",
+                    )
+                path = Path(match.group(1)).expanduser()
+                if not path.is_absolute():
+                    path = self.project_root / path
+                if self.canonical(path) not in self.inspected_files:
+                    return self._deny(
+                        FailureKind.INCOMPLETE_WORKFLOW,
+                        f"Plan evidence was not inspected: {citation}",
+                    )
+            planned.append(PlannedAction(
+                action_id=str(item.get("action_id") or f"action-{index}"),
+                description=str(item.get("description", "")).strip() or f"Run {tool}",
+                tool=tool,
+                parameters=parameters,
+                evidence=[str(value) for value in evidence],
+                completion_criteria=criteria,
+            ))
+        self.plan = StructuredPlan(goal=goal.strip(), reasoning=reasoning.strip(), actions=planned)
+        self.failure_kind = None
+        self.failure_message = None
+        self.transition(TaskState.PLAN)
+        return {"success": True, "result": self.plan.progress}
+
+    def _planned_action(self, call: ToolCall) -> PlannedAction | None:
+        if self.plan is None:
+            return None
+        return next((action for action in self.plan.actions if action.matches(call)), None)
+
+    def _approval_call(self, call: ToolCall) -> ToolCall:
+        parameters = dict(call.parameters)
+        target_value = parameters.get("path") or parameters.get("file_path")
+        if call.name in self.MUTATION_TOOLS and target_value:
+            target = Path(str(target_value)).expanduser()
+            if not target.is_absolute():
+                target = self.project_root / target
+            before = target.read_text() if target.is_file() else ""
+            if call.name == "write_file":
+                after = str(parameters.get("content", ""))
+            else:
+                after = before.replace(
+                    str(parameters.get("old_text", "")),
+                    str(parameters.get("new_text", "")),
+                )
+            parameters["proposed_diff"] = "".join(difflib.unified_diff(
+                before.splitlines(keepends=True), after.splitlines(keepends=True),
+                fromfile=f"a/{target_value}", tofile=f"b/{target_value}",
+            ))
+        parameters["approval_target"] = target_value or parameters.get("command") or call.name
+        return ToolCall(id=call.id, name=call.name, parameters=parameters)
 
     @staticmethod
     def canonical(path: Path) -> Path:
@@ -116,15 +251,26 @@ class TaskRun:
         approval_callback: ApprovalCallback | None,
     ) -> dict[str, Any] | None:
         """Return a synthetic denial when a tool call violates workflow policy."""
-        if call.name not in self.MUTATION_TOOLS:
+        approval_tools = self.MUTATION_TOOLS | self.VERIFY_TOOLS
+        if call.name not in approval_tools:
             if call.name in self.INSPECTION_TOOLS:
                 self.transition(TaskState.RETRIEVE)
             elif call.name in self.VERIFY_TOOLS:
                 self.transition(TaskState.VERIFY)
             return None
 
-        if planning_enabled:
-            self.transition(TaskState.PLAN)
+        if planning_enabled and self.plan_required:
+            action = self._planned_action(call)
+            if self.plan is None:
+                return self._deny(
+                    FailureKind.INCOMPLETE_WORKFLOW,
+                    "Workflow denied: this complex or risky task requires submit_plan before execution",
+                )
+            if action is None:
+                return self._deny(
+                    FailureKind.INCOMPLETE_WORKFLOW,
+                    f"Workflow denied: {call.name} is not an exact action in the approved plan",
+                )
         target_value = call.parameters.get("path") or call.parameters.get("file_path")
         target = Path(str(target_value)).expanduser() if target_value else None
         if target is not None and not target.is_absolute():
@@ -138,16 +284,30 @@ class TaskRun:
             )
         if require_approval:
             self.transition(TaskState.APPROVE)
-            if approval_callback is None or not approval_callback(call):
+            approval_call = self._approval_call(call)
+            approved = approval_callback is not None and approval_callback(approval_call)
+            self.approvals.append({
+                "tool": call.name,
+                "parameters": approval_call.parameters,
+                "approved": approved,
+            })
+            if not approved:
                 return self._deny(
                     FailureKind.APPROVAL_DENIAL,
-                    f"Approval denied for {call.name}: {target_value}",
+                    f"Approval denied for {call.name}: {approval_call.parameters['approval_target']}",
                 )
         self.transition(TaskState.EXECUTE)
+        action = self._planned_action(call)
+        if action is not None:
+            action.status = "in_progress"
         return None
 
     def observe(self, call: ToolCall, result: dict[str, Any]) -> None:
         success = bool(result.get("success"))
+        action = self._planned_action(call)
+        if action is not None:
+            action.status = "completed" if success else "failed"
+            action.result = str(result.get("result") if success else result.get("error"))
         if not success:
             self.failure_kind = self.classify_failure(result, call.name)
             self.failure_message = str(result.get("error", "Unknown tool error"))
@@ -191,9 +351,19 @@ class TaskRun:
         return {"success": False, "result": None, "error": message, "error_type": kind.value}
 
     def can_succeed(self) -> bool:
+        plan_complete = self.plan is None or all(
+            action.status == "completed" for action in self.plan.actions
+        )
         if not self.mutated:
-            return self.failure_kind is None or self.failure_kind == FailureKind.RECOVERABLE_TOOL_ERROR
-        return self.diff_reviewed and bool(self.checks) and all(check.success for check in self.checks)
+            return plan_complete and (
+                self.failure_kind is None or self.failure_kind == FailureKind.RECOVERABLE_TOOL_ERROR
+            )
+        return (
+            plan_complete
+            and self.diff_reviewed
+            and bool(self.checks)
+            and all(check.success for check in self.checks)
+        )
 
     def final_report(self, model_summary: str) -> str:
         success = self.can_succeed()
@@ -222,10 +392,12 @@ class TaskRun:
             f"{check.command} ({'passed' if check.success else 'failed'})" for check in self.checks
         ) or "None"
         risks = "None identified" if success else (self.failure_message or "Task did not complete")
+        plan_text = self.plan.progress if self.plan is not None else "Not required"
         return (
             f"Status: {'succeeded' if success else 'failed'}\n"
             f"Changed files: {changed_text}\n"
             f"Checks run: {checks_text}\n"
+            f"Plan progress: {plan_text}\n"
             f"Outcome: {model_summary.strip() or 'No model summary provided.'}\n"
             f"Remaining risks: {risks}"
         )

@@ -16,6 +16,37 @@ from .prompts import get_system_prompt, get_tool_error_recovery_prompt
 from .tools.registry import ToolRegistry
 from .workflow import ApprovalCallback, TaskRun, discover_verification_commands
 
+PLAN_TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "submit_plan",
+        "description": "Submit an evidence-backed execution plan for a complex or risky task.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string"},
+                "reasoning": {"type": "string"},
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action_id": {"type": "string"},
+                            "description": {"type": "string"},
+                            "tool": {"type": "string"},
+                            "parameters": {"type": "object"},
+                            "evidence": {"type": "array", "items": {"type": "string"}},
+                            "completion_criteria": {"type": "string"},
+                        },
+                        "required": ["description", "tool", "parameters", "evidence", "completion_criteria"],
+                    },
+                },
+            },
+            "required": ["goal", "reasoning", "actions"],
+        },
+    },
+}
+
 
 @dataclass
 class AgentLoopConfig:
@@ -97,6 +128,8 @@ class Agent:
             tool_format = self._get_tool_format()
             capabilities = self.llm.get_capabilities()
             tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
+            if tools is not None and self.config.planning_enabled:
+                tools.append(self._plan_tool_schema(tool_format))
 
             # Call LLM
             try:
@@ -184,122 +217,12 @@ class Agent:
         return error_msg
 
     async def stream_message(self, user_message: str) -> AsyncGenerator[str, None]:
+        """Run the verified agent loop and yield its evidence-backed final report.
+
+        Tool-capable turns intentionally share the same workflow as non-streaming turns so
+        planning, approval, mutation, and verification policy cannot be bypassed by the UI.
         """
-        Process a user message with streaming response.
-        Yields response chunks as they arrive.
-
-        Args:
-            user_message: User's input message
-
-        Yields:
-            Response chunks as they arrive
-        """
-        # Add user message to context
-        self.context.add_user_message(user_message)
-
-        if self.config.verbose:
-            self.console.print(f"[dim]Processing: {user_message}[/dim]")
-
-        # Track consecutive failed tool calls
-        consecutive_tool_failures = 0
-        last_tool_results: list[str] = []
-
-        # Agent loop with tool calling
-        iteration = 0
-        while iteration < self.config.max_iterations:
-            if self.config.verbose:
-                self.console.print(f"[dim]Iteration {iteration + 1}/{self.config.max_iterations}[/dim]")
-
-            # Get messages for LLM
-            messages = self.context.get_messages_for_llm()
-
-            # Get tool schemas
-            tool_format = self._get_tool_format()
-            capabilities = self.llm.get_capabilities()
-            tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
-
-            try:
-                # Use regular chat (simpler, more reliable)
-                self.llm.validate_request(messages, tools)
-                response = self.llm.chat(messages, tools=tools)
-                
-                # Stream the content if available
-                if response.content:
-                    yield response.content
-
-                if self.config.verbose:
-                    self.console.print(f"[dim]Tool calls: {len(response.tool_calls)}[/dim]")
-
-                # Check if LLM wants to use tools
-                if response.has_tool_calls:
-                    # Add assistant message with tool calls
-                    self.context.add_assistant_message(
-                        response.content,
-                        tool_calls=response.tool_calls
-                    )
-
-                    # Execute tools
-                    tool_results = await self._execute_tools(response.tool_calls)
-
-                    # Add tool results to context
-                    current_results: list[str] = []
-                    for tool_call, result in zip(response.tool_calls, tool_results):
-                        result_text = self._format_tool_result(result)
-                        current_results.append(result_text)
-                        self.context.add_tool_result(
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.name,
-                            result=result_text
-                        )
-
-                    # Check if tools are failing repeatedly (stuck in loop)
-                    if current_results == last_tool_results and current_results:
-                        consecutive_tool_failures += 1
-                        if consecutive_tool_failures >= 2:
-                            if self.config.verbose:
-                                self.console.print("[yellow]⚠ Detected tool loop, breaking[/yellow]")
-                            yield "\n[Stuck in tool loop - please try a different approach]"
-                            return
-                    else:
-                        consecutive_tool_failures = 0
-                    
-                    last_tool_results = current_results
-                    iteration += 1
-                    continue
-
-                else:
-                    # No tool calls - this is the final response
-                    self.context.add_assistant_message(response.content)
-
-                    # Truncate context if needed
-                    self.context.truncate_old_messages()
-
-                    # Stop yielding
-                    return
-
-            except Exception as e:
-                error_msg = f"Error during agent loop: {str(e)}"
-                if self.config.verbose:
-                    self.console.print(f"[red]{error_msg}[/red]")
-                else:
-                    yield f"[Error: {str(e)}]"
-
-                # Try to recover
-                recovery_prompt = get_tool_error_recovery_prompt(
-                    tool_name="LLM",
-                    error=str(e),
-                    original_goal=user_message
-                )
-                self.context.add_user_message(recovery_prompt)
-                iteration += 1
-                continue
-
-        # Max iterations reached
-        error_msg = (
-            f"⚠ Max iterations ({self.config.max_iterations}) reached. "
-            "The task may be too complex or an error occurred."
-        )
-        yield error_msg
+        yield await self.process_message(user_message)
 
     async def _execute_tools(
         self, tool_calls: list[ToolCall], *, run: TaskRun | None = None
@@ -321,6 +244,12 @@ class Agent:
                 self.console.print(f"[dim]Parameters: {tool_call.parameters}[/dim]")
 
             try:
+                if tool_call.name == "submit_plan":
+                    result = run.submit_plan(**tool_call.parameters) if run is not None else {
+                        "success": False, "error": "Planning is unavailable for this run"
+                    }
+                    results.append(result)
+                    continue
                 denial = None
                 if run is not None:
                     denial = run.before_tool(
@@ -354,6 +283,14 @@ class Agent:
                     self.console.print(f"[red][X] {tool_call.name} exception: {str(e)}[/red]")
 
         return results
+
+    @staticmethod
+    def _plan_tool_schema(tool_format: str) -> dict:
+        schema = PLAN_TOOL_SCHEMA["function"]
+        if tool_format == "anthropic":
+            return {"name": schema["name"], "description": schema["description"],
+                    "input_schema": schema["parameters"]}
+        return PLAN_TOOL_SCHEMA
 
     def _format_tool_result(self, result: dict) -> str:
         """

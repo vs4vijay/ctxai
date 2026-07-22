@@ -102,6 +102,7 @@ from ..agent.tools.file_ops import (
 from ..agent.tools.execution import ToolExecutionContext
 from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
 from ..agent.tools.registry import ToolRegistry
+from ..agent.workflow import format_approval_prompt
 from ..repository_context import discover_repository_indexes
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -547,6 +548,12 @@ async def interactive_chat(
     config_manager = ConfigManager(working_directory)
     config = config_manager.load()
 
+    if architect_editor:
+        raise ValueError(
+            "Architect/editor mode is disabled until a benchmark demonstrates better "
+            "quality, latency, or cost than the validated single-model planning workflow."
+        )
+
     # Determine provider: CLI arg > config default
     if provider is None:
         provider = config.default_provider
@@ -677,11 +684,7 @@ async def interactive_chat(
         max_iterations=max_iterations,
         verbose=verbose,
         approval_callback=(
-            lambda call: Confirm.ask(
-                f"Approve {call.name} on "
-                f"{call.parameters.get('path') or call.parameters.get('file_path') or 'repository'}?",
-                default=False,
-            )
+            lambda call: Confirm.ask(format_approval_prompt(call), default=False)
         ),
     )
     agent = Agent(loop_config)

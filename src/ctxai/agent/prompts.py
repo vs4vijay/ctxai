@@ -26,7 +26,9 @@ def get_system_prompt(
     """
     indexes_str = ", ".join(available_indexes) if available_indexes else "None"
     planning_instruction = (
-        "State a concise, evidence-backed plan before the first mutation."
+        "For complex or risky work, inspect cited files and call submit_plan before execution. "
+        "Every action must name its exact tool parameters, `file:line-line` evidence, and a "
+        "measurable completion criterion."
         if planning_enabled
         else "Planning is disabled for this run; proceed directly from inspection to approved execution."
     )
