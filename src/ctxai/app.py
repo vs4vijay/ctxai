@@ -576,6 +576,8 @@ def code(
         from .agent.tools.code_search import SemanticSearchTool
         from .agent.tools.file_ops import EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool
         from .agent.tools.registry import ToolRegistry
+        from .agent.tools.execution import ToolExecutionContext
+        from .agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
 
         console = Console()
 
@@ -594,13 +596,21 @@ def code(
         agent_config = AgentConfig()
 
         tools = ToolRegistry(verbose=verbose)
-        tools.register(ReadFileTool())
-        tools.register(WriteFileTool())
-        tools.register(EditFileTool())
-        tools.register(ListFilesTool())
-        tools.register(GlobTool())
-        tools.register(GrepTool())
-        tools.register(BashTool(agent_config.tools))
+        execution_context = ToolExecutionContext.for_project(
+            Path.cwd(),
+            allow_outside_project=agent_config.tools.allow_outside_project,
+            timeout=agent_config.tools.bash_timeout,
+        )
+        tools.register(ReadFileTool(context=execution_context))
+        tools.register(WriteFileTool(context=execution_context))
+        tools.register(EditFileTool(context=execution_context))
+        tools.register(ListFilesTool(context=execution_context))
+        tools.register(GlobTool(context=execution_context))
+        tools.register(GrepTool(context=execution_context))
+        tools.register(BashTool(agent_config.tools, context=execution_context))
+        tools.register(GitStatusTool(context=execution_context))
+        tools.register(GitDiffTool(context=execution_context))
+        tools.register(GitLogTool(context=execution_context))
         tools.register(SemanticSearchTool())
 
         loop_config = AgentLoopConfig(

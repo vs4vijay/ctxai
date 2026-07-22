@@ -1,109 +1,106 @@
-"""
-Bash command execution tool.
-"""
+"""Policy-controlled command execution tool."""
+
+from __future__ import annotations
 
 import asyncio
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from ..config import AgentToolsConfig
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
+from .execution import Capability, ToolExecutionContext, coerce_context
 
 
 class BashTool(BaseTool):
-    """Tool for executing bash commands."""
+    """Execute a single command without invoking a shell."""
 
-    def __init__(self, config: AgentToolsConfig):
+    def __init__(
+        self,
+        config: AgentToolsConfig,
+        working_directory: str | Path | None = None,
+        *,
+        context: ToolExecutionContext | None = None,
+    ):
         super().__init__()
         self.config = config
+        self.context = coerce_context(
+            context,
+            working_directory,
+            timeout=config.bash_timeout,
+            allow_outside_project=config.allow_outside_project,
+        )
         self.timeout = config.bash_timeout
 
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="Execute a bash command and return output. Use for scripts, packages, git operations, etc.",
-            parameters=[
+            self.name,
+            "Execute one policy-approved command inside the repository (no shell operators).",
+            [
+                ToolParameter("command", ToolParameterType.STRING, "Command and arguments"),
                 ToolParameter(
-                    name="command",
-                    type=ToolParameterType.STRING,
-                    description="The bash command to execute",
-                    required=True
-                ),
-                ToolParameter(
-                    name="working_directory",
-                    type=ToolParameterType.STRING,
-                    description="Working directory for command execution (default: current directory)",
+                    "working_directory",
+                    ToolParameterType.STRING,
+                    "Contained working directory",
                     required=False,
-                    default="."
+                    default=".",
                 ),
-            ]
+            ],
         )
 
     async def execute(self, command: str, working_directory: str = ".") -> dict[str, Any]:
+        cwd: Path | None = None
         try:
-            # Check if command is allowed
-            if not self.config.is_bash_command_allowed(command):
-                return {
-                    "success": False,
-                    "result": None,
-                    "error": f"Command blocked for safety: {command}",
-                }
-
-            # Resolve working directory
-            cwd = Path(working_directory).resolve()
-            if not cwd.exists():
-                return {
-                    "success": False,
-                    "result": None,
-                    "error": f"Working directory not found: {working_directory}",
-                }
-
-            # Execute command
-            process = await asyncio.create_subprocess_shell(
-                command,
+            cwd = self.context.resolve_path(working_directory, must_exist=True)
+            if not cwd.is_dir():
+                raise ValueError(f"Not a directory: {working_directory}")
+            argv = self.context.approve_command(command)
+            if self.config.bash_allowed_commands is not None:
+                allowed = {Path(item).name for item in self.config.bash_allowed_commands}
+                if Path(argv[0]).name not in allowed:
+                    raise PermissionError(f"Command executable not allowlisted: {argv[0]}")
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=cwd,
+                env=self.context.command_environment(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(cwd)
             )
-
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=self.timeout
-                )
-
-                stdout_text = stdout.decode('utf-8', errors='replace')
-                stderr_text = stderr.decode('utf-8', errors='replace')
-
-                output = ""
-                if stdout_text:
-                    output += f"STDOUT:\n{stdout_text}"
-                if stderr_text:
-                    if output:
-                        output += "\n\n"
-                    output += f"STDERR:\n{stderr_text}"
-
-                success = process.returncode == 0
-
-                return {
-                    "success": success,
-                    "result": output or "(no output)",
-                    "error": None if success else f"Command failed with exit code {process.returncode}",
-                    "metadata": {
-                        "command": command,
-                        "working_directory": str(cwd),
-                        "exit_code": process.returncode,
-                    }
-                }
-
-            except asyncio.TimeoutError:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.timeout)
+            except TimeoutError:
                 process.kill()
-                return {
-                    "success": False,
-                    "result": None,
-                    "error": f"Command timed out after {self.timeout} seconds",
-                }
-
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
+                await process.communicate()
+                raise TimeoutError(f"Command timed out after {self.timeout} seconds")
+            output = stdout.decode(errors="replace")
+            error_output = stderr.decode(errors="replace")
+            success = process.returncode == 0
+            record = self.context.record(
+                tool=self.name,
+                action="command",
+                capability=Capability.COMMAND,
+                target=command,
+                success=success,
+                details={"cwd": str(cwd), "exit_code": process.returncode},
+            )
+            return {
+                "success": success,
+                "result": output,
+                "error": None if success else error_output or f"Exit code {process.returncode}",
+                "metadata": {
+                    "command": command,
+                    "working_directory": str(cwd),
+                    "exit_code": process.returncode,
+                    "stderr": error_output,
+                    "audit": record.__dict__,
+                },
+            }
+        except Exception as exc:
+            self.context.record(
+                tool=self.name,
+                action="command",
+                capability=Capability.COMMAND,
+                target=command,
+                success=False,
+                details={"cwd": str(cwd) if cwd else working_directory, "error": str(exc)},
+            )
+            return {"success": False, "result": None, "error": str(exc), "error_type": type(exc).__name__}

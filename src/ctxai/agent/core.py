@@ -128,7 +128,7 @@ class Agent:
                             if self.config.verbose:
                                 self.console.print("[yellow]! Detected tool loop, breaking[/yellow]")
                             return (
-                                f"I encountered an issue where the same tool "
+                                f"I stopped before the max iterations limit because the same tool "
                                 f"is being called repeatedly without progress. "
                                 f"Please try rephrasing your request or breaking "
                                 f"it into smaller steps.\n\n"

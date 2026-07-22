@@ -98,6 +98,8 @@ from ..agent.tools.file_ops import (
     WriteFileTool,
 )
 from ..agent.tools.registry import ToolRegistry
+from ..agent.tools.execution import ToolExecutionContext
+from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.styles import Style
@@ -634,13 +636,21 @@ async def interactive_chat(
 
     # Register tools
     tools = ToolRegistry(verbose=verbose)
-    tools.register(ReadFileTool())
-    tools.register(WriteFileTool())
-    tools.register(EditFileTool())
-    tools.register(ListFilesTool())
-    tools.register(GlobTool())
-    tools.register(GrepTool())
-    tools.register(BashTool(agent_config.tools))
+    execution_context = ToolExecutionContext.for_project(
+        working_directory,
+        allow_outside_project=agent_config.tools.allow_outside_project,
+        timeout=agent_config.tools.bash_timeout,
+    )
+    tools.register(ReadFileTool(context=execution_context))
+    tools.register(WriteFileTool(context=execution_context))
+    tools.register(EditFileTool(context=execution_context))
+    tools.register(ListFilesTool(context=execution_context))
+    tools.register(GlobTool(context=execution_context))
+    tools.register(GrepTool(context=execution_context))
+    tools.register(BashTool(agent_config.tools, context=execution_context))
+    tools.register(GitStatusTool(context=execution_context))
+    tools.register(GitDiffTool(context=execution_context))
+    tools.register(GitLogTool(context=execution_context))
     tools.register(SemanticSearchTool())
 
     # Get available indexes (if any)

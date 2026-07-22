@@ -1,457 +1,353 @@
-"""
-File operation tools for agent.
+"""Repository-rooted file operation tools."""
 
-Includes: read, write, edit, list, glob, grep
-"""
+from __future__ import annotations
 
-import glob as glob_module
-import os
+import difflib
 import re
 from pathlib import Path
-from typing import Any, Optional
-
-try:
-    import aiofiles
-    AIOFILES_AVAILABLE = True
-except ImportError:
-    AIOFILES_AVAILABLE = False
+from typing import Any
 
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
+from .execution import Capability, ToolExecutionContext, coerce_context
 
 
-class ReadFileTool(BaseTool):
-    """Tool for reading file contents."""
+def _failure(exc: Exception) -> dict[str, Any]:
+    return {"success": False, "result": None, "error": str(exc), "error_type": type(exc).__name__}
 
-    def __init__(self, max_file_size_mb: int = 10):
+
+def _diff(path: Path, before: str, after: str) -> str:
+    return "".join(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"a/{path.name}",
+            tofile=f"b/{path.name}",
+        )
+    )
+
+
+class ContextualFileTool(BaseTool):
+    def __init__(
+        self,
+        working_directory: str | Path | None = None,
+        *,
+        context: ToolExecutionContext | None = None,
+    ) -> None:
         super().__init__()
+        self.context = coerce_context(context, working_directory)
+
+
+class ReadFileTool(ContextualFileTool):
+    def __init__(
+        self,
+        max_file_size_mb: int = 10,
+        working_directory: str | Path | None = None,
+        *,
+        context: ToolExecutionContext | None = None,
+    ):
+        super().__init__(working_directory, context=context)
         self.max_file_size_mb = max_file_size_mb
 
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="Read the contents of a file. Returns file contents with line numbers.",
-            parameters=[
+            self.name,
+            "Read a repository file with line numbers.",
+            [
                 ToolParameter(
-                    name="file_path",
-                    type=ToolParameterType.STRING,
-                    description="Path to the file to read (absolute or relative)",
-                    required=True
+                    "file_path",
+                    ToolParameterType.STRING,
+                    "Repository-relative or contained absolute path",
+                    required=False,
                 ),
-                ToolParameter(
-                    name="start_line",
-                    type=ToolParameterType.INTEGER,
-                    description="Starting line number (1-indexed, optional)",
-                    required=False
-                ),
-                ToolParameter(
-                    name="end_line",
-                    type=ToolParameterType.INTEGER,
-                    description="Ending line number (inclusive, optional)",
-                    required=False
-                ),
-            ]
+                ToolParameter("path", ToolParameterType.STRING, "Legacy alias for file_path", required=False),
+                ToolParameter("start_line", ToolParameterType.INTEGER, "First line (1-indexed)", required=False),
+                ToolParameter("end_line", ToolParameterType.INTEGER, "Last line (inclusive)", required=False),
+            ],
         )
 
     async def execute(
-        self, file_path: str, start_line: int | None = None, end_line: int | None = None
+        self,
+        file_path: str | None = None,
+        path: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
     ) -> dict[str, Any]:
+        value = file_path or path
+        if not value:
+            return _failure(ValueError("file_path is required"))
         try:
-            path = Path(file_path).resolve()
-
-            if not path.exists():
-                return {"success": False, "result": None, "error": f"File not found: {file_path}"}
-
-            if not path.is_file():
-                return {"success": False, "result": None, "error": f"Not a file: {file_path}"}
-
-            # Check file size
-            size_mb = path.stat().st_size / (1024 * 1024)
-            if size_mb > self.max_file_size_mb:
-                return {
-                    "success": False,
-                    "result": None,
-                    "error": f"File too large: {size_mb:.2f}MB (max: {self.max_file_size_mb}MB)"
-                }
-
-            # Read file
-            if AIOFILES_AVAILABLE:
-                async with aiofiles.open(path, encoding='utf-8', errors='replace') as f:
-                    content = await f.read()
-            else:
-                with open(path, encoding='utf-8', errors='replace') as f:
-                    content = f.read()
-
-            lines = content.split('\n')
-
-            # Apply line range if specified
-            if start_line is not None or end_line is not None:
-                start_idx = (start_line - 1) if start_line else 0
-                end_idx = end_line if end_line else len(lines)
-                lines = lines[start_idx:end_idx]
-                start_num = start_line if start_line else 1
-            else:
-                start_num = 1
-
-            # Format with line numbers
-            numbered_lines = []
-            for i, line in enumerate(lines, start=start_num):
-                numbered_lines.append(f"{i:4d} | {line}")
-
-            result = "\n".join(numbered_lines)
-
+            resolved = self.context.resolve_path(value, must_exist=True)
+            if not resolved.is_file():
+                raise ValueError(f"Not a file: {value}")
+            size = resolved.stat().st_size
+            if size > self.max_file_size_mb * 1024 * 1024:
+                raise ValueError(f"File too large: {size / 1024 / 1024:.2f}MB (max: {self.max_file_size_mb}MB)")
+            lines = resolved.read_text(encoding="utf-8", errors="replace").split("\n")
+            if start_line is not None and start_line < 1:
+                raise ValueError("start_line must be at least 1")
+            if end_line is not None and start_line is not None and end_line < start_line:
+                raise ValueError("end_line must not be before start_line")
+            start = (start_line or 1) - 1
+            selected = lines[start:end_line]
             return {
                 "success": True,
-                "result": result,
+                "result": "\n".join(f"{i:4d} | {line}" for i, line in enumerate(selected, start=start + 1)),
                 "error": None,
                 "metadata": {
-                    "file_path": str(path),
+                    "file_path": str(resolved),
                     "total_lines": len(lines),
-                    "size_bytes": path.stat().st_size,
-                }
+                    "returned_lines": len(selected),
+                    "size_bytes": size,
+                },
             }
+        except Exception as exc:
+            return _failure(exc)
 
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
 
-
-class WriteFileTool(BaseTool):
-    """Tool for writing/creating files."""
-
-    def __init__(self, allow_overwrite: bool = True):
-        super().__init__()
+class WriteFileTool(ContextualFileTool):
+    def __init__(
+        self,
+        allow_overwrite: bool = True,
+        working_directory: str | Path | None = None,
+        *,
+        context: ToolExecutionContext | None = None,
+    ):
+        super().__init__(working_directory, context=context)
         self.allow_overwrite = allow_overwrite
 
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="Write content to a file. Creates the file if it doesn't exist, or overwrites if it does.",
-            parameters=[
+            self.name,
+            "Create or overwrite a repository file and return a unified diff.",
+            [
                 ToolParameter(
-                    name="file_path",
-                    type=ToolParameterType.STRING,
-                    description="Path to the file to write",
-                    required=True
+                    "file_path",
+                    ToolParameterType.STRING,
+                    "Repository-relative or contained absolute path",
+                    required=False,
                 ),
-                ToolParameter(
-                    name="content",
-                    type=ToolParameterType.STRING,
-                    description="Content to write to the file",
-                    required=True
-                ),
-            ]
+                ToolParameter("path", ToolParameterType.STRING, "Legacy alias for file_path", required=False),
+                ToolParameter("content", ToolParameterType.STRING, "Complete new contents"),
+            ],
         )
 
-    async def execute(self, file_path: str, content: str) -> dict[str, Any]:
+    async def execute(self, content: str, file_path: str | None = None, path: str | None = None) -> dict[str, Any]:
+        value = file_path or path
+        if not value:
+            return _failure(ValueError("file_path is required"))
+        resolved: Path | None = None
         try:
-            path = Path(file_path).resolve()
-
-            # Check if file exists and overwrite not allowed
-            if path.exists() and not self.allow_overwrite:
-                return {
-                    "success": False,
-                    "result": None,
-                    "error": f"File exists and overwrite not allowed: {file_path}"
-                }
-
-            # Create parent directories if needed
-            path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Write file
-            if AIOFILES_AVAILABLE:
-                async with aiofiles.open(path, 'w', encoding='utf-8') as f:
-                    await f.write(content)
-            else:
-                with open(path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-
-            lines = content.count('\n') + 1
-            size = len(content.encode('utf-8'))
-
+            resolved = self.context.resolve_path(value, capability=Capability.WORKSPACE_WRITE)
+            existed = resolved.exists()
+            if existed and not resolved.is_file():
+                raise ValueError(f"Not a file: {value}")
+            if existed and not self.allow_overwrite:
+                raise FileExistsError(f"File exists and overwrite not allowed: {value}")
+            before = resolved.read_text(encoding="utf-8", errors="replace") if existed else ""
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content, encoding="utf-8")
+            difference = _diff(resolved, before, content)
+            record = self.context.record(
+                tool=self.name,
+                action="write",
+                capability=Capability.WORKSPACE_WRITE,
+                target=str(resolved),
+                success=True,
+                details={"created": not existed, "diff": difference},
+            )
             return {
                 "success": True,
-                "result": f"Wrote {lines} lines ({size} bytes) to {path}",
+                "result": f"Wrote {len(content.encode())} bytes to {resolved}",
                 "error": None,
+                "diff": difference,
                 "metadata": {
-                    "file_path": str(path),
-                    "lines": lines,
-                    "size_bytes": size,
-                    "created": not path.exists(),
-                }
+                    "file_path": str(resolved),
+                    "created": not existed,
+                    "size_bytes": len(content.encode()),
+                    "audit": record.__dict__,
+                },
             }
+        except Exception as exc:
+            self.context.record(
+                tool=self.name,
+                action="write",
+                capability=Capability.WORKSPACE_WRITE,
+                target=str(resolved or value),
+                success=False,
+                details={"error": str(exc)},
+            )
+            return _failure(exc)
 
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
 
-
-class EditFileTool(BaseTool):
-    """Tool for editing files with search/replace."""
-
+class EditFileTool(ContextualFileTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="Edit a file by replacing old text with new text. Supports exact match or regex.",
-            parameters=[
+            self.name,
+            "Replace text in a repository file and return a unified diff.",
+            [
                 ToolParameter(
-                    name="file_path",
-                    type=ToolParameterType.STRING,
-                    description="Path to the file to edit",
-                    required=True
-                ),
-                ToolParameter(
-                    name="old_text",
-                    type=ToolParameterType.STRING,
-                    description="Text to search for (exact match or regex pattern)",
-                    required=True
-                ),
-                ToolParameter(
-                    name="new_text",
-                    type=ToolParameterType.STRING,
-                    description="Text to replace with",
-                    required=True
-                ),
-                ToolParameter(
-                    name="use_regex",
-                    type=ToolParameterType.BOOLEAN,
-                    description="Whether to use regex for matching (default: false)",
+                    "file_path",
+                    ToolParameterType.STRING,
+                    "Repository-relative or contained absolute path",
                     required=False,
-                    default=False
                 ),
-            ]
+                ToolParameter("path", ToolParameterType.STRING, "Legacy alias for file_path", required=False),
+                ToolParameter("old_text", ToolParameterType.STRING, "Text or regex to replace"),
+                ToolParameter("new_text", ToolParameterType.STRING, "Replacement text"),
+                ToolParameter(
+                    "use_regex",
+                    ToolParameterType.BOOLEAN,
+                    "Use regular expression matching",
+                    required=False,
+                    default=False,
+                ),
+            ],
         )
 
-    async def execute(self, file_path: str, old_text: str, new_text: str, use_regex: bool = False) -> dict[str, Any]:
+    async def execute(
+        self,
+        old_text: str,
+        new_text: str,
+        file_path: str | None = None,
+        path: str | None = None,
+        use_regex: bool = False,
+    ) -> dict[str, Any]:
+        value = file_path or path
+        if not value:
+            return _failure(ValueError("file_path is required"))
+        resolved: Path | None = None
         try:
-            path = Path(file_path).resolve()
-
-            if not path.exists():
-                return {"success": False, "result": None, "error": f"File not found: {file_path}"}
-
-            # Read file
-            if AIOFILES_AVAILABLE:
-                async with aiofiles.open(path, encoding='utf-8') as f:
-                    content = await f.read()
-            else:
-                with open(path, encoding='utf-8') as f:
-                    content = f.read()
-
-            # Perform replacement
+            resolved = self.context.resolve_path(value, capability=Capability.WORKSPACE_WRITE, must_exist=True)
+            if not resolved.is_file():
+                raise ValueError(f"Not a file: {value}")
+            before = resolved.read_text(encoding="utf-8")
             if use_regex:
-                new_content = re.sub(old_text, new_text, content)
-                count = len(re.findall(old_text, content))
+                after, count = re.subn(old_text, new_text, before)
             else:
-                count = content.count(old_text)
-                new_content = content.replace(old_text, new_text)
-
+                count = before.count(old_text)
+                after = before.replace(old_text, new_text)
             if count == 0:
-                return {
-                    "success": False,
-                    "result": None,
-                    "error": f"Pattern not found in file: {old_text}"
-                }
-
-            # Write back
-            if AIOFILES_AVAILABLE:
-                async with aiofiles.open(path, 'w', encoding='utf-8') as f:
-                    await f.write(new_content)
-            else:
-                with open(path, 'w', encoding='utf-8') as f:
-                    f.write(new_content)
-
+                raise ValueError("Pattern not found in file")
+            resolved.write_text(after, encoding="utf-8")
+            difference = _diff(resolved, before, after)
+            record = self.context.record(
+                tool=self.name,
+                action="edit",
+                capability=Capability.WORKSPACE_WRITE,
+                target=str(resolved),
+                success=True,
+                details={"replacements": count, "diff": difference},
+            )
             return {
                 "success": True,
-                "result": f"Replaced {count} occurrence(s) in {path}",
+                "result": f"Replaced {count} occurrence(s) in {resolved}",
                 "error": None,
-                "metadata": {
-                    "file_path": str(path),
-                    "replacements": count,
-                    "use_regex": use_regex,
-                }
+                "diff": difference,
+                "metadata": {"file_path": str(resolved), "replacements": count, "audit": record.__dict__},
             }
+        except Exception as exc:
+            self.context.record(
+                tool=self.name,
+                action="edit",
+                capability=Capability.WORKSPACE_WRITE,
+                target=str(resolved or value),
+                success=False,
+                details={"error": str(exc)},
+            )
+            return _failure(exc)
 
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
 
-
-class ListFilesTool(BaseTool):
-    """Tool for listing directory contents."""
-
+class ListFilesTool(ContextualFileTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="List files and directories in a directory.",
-            parameters=[
+            self.name,
+            "List a contained repository directory.",
+            [
+                ToolParameter("directory_path", ToolParameterType.STRING, "Directory path", required=False),
+                ToolParameter("directory", ToolParameterType.STRING, "Legacy alias for directory_path", required=False),
                 ToolParameter(
-                    name="directory_path",
-                    type=ToolParameterType.STRING,
-                    description="Path to the directory to list",
-                    required=True
+                    "show_hidden", ToolParameterType.BOOLEAN, "Include dotfiles", required=False, default=False
                 ),
-                ToolParameter(
-                    name="show_hidden",
-                    type=ToolParameterType.BOOLEAN,
-                    description="Whether to show hidden files (starting with .)",
-                    required=False,
-                    default=False
-                ),
-            ]
+            ],
         )
 
-    async def execute(self, directory_path: str, show_hidden: bool = False) -> dict[str, Any]:
+    async def execute(
+        self, directory_path: str | None = None, directory: str | None = None, show_hidden: bool = False
+    ) -> dict[str, Any]:
+        value = directory_path or directory or "."
         try:
-            path = Path(directory_path).resolve()
-
-            if not path.exists():
-                return {"success": False, "result": None, "error": f"Directory not found: {directory_path}"}
-
-            if not path.is_dir():
-                return {"success": False, "result": None, "error": f"Not a directory: {directory_path}"}
-
-            # List contents
-            entries = []
-            for item in sorted(path.iterdir()):
-                if not show_hidden and item.name.startswith('.'):
-                    continue
-
-                size = item.stat().st_size if item.is_file() else 0
-                entry_type = "dir" if item.is_dir() else "file"
-
-                entries.append({
-                    "name": item.name,
-                    "type": entry_type,
-                    "size": size,
-                    "path": str(item),
-                })
-
-            # Format result
-            lines = []
-            for entry in entries:
-                icon = "📁" if entry["type"] == "dir" else "📄"
-                size_str = f"{entry['size']:,} bytes" if entry["type"] == "file" else ""
-                lines.append(f"{icon} {entry['name']} {size_str}")
-
-            result = "\n".join(lines) if lines else "(empty directory)"
-
+            resolved = self.context.resolve_path(value, must_exist=True)
+            if not resolved.is_dir():
+                raise ValueError(f"Not a directory: {value}")
+            entries = [item for item in sorted(resolved.iterdir()) if show_hidden or not item.name.startswith(".")]
+            result = (
+                "\n".join(f"{'dir' if item.is_dir() else 'file'} {item.name}" for item in entries)
+                or "(empty directory)"
+            )
             return {
                 "success": True,
                 "result": result,
                 "error": None,
-                "metadata": {
-                    "directory_path": str(path),
-                    "total_entries": len(entries),
-                    "files": sum(1 for e in entries if e["type"] == "file"),
-                    "directories": sum(1 for e in entries if e["type"] == "dir"),
-                }
+                "metadata": {"directory_path": str(resolved), "total_entries": len(entries)},
             }
+        except Exception as exc:
+            return _failure(exc)
 
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
 
-
-class GlobTool(BaseTool):
-    """Tool for finding files matching patterns."""
-
+class GlobTool(ContextualFileTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="Find files matching a glob pattern (e.g., '**/*.py' for all Python files).",
-            parameters=[
+            self.name,
+            "Find repository files matching a glob.",
+            [
+                ToolParameter("pattern", ToolParameterType.STRING, "Glob pattern"),
                 ToolParameter(
-                    name="pattern",
-                    type=ToolParameterType.STRING,
-                    description="Glob pattern to match (e.g., '*.py', '**/*.js', 'src/**/*.ts')",
-                    required=True
+                    "base_path", ToolParameterType.STRING, "Contained base directory", required=False, default="."
                 ),
-                ToolParameter(
-                    name="base_path",
-                    type=ToolParameterType.STRING,
-                    description="Base directory to search from (default: current directory)",
-                    required=False,
-                    default="."
-                ),
-                ToolParameter(
-                    name="max_results",
-                    type=ToolParameterType.INTEGER,
-                    description="Maximum number of results to return (default: 100)",
-                    required=False,
-                    default=100
-                ),
-            ]
+                ToolParameter("max_results", ToolParameterType.INTEGER, "Maximum results", required=False, default=100),
+            ],
         )
 
     async def execute(self, pattern: str, base_path: str = ".", max_results: int = 100) -> dict[str, Any]:
         try:
-            base = Path(base_path).resolve()
-
-            if not base.exists():
-                return {"success": False, "result": None, "error": f"Base path not found: {base_path}"}
-
-            # Use glob to find matches
-            matches = []
+            base = self.context.resolve_path(base_path, must_exist=True)
+            matches: list[str] = []
             for match in base.glob(pattern):
-                matches.append(str(match.relative_to(base)))
+                safe = self.context.resolve_path(match, must_exist=True)
+                matches.append(str(safe.relative_to(base)))
                 if len(matches) >= max_results:
                     break
-
-            result = "\n".join(matches) if matches else "(no matches found)"
-
             return {
                 "success": True,
-                "result": result,
+                "result": "\n".join(matches) or "(no matches found)",
                 "error": None,
                 "metadata": {
                     "pattern": pattern,
                     "base_path": str(base),
                     "matches": len(matches),
                     "truncated": len(matches) >= max_results,
-                }
+                },
             }
+        except Exception as exc:
+            return _failure(exc)
 
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
 
-
-class GrepTool(BaseTool):
-    """Tool for searching file contents with regex."""
-
+class GrepTool(ContextualFileTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
-            name=self.name,
-            description="Search for text patterns in files using regex. Returns matching lines with context.",
-            parameters=[
+            self.name,
+            "Regex-search contained repository files.",
+            [
+                ToolParameter("pattern", ToolParameterType.STRING, "Regex pattern"),
+                ToolParameter("file_pattern", ToolParameterType.STRING, "File glob"),
                 ToolParameter(
-                    name="pattern",
-                    type=ToolParameterType.STRING,
-                    description="Regex pattern to search for",
-                    required=True
+                    "base_path", ToolParameterType.STRING, "Contained base directory", required=False, default="."
                 ),
                 ToolParameter(
-                    name="file_pattern",
-                    type=ToolParameterType.STRING,
-                    description="Glob pattern for files to search (e.g., '**/*.py')",
-                    required=True
+                    "case_insensitive", ToolParameterType.BOOLEAN, "Ignore case", required=False, default=False
                 ),
-                ToolParameter(
-                    name="base_path",
-                    type=ToolParameterType.STRING,
-                    description="Base directory to search from (default: current directory)",
-                    required=False,
-                    default="."
-                ),
-                ToolParameter(
-                    name="case_insensitive",
-                    type=ToolParameterType.BOOLEAN,
-                    description="Whether to perform case-insensitive search (default: false)",
-                    required=False,
-                    default=False
-                ),
-                ToolParameter(
-                    name="max_results",
-                    type=ToolParameterType.INTEGER,
-                    description="Maximum number of matches to return (default: 50)",
-                    required=False,
-                    default=50
-                ),
-            ]
+                ToolParameter("max_results", ToolParameterType.INTEGER, "Maximum matches", required=False, default=50),
+            ],
         )
 
     async def execute(
@@ -460,68 +356,30 @@ class GrepTool(BaseTool):
         file_pattern: str,
         base_path: str = ".",
         case_insensitive: bool = False,
-        max_results: int = 50
+        max_results: int = 50,
     ) -> dict[str, Any]:
         try:
-            base = Path(base_path).resolve()
-
-            if not base.exists():
-                return {"success": False, "result": None, "error": f"Base path not found: {base_path}"}
-
-            # Compile regex
-            flags = re.IGNORECASE if case_insensitive else 0
-            regex = re.compile(pattern, flags)
-
-            # Find files and search
-            matches = []
+            base = self.context.resolve_path(base_path, must_exist=True)
+            regex = re.compile(pattern, re.IGNORECASE if case_insensitive else 0)
+            matches: list[str] = []
             files_searched = 0
-
-            for file_path in base.glob(file_pattern):
-                if not file_path.is_file():
+            for candidate in base.glob(file_pattern):
+                path = self.context.resolve_path(candidate, must_exist=True)
+                if not path.is_file():
                     continue
-
                 files_searched += 1
-
-                try:
-                    with open(file_path, encoding='utf-8', errors='ignore') as f:
-                        for line_num, line in enumerate(f, 1):
-                            if regex.search(line):
-                                matches.append({
-                                    "file": str(file_path.relative_to(base)),
-                                    "line": line_num,
-                                    "content": line.rstrip(),
-                                })
-
-                                if len(matches) >= max_results:
-                                    break
-
-                except Exception:
-                    # Skip files that can't be read
-                    pass
-
+                for number, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                    if regex.search(line):
+                        matches.append(f"{path.relative_to(base)}:{number}: {line}")
+                        if len(matches) >= max_results:
+                            break
                 if len(matches) >= max_results:
                     break
-
-            # Format results
-            lines = []
-            for match in matches:
-                lines.append(f"{match['file']}:{match['line']}: {match['content']}")
-
-            result = "\n".join(lines) if lines else "(no matches found)"
-
             return {
                 "success": True,
-                "result": result,
+                "result": "\n".join(matches) or "(no matches found)",
                 "error": None,
-                "metadata": {
-                    "pattern": pattern,
-                    "file_pattern": file_pattern,
-                    "base_path": str(base),
-                    "matches": len(matches),
-                    "files_searched": files_searched,
-                    "truncated": len(matches) >= max_results,
-                }
+                "metadata": {"matches": len(matches), "files_searched": files_searched, "base_path": str(base)},
             }
-
-        except Exception as e:
-            return {"success": False, "result": None, "error": str(e)}
+        except Exception as exc:
+            return _failure(exc)
