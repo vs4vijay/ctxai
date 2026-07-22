@@ -6,12 +6,16 @@ and AI agents through the Model Context Protocol.
 """
 
 import asyncio
+import contextlib
 import logging
+import re
+import threading
+from functools import partial
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
 
     MCP_AVAILABLE = True
 except ImportError:
@@ -21,8 +25,11 @@ from rich.console import Console
 
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
+from ..index_manifest import IndexManifest
+from ..mcp_protocol import MCPErrorCode, failure, success
 from ..utils import get_indexes_dir
 from ..vector_store import VectorStore
+from .index_command import IndexingCancelled
 from .index_command import index_codebase as run_index
 
 # Setup logging to stderr (not stdout for STDIO servers)
@@ -34,6 +41,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 console = Console(stderr=True)  # Use stderr to avoid corrupting STDIO communication
+INDEX_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _valid_index_name(name: str) -> bool:
+    """Keep index lookups below the configured indexes directory."""
+    return bool(INDEX_NAME_PATTERN.fullmatch(name))
 
 
 def create_server(project_path: Path | None = None) -> "FastMCP":
@@ -53,19 +66,19 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
     mcp = FastMCP("ctxai")
 
     @mcp.tool()
-    async def list_indexes() -> str:
+    async def list_indexes() -> dict[str, Any]:
         """
         List all available code indexes with their statistics.
 
         Returns:
-            String containing list of indexes with chunk counts and paths
+            Versioned result containing indexes, chunk counts, and paths
         """
         try:
             logger.info("Listing indexes")
             indexes_dir = get_indexes_dir(project_path)
 
             if not indexes_dir.exists():
-                return "No indexes found. Create one using the index_codebase tool."
+                return success({"indexes": [], "count": 0})
 
             indexes = []
             for index_path in indexes_dir.iterdir():
@@ -74,40 +87,36 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
                         vector_store = VectorStore(storage_path=index_path, collection_name=index_path.name)
                         stats = vector_store.get_stats()
 
-                        indexes.append(
-                            {
-                                "name": index_path.name,
-                                "chunks": stats["total_chunks"],
-                                "path": str(index_path),
-                            }
-                        )
+                        manifest = IndexManifest.load_optional(index_path)
+                        indexes.append({
+                            "name": index_path.name,
+                            "chunks": stats["total_chunks"],
+                            "files": stats.get("unique_files", 0),
+                            "path": str(index_path),
+                            "index_schema_version": manifest.schema_version if manifest else None,
+                            "updated_at": manifest.updated_at if manifest else None,
+                        })
                     except Exception as e:
                         logger.warning(f"Could not load index {index_path.name}: {e}")
 
-            if not indexes:
-                return "No valid indexes found."
-
-            result = "Available indexes:\n\n"
-            for idx in indexes:
-                result += f"- **{idx['name']}**: {idx['chunks']:,} chunks\n"
-                result += f"  Path: {idx['path']}\n\n"
-
             logger.info(f"Found {len(indexes)} indexes")
-            return result
+            return success({"indexes": indexes, "count": len(indexes)})
 
         except Exception as e:
             error_msg = f"Error listing indexes: {e}"
             logger.error(error_msg)
-            return error_msg
+            return failure(MCPErrorCode.STORAGE_FAILED, error_msg)
 
     @mcp.tool()
     async def index_codebase(
         path: str,
         name: str,
+        ctx: Context,
         include_patterns: list[str] | None = None,
         exclude_patterns: list[str] | None = None,
         follow_gitignore: bool = True,
-    ) -> str:
+        timeout_seconds: int = 300,
+    ) -> dict[str, Any]:
         """
         Index a codebase for semantic search. Creates embeddings and stores them in a vector database.
 
@@ -117,31 +126,53 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             include_patterns: File patterns to include (e.g., ['*.py', '*.js'])
             exclude_patterns: Additional file patterns to exclude beyond .gitignore
             follow_gitignore: Follow .gitignore patterns when traversing (default: True)
+            timeout_seconds: Maximum indexing duration in seconds
 
         Returns:
-            Success message with index statistics
+            Versioned result with index statistics or a stable error
         """
         try:
             logger.info(f"Indexing codebase: path={path}, name={name}")
-            path_obj = Path(path)
+            if not _valid_index_name(name):
+                return failure(
+                    MCPErrorCode.INVALID_INPUT,
+                    "Index name must contain only letters, numbers, '.', '_' or '-'",
+                )
+            if timeout_seconds < 1 or timeout_seconds > 3600:
+                return failure(MCPErrorCode.INVALID_INPUT, "timeout_seconds must be between 1 and 3600")
+            path_obj = Path(path).expanduser().resolve()
 
             if not path_obj.exists():
-                return f"Error: Path does not exist: {path}"
+                return failure(MCPErrorCode.NOT_FOUND, f"Path does not exist: {path}")
 
             if not path_obj.is_dir():
-                return f"Error: Path is not a directory: {path}"
+                return failure(MCPErrorCode.INVALID_INPUT, f"Path is not a directory: {path}")
 
             # Run indexing in a thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                run_index,
-                path_obj,
-                name,
-                include_patterns,
-                exclude_patterns,
-                follow_gitignore,
+            loop = asyncio.get_running_loop()
+            cancel_event = threading.Event()
+
+            def progress(completed: int, total: int, message: str) -> None:
+                if ctx is not None:
+                    asyncio.run_coroutine_threadsafe(ctx.report_progress(completed, total, message), loop)
+
+            operation = partial(
+                run_index, path_obj, name, include_patterns, exclude_patterns, follow_gitignore,
+                progress_callback=progress, cancel_event=cancel_event,
             )
+            future = loop.run_in_executor(None, operation)
+            try:
+                indexing_result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout_seconds)
+            except TimeoutError:
+                cancel_event.set()
+                with contextlib.suppress(Exception):
+                    await future
+                return failure(MCPErrorCode.TIMEOUT, f"Indexing exceeded {timeout_seconds} seconds")
+            except asyncio.CancelledError:
+                cancel_event.set()
+                with contextlib.suppress(Exception):
+                    await future
+                raise
 
             # Get stats after indexing
             indexes_dir = get_indexes_dir(project_path)
@@ -149,20 +180,26 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             vector_store = VectorStore(storage_path=index_path, collection_name=name)
             stats = vector_store.get_stats()
 
-            result = f"[OK] Successfully indexed codebase '{name}'\n\n"
-            result += f"- Total chunks: {stats['total_chunks']:,}\n"
-            result += f"- Location: {index_path}\n"
-
             logger.info(f"Indexing complete: {stats['total_chunks']} chunks")
-            return result
+            return success({
+                "index_name": name,
+                "path": str(index_path),
+                "files": indexing_result.files,
+                "chunks": stats["total_chunks"],
+                "embedded_chunks": indexing_result.embedded_chunks,
+                "changed_files": indexing_result.changed_files,
+                "deleted_files": indexing_result.deleted_files,
+            }, message=f"Successfully indexed codebase '{name}'")
 
+        except IndexingCancelled:
+            return failure(MCPErrorCode.CANCELLED, "Indexing cancelled by client")
         except Exception as e:
             error_msg = f"Error indexing codebase: {e}"
             logger.error(error_msg, exc_info=True)
-            return error_msg
+            return failure(MCPErrorCode.INDEX_FAILED, error_msg)
 
     @mcp.tool()
-    async def query_codebase(index_name: str, query: str, n_results: int = 5) -> str:
+    async def query_codebase(index_name: str, query: str, n_results: int = 5) -> dict[str, Any]:
         """
         Query an indexed codebase using natural language. Returns relevant code chunks with metadata.
 
@@ -177,27 +214,31 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
         try:
             logger.info(f"Querying codebase: index={index_name}, query={query}")
 
-            # Validate n_results
+            if not _valid_index_name(index_name):
+                return failure(MCPErrorCode.INVALID_INPUT, "Invalid index name")
+            if not query.strip():
+                return failure(MCPErrorCode.INVALID_INPUT, "Query must not be empty")
             n_results = max(1, min(n_results, 20))
 
-            # Load configuration
-            config_manager = ConfigManager(project_path)
-            config = config_manager.load()
-
-            # Initialize embedding provider
-            embeddings_generator = EmbeddingsFactory.create(config.embedding)
-
-            # Load vector store
             indexes_dir = get_indexes_dir(project_path)
             index_path = indexes_dir / index_name
 
             if not index_path.exists():
-                return f"Error: Index '{index_name}' not found. Use list_indexes to see available indexes."
+                return failure(
+                    MCPErrorCode.NOT_FOUND,
+                    f"Index '{index_name}' not found. Use list_indexes to see available indexes.",
+                )
+
+            # Avoid provider initialization (which may involve network access) until
+            # the local request and target index have been validated.
+            config_manager = ConfigManager(project_path)
+            config = config_manager.load()
+            embeddings_generator = EmbeddingsFactory.create(config.embedding)
 
             vector_store = VectorStore(storage_path=index_path, collection_name=index_name)
 
             # Generate query embedding
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             query_embedding = await loop.run_in_executor(None, embeddings_generator.generate_embedding, query)
 
             # Search
@@ -207,43 +248,40 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             )
 
             if not results:
-                return f"No results found for query: {query}"
+                return success({"index_name": index_name, "query": query, "results": [], "count": 0})
 
-            # Format results
-            result_text = f'Found {len(results)} result(s) for: "{query}"\n\n'
-
-            for i, result in enumerate(results, 1):
+            formatted_results = []
+            for result in results:
                 metadata = result["metadata"]
                 content = result["content"]
                 distance = result["distance"]
                 similarity = max(0, 1 - distance)
-
-                file_path = Path(metadata["file_path"])
-
-                result_text += f"## Result {i} (Similarity: {similarity:.1%})\n\n"
-                result_text += f"**File:** {file_path}\n"
-                result_text += f"**Lines:** {metadata['start_line']}-{metadata['end_line']}\n"
-                result_text += f"**Type:** {metadata['chunk_type']} ({metadata['language']})\n\n"
-                result_text += "**Code:**\n```" + metadata.get("language", "text") + "\n"
-
-                # Limit content length
-                if len(content) > 500:
-                    result_text += content[:500] + "\n... (truncated)\n"
-                else:
-                    result_text += content + "\n"
-
-                result_text += "```\n\n"
+                formatted_results.append({
+                    "file_path": str(Path(metadata["file_path"])),
+                    "start_line": metadata["start_line"],
+                    "end_line": metadata["end_line"],
+                    "chunk_type": metadata["chunk_type"],
+                    "language": metadata["language"],
+                    "similarity": similarity,
+                    "content": content[:500],
+                    "truncated": len(content) > 500,
+                })
 
             logger.info(f"Query returned {len(results)} results")
-            return result_text
+            return success({
+                "index_name": index_name,
+                "query": query,
+                "results": formatted_results,
+                "count": len(formatted_results),
+            })
 
         except Exception as e:
             error_msg = f"Error querying codebase: {e}"
             logger.error(error_msg, exc_info=True)
-            return error_msg
+            return failure(MCPErrorCode.QUERY_FAILED, error_msg)
 
     @mcp.tool()
-    async def get_index_stats(index_name: str) -> str:
+    async def get_index_stats(index_name: str) -> dict[str, Any]:
         """
         Get detailed statistics about a specific index.
 
@@ -256,11 +294,13 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
         try:
             logger.info(f"Getting stats for index: {index_name}")
 
+            if not _valid_index_name(index_name):
+                return failure(MCPErrorCode.INVALID_INPUT, "Invalid index name")
             indexes_dir = get_indexes_dir(project_path)
             index_path = indexes_dir / index_name
 
             if not index_path.exists():
-                return f"Error: Index '{index_name}' not found."
+                return failure(MCPErrorCode.NOT_FOUND, f"Index '{index_name}' not found.")
 
             vector_store = VectorStore(storage_path=index_path, collection_name=index_name)
             stats = vector_store.get_stats()
@@ -268,18 +308,24 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             # Get additional info
             size_mb = sum(f.stat().st_size for f in index_path.rglob("*") if f.is_file()) / (1024 * 1024)
 
-            result = f"## Index: {index_name}\n\n"
-            result += f"- **Total chunks:** {stats['total_chunks']:,}\n"
-            result += f"- **Storage size:** {size_mb:.2f} MB\n"
-            result += f"- **Location:** {index_path}\n"
+            manifest = IndexManifest.load_optional(index_path)
 
             logger.info(f"Stats retrieved for {index_name}")
-            return result
+            return success({
+                "index_name": index_name,
+                "chunks": stats["total_chunks"],
+                "files": stats.get("unique_files", 0),
+                "storage_size_mb": round(size_mb, 3),
+                "path": str(index_path),
+                "index_schema_version": manifest.schema_version if manifest else None,
+                "repository_root": manifest.repository_root if manifest else None,
+                "updated_at": manifest.updated_at if manifest else None,
+            })
 
         except Exception as e:
             error_msg = f"Error getting index stats: {e}"
             logger.error(error_msg, exc_info=True)
-            return error_msg
+            return failure(MCPErrorCode.STORAGE_FAILED, error_msg)
 
     return mcp
 

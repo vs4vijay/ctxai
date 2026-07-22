@@ -8,7 +8,7 @@ readme = "README.md"
 license = "MIT"
 dependencies = [
     "chromadb>=0.5.0",
-    "mcp>=1.16.0,<2",
+    "mcp>=1.16.0,<1.17",
     "pathspec>=0.12.1",
     "prompt-toolkit>=3.0.48",
     "python-fasthtml>=0.9.3",
@@ -32,12 +32,12 @@ dashboard = [
     "python-fasthtml>=0.9.3",
 ]
 mcp = [
-    "mcp>=1.16.0",
+    "mcp>=1.16.0,<1.17",
 ]
 all = [
     "openai>=1.58.1",
     "python-fasthtml>=0.9.3",
-    "mcp>=1.16.0",
+    "mcp>=1.16.0,<1.17",
 ]
 
 [project.scripts]
@@ -55,7 +55,7 @@ dev = [
     "twine>=6.2.0",
 ]
 mcp = [
-    "mcp>=1.16.0",
+    "mcp>=1.16.0,<1.17",
 ]
 server = [
     "fastapi>=0.118.0",

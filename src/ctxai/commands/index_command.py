@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,13 @@ console = Console(legacy_windows=False)
 
 class IndexingError(RuntimeError):
     """Raised when an index cannot be completed reliably."""
+
+
+class IndexingCancelled(IndexingError):
+    """Raised when an indexing caller requests cooperative cancellation."""
+
+
+ProgressCallback = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -66,6 +75,8 @@ def index_codebase(
     include_patterns: list[str] | None = None,
     exclude_patterns: list[str] | None = None,
     follow_gitignore: bool = True,
+    progress_callback: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> IndexingResult:
     """Build or deterministically update a persistent repository index."""
     path = path.resolve()
@@ -79,7 +90,14 @@ def index_codebase(
     index_name = index_name or config.index_name or f"{path.name}-index"
     config_manager.update_index_metadata(index_name=index_name, status="indexing")
 
+    def report(completed: int, total: int, message: str, *, cancellation_boundary: bool = True) -> None:
+        if cancellation_boundary and cancel_event is not None and cancel_event.is_set():
+            raise IndexingCancelled("Indexing cancelled by client")
+        if progress_callback is not None:
+            progress_callback(completed, total, message)
+
     try:
+        report(0, 5, "Loading index configuration")
         embedding_provider = EmbeddingsFactory.create(config.embedding)
         provider_name, model_name, dimension = _embedding_identity(config.embedding, embedding_provider)
         indexes_dir = get_indexes_dir(path)
@@ -116,6 +134,7 @@ def index_codebase(
             raise ProjectSizeLimitError(messages)
         oversized = {item[0].resolve() for item in project_stats.oversized_files}
         files = [file for file in files if file not in oversized]
+        report(1, 5, f"Discovered {len(files)} files")
 
         hashes = {str(file): _file_hash(file) for file in files}
         old_files = manifest.files if manifest else {}
@@ -138,6 +157,7 @@ def index_codebase(
         ) as progress:
             task = progress.add_task("Chunking changed files...", total=len(changed))
             for file in changed:
+                report(1, 5, f"Chunking {file.name}")
                 try:
                     chunks_by_file[str(file)] = chunker.chunk_file(file)
                 except Exception as exc:
@@ -148,12 +168,14 @@ def index_codebase(
         embeddings: list[list[float]] = []
         batch_size = max(1, config.embedding.batch_size)
         for offset in range(0, len(changed_chunks), batch_size):
+            report(2, 5, f"Embedding chunks {offset + 1}-{min(offset + batch_size, len(changed_chunks))}")
             batch = changed_chunks[offset : offset + batch_size]
             try:
                 embeddings.extend(embedding_provider.generate_embeddings([chunk.content for chunk in batch]))
             except Exception as exc:
                 raise IndexingError(f"Embedding generation failed: {exc}") from exc
         _validate_embeddings(embeddings, len(changed_chunks), dimension)
+        report(3, 5, "Writing index storage")
 
         # Mutate storage only after all changed content has valid embeddings.
         vector_store.delete_files(deleted + [str(file) for file in changed])
@@ -173,6 +195,10 @@ def index_codebase(
             raise IndexingError(
                 "Index integrity check failed: stored counts do not match the files prepared for publication"
             )
+
+        # Once storage mutation starts, complete manifest publication so storage
+        # and metadata cannot be left at different revisions.
+        report(4, 5, "Publishing index manifest", cancellation_boundary=False)
 
         if manifest is None:
             manifest = IndexManifest.create(
@@ -211,6 +237,7 @@ def index_codebase(
             f"[dim]{result.files} files, {result.chunks} chunks; "
             f"embedded {result.embedded_chunks} changed chunks, removed {result.deleted_files} stale files[/dim]\n"
         )
+        report(5, 5, "Indexing complete", cancellation_boundary=False)
         return result
     except Exception:
         config_manager.update_index_metadata(index_name=index_name, status="failed")

@@ -1,281 +1,179 @@
-"""
-End-to-end tests for MCP server integration.
+"""VS-06 acceptance tests using a real MCP client/server transport."""
 
-Tests MCP server tools with real implementations.
-"""
+from __future__ import annotations
 
-from pathlib import Path
+import time
+from contextlib import asynccontextmanager
 from unittest.mock import patch
 
+import anyio
 import pytest
 
-# Skip all tests if MCP is not available
 pytest.importorskip("mcp", reason="MCP not installed")
 
+from mcp import ClientSession
+
+from ctxai.commands.index_command import IndexingCancelled
 from ctxai.commands.server_command import create_server
 
 
-@pytest.mark.e2e
-@pytest.mark.mcp
-@pytest.mark.asyncio
-async def test_mcp_server_lifecycle(temp_dir):
-    """
-    Test MCP server lifecycle.
-
-    Verifies:
-    1. Server can be created
-    2. Server has correct name
-    3. All expected tools are registered
-    4. Server can be used for tool calls
-    """
-    with patch("ctxai.commands.server_command.get_indexes_dir") as mock_get_indexes_dir:
-        indexes_dir = temp_dir / "indexes"
-        indexes_dir.mkdir(parents=True)
-        mock_get_indexes_dir.return_value = indexes_dir
-
-        # Create server
-        server = create_server(project_path=temp_dir)
-
-        # Verify server properties
-        assert server is not None
-        assert server.name == "ctxai"
-
-        # Verify all tools are registered
-        tool_names = [tool.name for tool in server._tool_manager._tools.values()]
-        expected_tools = ["list_indexes", "index_codebase", "query_codebase", "get_index_stats"]
-
-        for expected in expected_tools:
-            assert expected in tool_names, f"Tool {expected} should be registered"
-
-        assert len(tool_names) == 4, f"Expected 4 tools, got {len(tool_names)}: {tool_names}"
-
-
-@pytest.mark.e2e
-@pytest.mark.mcp
-@pytest.mark.asyncio
-async def test_mcp_list_indexes_tool(temp_dir):
-    """
-    Test MCP list_indexes tool.
-
-    Verifies:
-    1. Tool can list empty indexes directory
-    2. Tool can list multiple indexes
-    3. Tool returns correct stats for each index
-    """
-    with patch("ctxai.commands.server_command.get_indexes_dir") as mock_get_indexes_dir:
-        indexes_dir = temp_dir / "indexes"
-        indexes_dir.mkdir(parents=True)
-        mock_get_indexes_dir.return_value = indexes_dir
-
-        # Create server
-        server = create_server(project_path=temp_dir)
-
-        # Get the list_indexes tool
-        list_indexes_tool = None
-        for tool in server._tool_manager._tools.values():
-            if tool.name == "list_indexes":
-                list_indexes_tool = tool
-                break
-
-        assert list_indexes_tool is not None, "list_indexes tool should exist"
-
-        # Test with empty indexes directory
-        result = await list_indexes_tool.run()
-        assert isinstance(result, str)
-        assert "no indexes found" in result.lower() or "0 indexes" in result.lower()
-
-        # Create some fake index directories
-        (indexes_dir / "index1").mkdir()
-        (indexes_dir / "index2").mkdir()
-
-        # Test with indexes present
-        result = await list_indexes_tool.run()
-        assert isinstance(result, str)
-        # Should mention the indexes
-        assert "index1" in result or "index2" in result or "2" in result
-
-
-@pytest.mark.e2e
-@pytest.mark.mcp
-@pytest.mark.asyncio
-async def test_mcp_index_codebase_tool(sample_python_code, temp_dir, patch_embeddings_factory):
-    """
-    Test MCP index_codebase tool.
-
-    Verifies:
-    1. Tool can index a codebase
-    2. Index is created in correct location
-    3. Tool returns success message with stats
-    """
-    with patch("ctxai.commands.server_command.get_indexes_dir") as mock_get_indexes_dir:
-        indexes_dir = temp_dir / ".ctxai" / "indexes"
-        indexes_dir.mkdir(parents=True)
-        mock_get_indexes_dir.return_value = indexes_dir
-
-        # Create server
-        server = create_server(project_path=temp_dir)
-
-        # Get the index_codebase tool
-        index_tool = None
-        for tool in server._tool_manager._tools.values():
-            if tool.name == "index_codebase":
-                index_tool = tool
-                break
-
-        assert index_tool is not None, "index_codebase tool should exist"
-
-        # Index the sample codebase
-        result = await index_tool.run(
-            path=str(sample_python_code),
-            name="test-mcp-index",
-            include_patterns=["*.py"],
-            exclude_patterns=None,
-            follow_gitignore=False
+@asynccontextmanager
+async def connected_client(server, *, progress_callback=None):
+    """Connect the SDK client and low-level server over in-memory MCP streams."""
+    client_send, server_receive = anyio.create_memory_object_stream(20)
+    server_send, client_receive = anyio.create_memory_object_stream(20)
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(
+            server._mcp_server.run,
+            server_receive,
+            server_send,
+            server._mcp_server.create_initialization_options(),
         )
-
-        # Verify result
-        assert isinstance(result, str)
-        assert "success" in result.lower() or "indexed" in result.lower()
-        assert "chunks" in result.lower() or "files" in result.lower()
-
-        # Verify index was created
-        index_path = indexes_dir / "test-mcp-index"
-        assert index_path.exists(), f"Index should be created at {index_path}"
+        async with ClientSession(client_receive, client_send) as client:
+            await client.initialize()
+            yield client
+        tasks.cancel_scope.cancel()
 
 
-@pytest.mark.e2e
-@pytest.mark.mcp
-@pytest.mark.asyncio
-async def test_mcp_query_codebase_tool(indexed_codebase, temp_dir, patch_embeddings_factory):
-    """
-    Test MCP query_codebase tool.
-
-    Verifies:
-    1. Tool can query an existing index
-    2. Results are returned in correct format
-    3. Results contain expected code chunks
-    """
-    with patch("ctxai.commands.server_command.get_indexes_dir") as mock_get_indexes_dir:
-        indexes_dir = indexed_codebase["index_path"].parent
-        mock_get_indexes_dir.return_value = indexes_dir
-
-        # Create server
-        server = create_server(project_path=temp_dir)
-
-        # Get the query_codebase tool
-        query_tool = None
-        for tool in server._tool_manager._tools.values():
-            if tool.name == "query_codebase":
-                query_tool = tool
-                break
-
-        assert query_tool is not None, "query_codebase tool should exist"
-
-        # Query the index
-        result = await query_tool.run(
-            index_name="test-index",
-            query="function that greets",
-            n_results=3
-        )
-
-        # Verify result
-        assert isinstance(result, str)
-        assert len(result) > 0, "Result should not be empty"
-
-        # Should contain code-related content
-        # (exact content depends on sample code, but should have some structure)
-        assert "def" in result or "function" in result.lower() or "greet" in result.lower()
+async def call(client, name, arguments=None, *, progress_callback=None):
+    result = await client.call_tool(name, arguments or {}, progress_callback=progress_callback)
+    assert not result.isError
+    assert result.structuredContent is not None
+    assert result.structuredContent["schema_version"] == "1.0"
+    return result.structuredContent
 
 
 @pytest.mark.e2e
 @pytest.mark.mcp
 @pytest.mark.asyncio
-async def test_mcp_get_index_stats_tool(indexed_codebase, temp_dir):
-    """
-    Test MCP get_index_stats tool.
-
-    Verifies:
-    1. Tool can get stats for existing index
-    2. Stats include expected fields (total_chunks, total_files, etc.)
-    3. Stats are accurate
-    """
-    with patch("ctxai.commands.server_command.get_indexes_dir") as mock_get_indexes_dir:
-        indexes_dir = indexed_codebase["index_path"].parent
-        mock_get_indexes_dir.return_value = indexes_dir
-
-        # Create server
-        server = create_server(project_path=temp_dir)
-
-        # Get the get_index_stats tool
-        stats_tool = None
-        for tool in server._tool_manager._tools.values():
-            if tool.name == "get_index_stats":
-                stats_tool = tool
-                break
-
-        assert stats_tool is not None, "get_index_stats tool should exist"
-
-        # Get stats
-        result = await stats_tool.run(index_name="test-index")
-
-        # Verify result
-        assert isinstance(result, str)
-        assert "chunks" in result.lower()
-        assert "files" in result.lower()
-
-        # Should have positive numbers
-        assert any(char.isdigit() for char in result), "Stats should contain numbers"
-
-        # Test with non-existent index
-        result_nonexistent = await stats_tool.run(index_name="nonexistent-index")
-        assert isinstance(result_nonexistent, str)
-        assert "not found" in result_nonexistent.lower() or "error" in result_nonexistent.lower()
+async def test_real_client_discovers_every_versioned_tool(temp_dir):
+    with patch("ctxai.commands.server_command.get_indexes_dir", return_value=temp_dir / "indexes"):
+        async with connected_client(create_server(temp_dir)) as client:
+            tools = await client.list_tools()
+            names = {tool.name for tool in tools.tools}
+            assert names == {"list_indexes", "index_codebase", "query_codebase", "get_index_stats"}
+            timeout_schema = next(tool for tool in tools.tools if tool.name == "index_codebase").inputSchema
+            assert timeout_schema["properties"]["timeout_seconds"]["default"] == 300
+            result = await call(client, "list_indexes")
+            assert result == {"schema_version": "1.0", "ok": True, "data": {"indexes": [], "count": 0}}
 
 
 @pytest.mark.e2e
 @pytest.mark.mcp
 @pytest.mark.asyncio
-async def test_mcp_server_tool_error_handling(temp_dir):
-    """
-    Test MCP server tools handle errors gracefully.
+async def test_real_client_indexes_queries_and_inspects(
+    sample_python_code, temp_dir, patch_embeddings_factory
+):
+    indexes_dir = temp_dir / ".ctxai" / "indexes"
+    indexes_dir.mkdir(parents=True)
+    progress = []
 
-    Verifies:
-    1. Tools return error messages instead of raising exceptions
-    2. Error messages are informative
-    3. Server remains functional after errors
-    """
-    with patch("ctxai.commands.server_command.get_indexes_dir") as mock_get_indexes_dir:
-        indexes_dir = temp_dir / "indexes"
-        indexes_dir.mkdir(parents=True)
-        mock_get_indexes_dir.return_value = indexes_dir
+    async def record_progress(value, total, message):
+        progress.append((value, total, message))
 
-        # Create server
-        server = create_server(project_path=temp_dir)
+    with patch("ctxai.commands.server_command.get_indexes_dir", return_value=indexes_dir):
+        async with connected_client(create_server(temp_dir)) as client:
+            indexed = await call(
+                client,
+                "index_codebase",
+                {
+                    "path": str(sample_python_code),
+                    "name": "test-mcp-index",
+                    "include_patterns": ["*.py"],
+                    "follow_gitignore": False,
+                },
+                progress_callback=record_progress,
+            )
+            assert indexed["ok"]
+            assert indexed["data"]["chunks"] > 0
+            assert indexed["data"]["files"] > 0
+            assert progress
+            assert progress[-1][0:2] == (5.0, 5.0)
 
-        # Get query tool
-        query_tool = None
-        for tool in server._tool_manager._tools.values():
-            if tool.name == "query_codebase":
-                query_tool = tool
-                break
+            listed = await call(client, "list_indexes")
+            assert listed["data"]["indexes"][0]["name"] == "test-mcp-index"
+            assert listed["data"]["indexes"][0]["index_schema_version"] == 1
 
-        # Try to query non-existent index
-        result = await query_tool.run(
-            index_name="nonexistent",
-            query="test query",
-            n_results=5
-        )
+            queried = await call(
+                client,
+                "query_codebase",
+                {"index_name": "test-mcp-index", "query": "function that greets", "n_results": 3},
+            )
+            assert queried["ok"]
+            assert queried["data"]["count"] > 0
+            first = queried["data"]["results"][0]
+            assert {"file_path", "start_line", "end_line", "content", "similarity"} <= first.keys()
 
-        # Should return error message, not raise exception
-        assert isinstance(result, str)
-        assert "not found" in result.lower() or "error" in result.lower()
+            stats = await call(client, "get_index_stats", {"index_name": "test-mcp-index"})
+            assert stats["ok"]
+            assert stats["data"]["chunks"] == indexed["data"]["chunks"]
+            assert stats["data"]["index_schema_version"] == 1
 
-        # Server should still be functional - list indexes should work
-        list_tool = None
-        for tool in server._tool_manager._tools.values():
-            if tool.name == "list_indexes":
-                list_tool = tool
-                break
 
-        result_list = await list_tool.run()
-        assert isinstance(result_list, str)  # Should work fine
+@pytest.mark.e2e
+@pytest.mark.mcp
+@pytest.mark.asyncio
+async def test_invalid_inputs_have_stable_error_codes(temp_dir):
+    indexes_dir = temp_dir / "indexes"
+    indexes_dir.mkdir()
+    with patch("ctxai.commands.server_command.get_indexes_dir", return_value=indexes_dir):
+        async with connected_client(create_server(temp_dir)) as client:
+            missing = await call(
+                client, "query_codebase", {"index_name": "missing", "query": "anything"}
+            )
+            assert missing["ok"] is False
+            assert missing["error"]["code"] == "not_found"
+
+            traversal = await call(client, "get_index_stats", {"index_name": "../escape"})
+            assert traversal["ok"] is False
+            assert traversal["error"]["code"] == "invalid_input"
+
+            empty = await call(client, "query_codebase", {"index_name": "missing", "query": " "})
+            assert empty["error"]["code"] == "invalid_input"
+
+
+@pytest.mark.e2e
+@pytest.mark.mcp
+@pytest.mark.asyncio
+async def test_index_timeout_is_cooperative_and_deterministic(temp_dir):
+    indexes_dir = temp_dir / "indexes"
+    indexes_dir.mkdir()
+
+    def wait_until_cancelled(*args, cancel_event, **kwargs):
+        while not cancel_event.wait(0.01):
+            time.sleep(0.001)
+        raise IndexingCancelled("cancelled")
+
+    with (
+        patch("ctxai.commands.server_command.get_indexes_dir", return_value=indexes_dir),
+        patch("ctxai.commands.server_command.run_index", side_effect=wait_until_cancelled),
+    ):
+        async with connected_client(create_server(temp_dir)) as client:
+            result = await call(
+                client,
+                "index_codebase",
+                {"path": str(temp_dir), "name": "timeout-index", "timeout_seconds": 1},
+            )
+            assert result["ok"] is False
+            assert result["error"]["code"] == "timeout"
+            assert not (indexes_dir / "timeout-index" / "manifest.json").exists()
+
+
+@pytest.mark.e2e
+@pytest.mark.mcp
+@pytest.mark.asyncio
+async def test_cooperative_cancellation_has_stable_error(temp_dir):
+    indexes_dir = temp_dir / "indexes"
+    indexes_dir.mkdir()
+    with (
+        patch("ctxai.commands.server_command.get_indexes_dir", return_value=indexes_dir),
+        patch("ctxai.commands.server_command.run_index", side_effect=IndexingCancelled("cancelled")),
+    ):
+        async with connected_client(create_server(temp_dir)) as client:
+            result = await call(
+                client,
+                "index_codebase",
+                {"path": str(temp_dir), "name": "cancelled-index"},
+            )
+            assert result["ok"] is False
+            assert result["error"]["code"] == "cancelled"
