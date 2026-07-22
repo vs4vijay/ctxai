@@ -10,16 +10,14 @@ Supports multi-provider configuration:
 - ctxai config --set providers.custom.base_url https://api.us-west-2.modal.direct/v1
 """
 
-import json
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from ..config import ConfigManager
-from ..utils import get_ctxai_home, is_using_global_home
+from ..utils import is_using_global_home
 
 console = Console(legacy_windows=False)
 
@@ -35,7 +33,6 @@ def list_config(project_path: Path | None = None):
     config = config_manager.load()
 
     # Show where config is located
-    ctxai_home = get_ctxai_home(project_path)
     if is_using_global_home():
         console.print(f"[dim]Global config: {config_manager.config_path}[/dim]\n")
     else:
@@ -102,7 +99,7 @@ def list_config(project_path: Path | None = None):
         model_str = pconfig.model or "[dim]default[/dim]"
         base_url_str = pconfig.base_url or "[dim]-[/dim]"
         api_key_str = "***" if pconfig.api_key else "[dim]-[/dim]"
-        
+
         # Highlight default provider
         if name == config.default_provider:
             name_str = f"[bold]{name}[/bold] [dim](default)[/dim]"
@@ -255,7 +252,9 @@ def set_config(key: str, value: str, project_path: Path | None = None):
             if section == "embedding":
                 if not hasattr(config.embedding, setting):
                     console.print(f"[red][X][/red] Unknown embedding setting: '{setting}'\n")
-                    console.print("[yellow]Available settings:[/yellow] provider, model, api_key, batch_size, max_tokens\n")
+                    console.print(
+                        "[yellow]Available settings:[/yellow] provider, model, api_key, batch_size, max_tokens\n"
+                    )
                     return
 
                 # Convert value

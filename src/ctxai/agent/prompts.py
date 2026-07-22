@@ -2,7 +2,6 @@
 System prompts and templates for agent.
 """
 
-import os
 from pathlib import Path
 
 

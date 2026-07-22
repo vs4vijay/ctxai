@@ -4,9 +4,6 @@ End-to-end tests for agent workflows with tool execution.
 Tests the agent loop with real tool execution but mocked LLM responses.
 """
 
-import asyncio
-from pathlib import Path
-
 import pytest
 
 from ctxai.agent.config import AgentConfig
@@ -42,15 +39,10 @@ async def test_agent_read_file_tool(sample_python_code, temp_dir, mock_llm_confi
         # First response: use read_file tool
         create_mock_response(
             content="I'll read the file for you.",
-            tool_calls=[{
-                "name": "read_file",
-                "parameters": {"path": str(test_file)}
-            }]
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(test_file)}}],
         ),
         # Second response: final answer after seeing tool result
-        create_mock_response(
-            content="The file contains a function called hello that returns 'world'."
-        )
+        create_mock_response(content="The file contains a function called hello that returns 'world'."),
     ]
 
     mock_llm = MockLLMProvider(config=mock_llm_config, responses=responses)
@@ -68,7 +60,7 @@ async def test_agent_read_file_tool(sample_python_code, temp_dir, mock_llm_confi
         working_directory=temp_dir,
         available_indexes=[],
         max_iterations=5,
-        verbose=False
+        verbose=False,
     )
 
     agent = Agent(loop_config)
@@ -105,23 +97,15 @@ async def test_agent_multi_tool_workflow(sample_python_code, temp_dir, mock_llm_
         # First: list files
         create_mock_response(
             content="Let me list the Python files first.",
-            tool_calls=[{
-                "name": "list_files",
-                "parameters": {"directory": str(sample_python_code)}
-            }]
+            tool_calls=[{"name": "list_files", "parameters": {"directory": str(sample_python_code)}}],
         ),
         # Second: read a specific file
         create_mock_response(
             content="Now let me read main.py",
-            tool_calls=[{
-                "name": "read_file",
-                "parameters": {"path": str(sample_python_code / "main.py")}
-            }]
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(sample_python_code / "main.py")}}],
         ),
         # Third: final response
-        create_mock_response(
-            content="I found main.py which contains greeting functions and a Calculator class."
-        )
+        create_mock_response(content="I found main.py which contains greeting functions and a Calculator class."),
     ]
 
     mock_llm = MockLLMProvider(config=mock_llm_config, responses=responses)
@@ -171,14 +155,9 @@ async def test_agent_error_handling(temp_dir, mock_llm_config):
     responses = [
         create_mock_response(
             content="Let me read that file.",
-            tool_calls=[{
-                "name": "read_file",
-                "parameters": {"path": str(temp_dir / "nonexistent.py")}
-            }]
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(temp_dir / "nonexistent.py")}}],
         ),
-        create_mock_response(
-            content="The file doesn't exist. I'll help you create it instead."
-        )
+        create_mock_response(content="The file doesn't exist. I'll help you create it instead."),
     ]
 
     mock_llm = MockLLMProvider(config=mock_llm_config, responses=responses)
@@ -196,7 +175,7 @@ async def test_agent_error_handling(temp_dir, mock_llm_config):
         working_directory=temp_dir,
         available_indexes=[],
         max_iterations=5,
-        verbose=False
+        verbose=False,
     )
 
     agent = Agent(loop_config)
@@ -225,10 +204,7 @@ async def test_agent_max_iterations(temp_dir, mock_llm_config):
     responses = [
         create_mock_response(
             content="Let me check that file.",
-            tool_calls=[{
-                "name": "read_file",
-                "parameters": {"path": str(temp_dir / "test.py")}
-            }]
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(temp_dir / "test.py")}}],
         )
     ] * 20  # More responses than max iterations
 
@@ -247,7 +223,7 @@ async def test_agent_max_iterations(temp_dir, mock_llm_config):
         working_directory=temp_dir,
         available_indexes=[],
         max_iterations=3,  # Low limit for testing
-        verbose=False
+        verbose=False,
     )
 
     agent = Agent(loop_config)
@@ -280,26 +256,23 @@ async def test_agent_write_and_read_workflow(temp_dir, mock_llm_config):
         # Write file
         create_mock_response(
             content="I'll create the file for you.",
-            tool_calls=[{
-                "name": "write_file",
-                "parameters": {
-                    "path": str(temp_dir / "new_file.py"),
-                    "content": "def greet(name):\n    return f'Hello, {name}!'\n"
+            tool_calls=[
+                {
+                    "name": "write_file",
+                    "parameters": {
+                        "path": str(temp_dir / "new_file.py"),
+                        "content": "def greet(name):\n    return f'Hello, {name}!'\n",
+                    },
                 }
-            }]
+            ],
         ),
         # Read it back
         create_mock_response(
             content="Now let me read it back to verify.",
-            tool_calls=[{
-                "name": "read_file",
-                "parameters": {"path": str(temp_dir / "new_file.py")}
-            }]
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(temp_dir / "new_file.py")}}],
         ),
         # Final response
-        create_mock_response(
-            content="I've created the file successfully with a greet function."
-        )
+        create_mock_response(content="I've created the file successfully with a greet function."),
     ]
 
     mock_llm = MockLLMProvider(config=mock_llm_config, responses=responses)

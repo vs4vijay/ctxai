@@ -1,7 +1,6 @@
 """Utility functions for sample code."""
 
 import os
-from typing import Optional
 
 
 def read_file(path: str) -> str:
@@ -12,7 +11,7 @@ def read_file(path: str) -> str:
 
 def write_file(path: str, content: str) -> None:
     """Write content to file."""
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         f.write(content)
 
 

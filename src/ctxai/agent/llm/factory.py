@@ -5,7 +5,6 @@ Creates LLM providers based on configuration.
 """
 
 import os
-from typing import Optional
 
 from rich.console import Console
 
@@ -62,30 +61,37 @@ class LLMProviderFactory:
 
         if provider == "openrouter":
             from .openrouter_provider import OpenRouterProvider
+
             return OpenRouterProvider(config)
 
         elif provider == "ollama":
             from .ollama_provider import OllamaProvider
+
             return OllamaProvider(config)
 
         elif provider == "anthropic":
             from .anthropic_provider import AnthropicProvider
+
             return AnthropicProvider(config)
 
         elif provider == "openai":
             from .openai_provider import OpenAIProvider
+
             return OpenAIProvider(config)
 
         elif provider == "github-copilot":
             from .github_copilot_provider import GitHubCopilotProvider
+
             return GitHubCopilotProvider(config)
 
         elif provider == "custom":
             from .custom_provider import CustomProvider
+
             return CustomProvider(config)
 
         elif provider == "nvidia":
             from .custom_provider import CustomProvider
+
             return CustomProvider(config)
 
         else:
@@ -263,6 +269,7 @@ class LLMProviderFactory:
         # Check keystore for stored API keys
         try:
             from ...auth.keystore import get_keystore
+
             keystore = get_keystore()
         except ImportError:
             keystore = None
@@ -280,6 +287,7 @@ class LLMProviderFactory:
         elif provider == "ollama":
             try:
                 import requests
+
                 response = requests.get("http://localhost:11434/api/tags", timeout=2)
                 if response.status_code == 200:
                     return True, "Ollama running"
@@ -327,6 +335,7 @@ class LLMProviderFactory:
             if not api_key or not base_url:
                 try:
                     from ...config import ConfigManager
+
                     cm = ConfigManager()
                     cfg = cm.load()
                     pconfig = cfg.get_provider_config("custom")
@@ -352,6 +361,7 @@ class LLMProviderFactory:
             if not api_key:
                 try:
                     from ...config import ConfigManager
+
                     cm = ConfigManager()
                     cfg = cm.load()
                     pconfig = cfg.get_provider_config("nvidia")

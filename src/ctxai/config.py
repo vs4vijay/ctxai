@@ -10,10 +10,9 @@ Supports multiple LLM provider configurations with:
 TOML format only - more readable and maintainable.
 """
 
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import tomlkit
 
@@ -38,6 +37,7 @@ def _load_toml(path: Path) -> dict:
 
 def _save_toml(path: Path, data: dict) -> None:
     """Save TOML with the directly declared tomlkit dependency."""
+
     def without_none(value):
         if isinstance(value, dict):
             return {key: without_none(item) for key, item in value.items() if item is not None}
@@ -233,7 +233,7 @@ class Config:
             model: Model name to set as default
         """
         self.set_provider_config(provider_name, model=model)
-        
+
         # If this is the default provider, also update it
         if self.default_provider != provider_name:
             self.default_provider = provider_name
@@ -299,16 +299,16 @@ class ConfigManager:
         """
         self.project_path = project_path
         self.ctxai_home = get_ctxai_home(project_path)
-        
+
         # Determine config path - check for both formats, prefer TOML
         self._detect_config_path()
-        
+
         self._config: Config | None = None
 
     def _detect_config_path(self) -> None:
         """Detect existing config file or set default path (TOML only)."""
         toml_path = self.ctxai_home / "config.toml"
-        
+
         # TOML only
         if toml_path.exists():
             self.config_path = toml_path

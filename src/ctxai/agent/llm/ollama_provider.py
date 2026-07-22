@@ -7,7 +7,6 @@ Provides local model execution through Ollama.
 import json
 import os
 from collections.abc import Iterator
-from typing import Optional
 
 import requests
 
@@ -48,10 +47,7 @@ class OllamaProvider(BaseLLMProvider):
             if response.status_code != 200:
                 raise Exception(f"Ollama not responding: {response.status_code}")
         except requests.exceptions.RequestException as e:
-            raise Exception(
-                f"Cannot connect to Ollama at {self.base_url}. "
-                f"Make sure Ollama is running. Error: {e}"
-            )
+            raise Exception(f"Cannot connect to Ollama at {self.base_url}. Make sure Ollama is running. Error: {e}")
 
     def chat(
         self,
@@ -224,10 +220,7 @@ class OllamaProvider(BaseLLMProvider):
             # Handle tool result messages (if needed)
             elif role == "tool":
                 # Convert tool results to user messages for Ollama
-                ollama_messages.append({
-                    "role": "user",
-                    "content": f"Tool result: {content}"
-                })
+                ollama_messages.append({"role": "user", "content": f"Tool result: {content}"})
 
         return ollama_messages
 
@@ -303,12 +296,10 @@ OLLAMA_CODING_MODELS = {
     "deepseek-coder-7b": "deepseek-coder:6.7b",
     "deepseek-coder-33b": "deepseek-coder:33b",
     "qwen-coder-7b": "qwen2.5-coder:7b",
-
     # General purpose
     "llama3.1-8b": "llama3.1:8b",
     "llama3.1-70b": "llama3.1:70b",
     "mistral-7b": "mistral:7b",
-
     # Small and fast
     "phi3-mini": "phi3:mini",
     "gemma-2b": "gemma:2b",

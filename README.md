@@ -1,19 +1,19 @@
 # ctxai
 
-**AI-Powered Coding Agent + Semantic Code Search Engine**
+**Local-first coding agent with persistent, syntax-aware semantic repository memory**
 
-**ctxai** is a comprehensive AI coding assistant that combines semantic code search with intelligent agent capabilities. It transforms your codebase into searchable embeddings for context-aware code retrieval while providing an interactive AI agent that can understand, analyze, and modify your code.
+**ctxai** indexes repository structure and code into a durable local intelligence layer, then uses that evidence to answer questions and perform bounded, reviewable code changes through CLI, chat, dashboard, Python, or MCP.
 
 **Features:**
 - 🤖 **AI Coding Agent**: Interactive chat with multi-provider LLM support (OpenRouter, GitHub Copilot, Ollama, Anthropic, OpenAI)
 - 🔍 **Semantic Search**: Natural language queries across your entire codebase
-- 🏗️ **Architect-Editor Pattern**: 40-60% cost savings with intelligent two-model approach
+- 🧭 **Grounded Planning**: Evidence-backed plans and exact-action approval for complex or risky work
 - 🔐 **OAuth Authentication**: Secure one-click login for OpenRouter and GitHub Copilot
-- 🛠️ **Rich Tool Support**: File operations, bash execution, git integration, and more
+- 🛠️ **Safe Repository Tools**: Project-rooted file, command, semantic-search, and read-only Git operations with audit records
 - 📊 **MCP Server**: Integrate with Claude Desktop and other MCP-compatible tools
 - 🎯 **Local & Cloud**: Use free local models (Ollama) or powerful cloud models
 
-**TLDR:** Intelligent semantic search + AI coding agent that understands your codebase
+All nine product slices in [plan.md](plan.md)—persistent indexing, safe tools, grounded retrieval, verified changes, sessions, MCP, provider conformance, planning, and dashboard operations—have executable acceptance coverage.
 
 ## Quick Start
 
@@ -72,7 +72,7 @@ set PYTHONIOENCODING=utf-8
 - **Interactive Chat**: REPL interface for conversational coding assistance
 - **Multi-Provider Support**: OpenRouter (100+ models), GitHub Copilot, Ollama (local), Anthropic, OpenAI
 - **OAuth Authentication**: Secure one-click login for OpenRouter and GitHub Copilot
-- **Architect-Editor Pattern**: Use two models for 40-60% cost savings (e.g., o1-mini for planning + Claude Sonnet for implementation)
+- **Verified Task Workflow**: Retrieved evidence, scoped planning, exact-action approval, diffs, focused checks, and stable reports
 - **Rich Tool Support**: File operations, bash execution, git tools, code search
 - **Repository Context**: Automatic repository mapping for better code understanding
 - **Flexible Presets**: default, premium, budget, cheap, local, mixed configurations
@@ -90,7 +90,7 @@ set PYTHONIOENCODING=utf-8
 - **Web Dashboard**: Interactive UI for browsing indexes and querying code
 - **GitHub Copilot Integration**: Query via @ctxai in Copilot Chat
 - **Safety Features**: Bash command filtering, file size limits, sandboxing
-- **Extensible**: Plugin architecture for custom tools and providers
+- **Provider-independent**: Executable capability contracts across advertised local and cloud providers
 
 ## Provider Comparison
 
@@ -235,20 +235,9 @@ ctxai chat --provider github-copilot --model gpt-4
 # Local Ollama (free!)
 ctxai chat --provider ollama --model codellama:13b
 
-# Architect/Editor pattern (40-60% cost savings!)
-ctxai chat --architect-editor --preset default
 ```
 
-**Architect-Editor Presets:**
-
-| Preset | Architect | Editor | Cost | Description |
-|--------|-----------|--------|------|-------------|
-| `default` | o1-mini | Claude Sonnet | $$ | Best quality + cost balance |
-| `premium` | o1 | Claude Opus | $$$$$ | Best quality, high cost |
-| `budget` | GPT-4o | GPT-4o-mini | $ | Good quality, lower cost |
-| `cheap` | DeepSeek R1 | DeepSeek Chat | ¢ | Cheapest cloud option |
-| `local` | CodeLlama 34B | CodeLlama 13B | Free | Fully local (requires good hardware) |
-| `mixed` | o1-mini | CodeLlama 13B | $ | Cloud planning + local implementation |
+Architect/editor mode is intentionally disabled pending benchmark evidence. Complex tasks use the validated single-agent structured planning and approval workflow.
 
 **One-Shot Tasks:**
 
@@ -550,7 +539,7 @@ The agent follows a modular, tool-based architecture:
 2. **LLM Providers**: Pluggable providers for different LLM services (OpenRouter, Anthropic, OpenAI, Ollama, GitHub Copilot)
 3. **Tool Registry**: Dynamic tool registration and execution with parameter validation
 4. **Context Management**: Tracks conversation history, file changes, and repository state
-5. **Architect-Editor Pattern**: Separates planning (architect) from implementation (editor) for cost optimization
+5. **Verified Workflow**: Binds plans and approvals to observed tool calls, diffs, and checks
 
 ### Key Components
 
@@ -837,10 +826,14 @@ We welcome all contributions to the project! Before submitting your pull request
 uv run pytest
 
 # Run linter and auto-fix
-uv run ruff check src/ --fix
+uv run ruff check . --fix
 
 # Format code
-uv run ruff format src/
+uv run ruff format .
+
+# Check formatting and types exactly as CI does
+uv run ruff format --check .
+uv run mypy
 ```
 
 All contributions should adhere to the project's code of conduct. Let's work together to create a welcoming and inclusive environment for everyone.

@@ -102,9 +102,10 @@ class CustomProvider(BaseLLMProvider):
         """
         # Convert Message objects to dicts if needed
         from .base import Message
+
         if messages and isinstance(messages[0], Message):
             messages = self._format_messages(messages)
-        
+
         # Prepare request
         request_params: dict[str, Any] = {
             "model": self.model,
@@ -126,9 +127,9 @@ class CustomProvider(BaseLLMProvider):
 
         # Extract content (handle reasoning models where content may be null)
         content = message.content or ""
-        
+
         # Some models (like GLM-5) put reasoning in reasoning_content field
-        if not content and hasattr(message, 'reasoning_content') and message.reasoning_content:
+        if not content and hasattr(message, "reasoning_content") and message.reasoning_content:
             content = message.reasoning_content
 
         # Extract tool calls
@@ -137,6 +138,7 @@ class CustomProvider(BaseLLMProvider):
             for tc in message.tool_calls:
                 # Parse function arguments
                 import json
+
                 parameters = json.loads(tc.function.arguments)
 
                 tool_calls.append(

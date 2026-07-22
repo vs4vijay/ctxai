@@ -113,8 +113,7 @@ def index_codebase(
             or manifest.schema_version != SCHEMA_VERSION
         ):
             raise IndexingError(
-                "Existing index identity does not match this repository or embedding model; "
-                "delete it before rebuilding"
+                "Existing index identity does not match this repository or embedding model; delete it before rebuilding"
             )
 
         traversal = CodeTraversal(
@@ -152,8 +151,11 @@ def index_codebase(
         )
         chunks_by_file: dict[str, list[CodeChunk]] = {}
         with Progress(
-            SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-            BarColumn(), TaskProgressColumn(), console=console,
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
         ) as progress:
             task = progress.add_task("Chunking changed files...", total=len(changed))
             for file in changed:
@@ -183,9 +185,7 @@ def index_codebase(
         stats = vector_store.get_stats()
 
         changed_paths = {str(file) for file in changed}
-        file_state = {
-            key: value for key, value in old_files.items() if key in hashes and key not in changed_paths
-        }
+        file_state = {key: value for key, value in old_files.items() if key in hashes and key not in changed_paths}
         for file in changed:
             file_state[str(file)] = IndexedFile(sha256=hashes[str(file)], chunks=len(chunks_by_file[str(file)]))
 

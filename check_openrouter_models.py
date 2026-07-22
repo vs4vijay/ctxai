@@ -9,7 +9,7 @@ import requests
 
 # Fix Windows encoding
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 def get_api_key():
@@ -63,7 +63,7 @@ for model in models:
     completion_price = float(pricing.get("completion", "1"))
 
     # Check if free
-    is_free = (prompt_price == 0 and completion_price == 0)
+    is_free = prompt_price == 0 and completion_price == 0
 
     # Check if supports tools
     architecture = model.get("architecture", {})

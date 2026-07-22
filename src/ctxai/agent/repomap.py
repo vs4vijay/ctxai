@@ -9,10 +9,8 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
-from tree_sitter import Language, Parser
-from tree_sitter_language_pack import get_language, get_parser
+from tree_sitter_language_pack import get_parser
 
 
 @dataclass
@@ -126,9 +124,22 @@ class RepositoryMap:
         """Get all files matching patterns."""
         # Directories to skip
         skip_dirs = {
-            '.git', '__pycache__', 'node_modules', '.venv', 'venv',
-            '.pytest_cache', '.mypy_cache', '.tox', 'dist', 'build',
-            '.eggs', '*.egg-info', '.uv', 'target', 'bin', 'obj'
+            ".git",
+            "__pycache__",
+            "node_modules",
+            ".venv",
+            "venv",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".tox",
+            "dist",
+            "build",
+            ".eggs",
+            "*.egg-info",
+            ".uv",
+            "target",
+            "bin",
+            "obj",
         }
 
         files = []
@@ -226,12 +237,12 @@ class RepositoryMap:
                     break
 
             if name_node:
-                name = code[name_node.start_byte:name_node.end_byte]
+                name = code[name_node.start_byte : name_node.end_byte]
 
                 # Get code snippet (first few lines)
                 start_line = node.start_point[0]
                 end_line = min(start_line + 3, node.end_point[0])
-                lines = code.split("\n")[start_line:end_line + 1]
+                lines = code.split("\n")[start_line : end_line + 1]
                 snippet = "\n".join(lines)
 
                 symbol = Symbol(

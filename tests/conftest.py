@@ -4,7 +4,6 @@ Shared pytest fixtures for all tests.
 This module provides common fixtures used across both unit and E2E tests.
 """
 
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -154,11 +153,7 @@ def mock_embedding_config():
     Returns:
         EmbeddingConfig: Configuration for mock embeddings
     """
-    return EmbeddingConfig(
-        provider="mock",
-        model="mock-model",
-        batch_size=32
-    )
+    return EmbeddingConfig(provider="mock", model="mock-model", batch_size=32)
 
 
 @pytest.fixture
@@ -201,6 +196,7 @@ def reset_environment_variables():
     environment variable pollution between tests.
     """
     import os
+
     original_env = os.environ.copy()
     yield
     # Restore original environment

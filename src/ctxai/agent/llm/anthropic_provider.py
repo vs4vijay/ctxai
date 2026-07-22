@@ -2,12 +2,12 @@
 Anthropic Claude provider implementation.
 """
 
-import uuid
 from collections.abc import Generator
-from typing import Any, Optional
+from typing import Any
 
 try:
     from anthropic import Anthropic, AnthropicError
+
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
@@ -22,9 +22,7 @@ class AnthropicProvider(BaseLLMProvider):
     def __init__(self, config: AgentLLMConfig):
         """Initialize Anthropic provider."""
         if not ANTHROPIC_AVAILABLE:
-            raise ImportError(
-                "Anthropic SDK not installed. Install with: pip install anthropic"
-            )
+            raise ImportError("Anthropic SDK not installed. Install with: pip install anthropic")
 
         super().__init__(config)
 
@@ -32,8 +30,7 @@ class AnthropicProvider(BaseLLMProvider):
         self.api_key = config.get_api_key_for_provider("anthropic")
         if not self.api_key:
             raise ValueError(
-                "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable "
-                "or provide api_key in config."
+                "Anthropic API key not found. Set ANTHROPIC_API_KEY environment variable or provide api_key in config."
             )
 
         # Initialize client
@@ -51,12 +48,7 @@ class AnthropicProvider(BaseLLMProvider):
         """Anthropic supports tool use."""
         return True
 
-    def chat(
-        self,
-        messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs
-    ) -> LLMResponse:
+    def chat(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs) -> LLMResponse:
         """
         Send messages to Claude and get response.
 
@@ -107,10 +99,7 @@ class AnthropicProvider(BaseLLMProvider):
             )
 
     def stream_chat(
-        self,
-        messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs
     ) -> Generator[str, None, None]:
         """
         Stream response from Claude.
@@ -171,35 +160,24 @@ class AnthropicProvider(BaseLLMProvider):
                 # System messages should be handled separately
                 continue
 
-            formatted_msg = {
-                "role": msg.role.value,
-                "content": []
-            }
+            formatted_msg = {"role": msg.role.value, "content": []}
 
             # Add text content
             if msg.content:
-                formatted_msg["content"].append({
-                    "type": "text",
-                    "text": msg.content
-                })
+                formatted_msg["content"].append({"type": "text", "text": msg.content})
 
             # Add tool use (if assistant with tool calls)
             if msg.tool_calls and msg.role == MessageRole.ASSISTANT:
                 for tc in msg.tool_calls:
-                    formatted_msg["content"].append({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": tc.parameters
-                    })
+                    formatted_msg["content"].append(
+                        {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.parameters}
+                    )
 
             # Tool result message (from user role)
             if msg.tool_call_id and msg.role == MessageRole.USER:
-                formatted_msg["content"] = [{
-                    "type": "tool_result",
-                    "tool_use_id": msg.tool_call_id,
-                    "content": msg.content
-                }]
+                formatted_msg["content"] = [
+                    {"type": "tool_result", "tool_use_id": msg.tool_call_id, "content": msg.content}
+                ]
 
             formatted.append(formatted_msg)
 
@@ -223,11 +201,7 @@ class AnthropicProvider(BaseLLMProvider):
             if block.type == "text":
                 content_text += block.text
             elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    parameters=block.input
-                ))
+                tool_calls.append(ToolCall(id=block.id, name=block.name, parameters=block.input))
 
         # Determine finish reason
         finish_reason = "stop"
@@ -238,7 +212,7 @@ class AnthropicProvider(BaseLLMProvider):
 
         # Extract usage
         usage = {}
-        if hasattr(response, 'usage'):
+        if hasattr(response, "usage"):
             usage = {
                 "prompt_tokens": response.usage.input_tokens,
                 "completion_tokens": response.usage.output_tokens,
@@ -250,5 +224,5 @@ class AnthropicProvider(BaseLLMProvider):
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=usage,
-            raw_response=response.model_dump() if hasattr(response, 'model_dump') else None,
+            raw_response=response.model_dump() if hasattr(response, "model_dump") else None,
         )

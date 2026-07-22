@@ -111,7 +111,8 @@ class HybridRetriever:
         rankings.append(("lexical", lexical))
 
         symbol = [
-            record for record in records
+            record
+            for record in records
             if query_terms & set(_terms((record.get("metadata") or {}).get("meta_name", "")))
         ]
         rankings.append(("symbol", symbol))
@@ -122,9 +123,8 @@ class HybridRetriever:
             records,
             key=lambda record: (
                 bool(query_terms & set(_terms((record.get("metadata") or {}).get("file_path", "")))),
-                (record.get("metadata") or {}).get("chunk_type", "") in {
-                    "class_definition", "class_declaration", "function_definition", "function_declaration"
-                },
+                (record.get("metadata") or {}).get("chunk_type", "")
+                in {"class_definition", "class_declaration", "function_definition", "function_declaration"},
             ),
             reverse=True,
         )

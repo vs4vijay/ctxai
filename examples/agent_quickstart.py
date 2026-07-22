@@ -30,10 +30,7 @@ async def main():
 
     # 2. Configure LLM
     llm_config = AgentLLMConfig(
-        provider="anthropic",
-        model="claude-3-5-sonnet-20241022",
-        temperature=0.7,
-        max_tokens=4096
+        provider="anthropic", model="claude-3-5-sonnet-20241022", temperature=0.7, max_tokens=4096
     )
 
     # 3. Initialize provider
@@ -63,7 +60,7 @@ async def main():
         working_directory=Path("."),
         available_indexes=[],
         max_iterations=10,
-        verbose=True
+        verbose=True,
     )
     agent = Agent(loop_config)
     print(f"✓ Agent initialized: {agent}\n")

@@ -5,7 +5,6 @@ This module provides fixtures for end-to-end testing that require
 more complex setup (indexed codebases, configured agents, etc.).
 """
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -14,7 +13,6 @@ from ctxai.agent.config import AgentConfig, AgentLLMConfig
 from ctxai.chunking import CodeChunker
 from ctxai.traversal import CodeTraversal
 from ctxai.vector_store import VectorStore
-from tests.mocks.mock_embeddings import MockEmbeddingProvider
 from tests.mocks.mock_llm import MockLLMProvider
 
 
@@ -42,11 +40,7 @@ def indexed_codebase(sample_python_code, temp_dir, mock_embeddings):
             - codebase_path: Path to original codebase
     """
     # Traverse and chunk the codebase
-    traversal = CodeTraversal(
-        sample_python_code,
-        include_patterns=["*.py"],
-        follow_gitignore=False
-    )
+    traversal = CodeTraversal(sample_python_code, include_patterns=["*.py"], follow_gitignore=False)
     chunker = CodeChunker()
 
     all_chunks = []
@@ -93,12 +87,7 @@ def mock_llm_config():
         AgentLLMConfig: Configuration for mock LLM provider
     """
     return AgentLLMConfig(
-        provider="mock",
-        model="mock-model-v1",
-        api_key="mock-key",
-        temperature=0.7,
-        max_tokens=4096,
-        timeout=30
+        provider="mock", model="mock-model-v1", api_key="mock-key", temperature=0.7, max_tokens=4096, timeout=30
     )
 
 
@@ -142,6 +131,7 @@ def mock_llm_provider_with_responses(mock_llm_config):
                 {"content": "Done."}
             ])
     """
+
     def _create(responses):
         return MockLLMProvider(config=mock_llm_config, responses=responses)
 
@@ -163,12 +153,10 @@ def patch_embeddings_factory(mock_embeddings):
     """
     from ctxai import embeddings
 
-    original_create = embeddings.EmbeddingsFactory.create
-
     def mock_create(config):
         return mock_embeddings
 
-    with patch.object(embeddings.EmbeddingsFactory, 'create', side_effect=mock_create):
+    with patch.object(embeddings.EmbeddingsFactory, "create", side_effect=mock_create):
         yield mock_embeddings
 
 
@@ -202,14 +190,9 @@ def sample_tool_definitions():
             "description": "Read contents of a file",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to read"
-                    }
-                },
-                "required": ["path"]
-            }
+                "properties": {"path": {"type": "string", "description": "Path to the file to read"}},
+                "required": ["path"],
+            },
         },
         {
             "name": "write_file",
@@ -217,30 +200,19 @@ def sample_tool_definitions():
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to write"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write"
-                    }
+                    "path": {"type": "string", "description": "Path to the file to write"},
+                    "content": {"type": "string", "description": "Content to write"},
                 },
-                "required": ["path", "content"]
-            }
+                "required": ["path", "content"],
+            },
         },
         {
             "name": "list_files",
             "description": "List files in a directory",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "directory": {
-                        "type": "string",
-                        "description": "Directory path to list"
-                    }
-                },
-                "required": ["directory"]
-            }
+                "properties": {"directory": {"type": "string", "description": "Directory path to list"}},
+                "required": ["directory"],
+            },
         },
     ]

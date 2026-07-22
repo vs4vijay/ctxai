@@ -32,11 +32,7 @@ class MockEmbeddingProvider(BaseEmbeddingProvider):
         """
         # Create dummy config if none provided
         if config is None:
-            config = EmbeddingConfig(
-                provider="mock",
-                model="mock-model",
-                batch_size=32
-            )
+            config = EmbeddingConfig(provider="mock", model="mock-model", batch_size=32)
 
         super().__init__(config)
         self._dimension = dimension

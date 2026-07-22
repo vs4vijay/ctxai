@@ -9,12 +9,11 @@ This approach achieves better quality + lower cost than using a single model.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 from rich.console import Console
 
 from .llm.base import BaseLLMProvider
-from .planning import Plan, PlanStep, create_plan
+from .planning import Plan, create_plan
 
 console = Console()
 
@@ -194,7 +193,7 @@ class ArchitectEditorAgent:
         # Build implementation prompt
         prompt = self._build_implementation_prompt(task, context)
 
-# Call editor with tools
+        # Call editor with tools
         system_msg = "You are an expert code editor. Implement changes precisely and efficiently."
         messages = [
             {"role": "system", "content": system_msg},
@@ -251,8 +250,8 @@ class ArchitectEditorAgent:
         return f"""Task: {task}
 
 Context:
-- Working directory: {context.get('working_directory', '.')}
-- Available tools: {', '.join(context.get('tools', []))}
+- Working directory: {context.get("working_directory", ".")}
+- Available tools: {", ".join(context.get("tools", []))}
 
 Create a step-by-step plan to complete this task.
 Each step should be clear and actionable.
@@ -269,7 +268,7 @@ Format:
         return f"""Task: {task}
 
 Context:
-{context.get('last_result', '')}
+{context.get("last_result", "")}
 
 Implement this step using the available tools.
 Be precise and efficient.
@@ -277,10 +276,7 @@ Be precise and efficient.
 
     def _build_review_prompt(self, task: str, results: list[dict], context: dict) -> str:
         """Build prompt for review."""
-        results_text = "\n\n".join([
-            f"Step {i+1}: {r.get('content', '')[:200]}..."
-            for i, r in enumerate(results)
-        ])
+        results_text = "\n\n".join([f"Step {i + 1}: {r.get('content', '')[:200]}..." for i, r in enumerate(results)])
 
         return f"""Original Task: {task}
 

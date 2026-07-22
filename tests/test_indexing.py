@@ -2,7 +2,6 @@
 Test the indexing functionality.
 """
 
-import shutil
 import tempfile
 from pathlib import Path
 

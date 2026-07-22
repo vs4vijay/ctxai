@@ -3,11 +3,11 @@ Tool registry for managing and executing tools.
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from rich.console import Console
 
-from .base import BaseTool, ToolSchema
+from .base import BaseTool
 
 
 class ToolRegistry:
@@ -40,9 +40,7 @@ class ToolRegistry:
         """
         if tool.name in self._tools:
             if self.verbose:
-                self.console.print(
-                    f"[yellow]Warning: Tool '{tool.name}' already registered, replacing[/yellow]"
-                )
+                self.console.print(f"[yellow]Warning: Tool '{tool.name}' already registered, replacing[/yellow]")
 
         self._tools[tool.name] = tool
 
@@ -162,11 +160,7 @@ class ToolRegistry:
         else:  # generic
             return schema.to_dict()
 
-    async def execute_tool(
-        self,
-        name: str,
-        **kwargs
-    ) -> dict[str, Any]:
+    async def execute_tool(self, name: str, **kwargs) -> dict[str, Any]:
         """
         Execute a tool by name.
 
@@ -203,10 +197,7 @@ class ToolRegistry:
 
         return result
 
-    async def execute_multiple(
-        self,
-        tool_calls: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    async def execute_multiple(self, tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Execute multiple tool calls concurrently.
 
@@ -230,11 +221,13 @@ class ToolRegistry:
         processed_results = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                processed_results.append({
-                    "success": False,
-                    "result": None,
-                    "error": f"Exception during execution: {str(result)}",
-                })
+                processed_results.append(
+                    {
+                        "success": False,
+                        "result": None,
+                        "error": f"Exception during execution: {str(result)}",
+                    }
+                )
             else:
                 processed_results.append(result)
 

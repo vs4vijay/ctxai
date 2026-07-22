@@ -6,7 +6,6 @@ Respects .gitignore patterns and handles file filtering.
 import os
 from collections.abc import Generator
 from pathlib import Path
-from typing import Optional
 
 import pathspec
 

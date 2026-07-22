@@ -51,10 +51,12 @@ def render_compatibility_matrix() -> str:
             f"{'yes' if spec.capabilities.tools else 'no'} | "
             f"{'yes' if spec.capabilities.streaming else 'no'} | {spec.models} |"
         )
-    lines.extend([
-        "",
-        "Fallback is disabled by default. Crossing the local/cloud boundary requires the explicit "
-        "`allow_fallback_boundary_crossing` setting.",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "Fallback is disabled by default. Crossing the local/cloud boundary requires the explicit "
+            "`allow_fallback_boundary_crossing` setting.",
+            "",
+        ]
+    )
     return "\n".join(lines)

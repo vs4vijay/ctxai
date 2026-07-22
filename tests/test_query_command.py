@@ -2,10 +2,7 @@
 Tests for query command functionality.
 """
 
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from ctxai.commands.query_command import query_codebase
 from ctxai.config import Config, EmbeddingConfig, IndexConfig

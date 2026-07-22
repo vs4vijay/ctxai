@@ -6,7 +6,6 @@ Supports GPT-4, GPT-4o, and other OpenAI models with tool calling.
 
 import os
 from collections.abc import Iterator
-from typing import Optional
 
 from openai import OpenAI
 
@@ -38,8 +37,7 @@ class OpenAIProvider(BaseLLMProvider):
         api_key = config.api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError(
-                "OpenAI API key not found. Set OPENAI_API_KEY environment variable "
-                "or provide it in the config."
+                "OpenAI API key not found. Set OPENAI_API_KEY environment variable or provide it in the config."
             )
 
         # Initialize client
@@ -95,6 +93,7 @@ class OpenAIProvider(BaseLLMProvider):
             for tc in message.tool_calls:
                 # Parse function arguments
                 import json
+
                 parameters = json.loads(tc.function.arguments)
 
                 tool_calls.append(

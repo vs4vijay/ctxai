@@ -7,7 +7,6 @@ Stores API keys in the user's config directory with appropriate permissions.
 import json
 import os
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 

@@ -61,9 +61,7 @@ async def test_real_client_discovers_every_versioned_tool(temp_dir):
 @pytest.mark.e2e
 @pytest.mark.mcp
 @pytest.mark.asyncio
-async def test_real_client_indexes_queries_and_inspects(
-    sample_python_code, temp_dir, patch_embeddings_factory
-):
+async def test_real_client_indexes_queries_and_inspects(sample_python_code, temp_dir, patch_embeddings_factory):
     indexes_dir = temp_dir / ".ctxai" / "indexes"
     indexes_dir.mkdir(parents=True)
     progress = []
@@ -118,9 +116,7 @@ async def test_invalid_inputs_have_stable_error_codes(temp_dir):
     indexes_dir.mkdir()
     with patch("ctxai.commands.server_command.get_indexes_dir", return_value=indexes_dir):
         async with connected_client(create_server(temp_dir)) as client:
-            missing = await call(
-                client, "query_codebase", {"index_name": "missing", "query": "anything"}
-            )
+            missing = await call(client, "query_codebase", {"index_name": "missing", "query": "anything"})
             assert missing["ok"] is False
             assert missing["error"]["code"] == "not_found"
 

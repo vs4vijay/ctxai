@@ -5,7 +5,6 @@ Handles environment variables, path resolution, and common helpers.
 
 import os
 from pathlib import Path
-from typing import Optional
 
 
 def get_ctxai_home(project_path: Path | None = None) -> Path:

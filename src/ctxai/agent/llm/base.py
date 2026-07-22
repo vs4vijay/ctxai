@@ -8,11 +8,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class MessageRole(str, Enum):
     """Message roles in conversation."""
+
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
@@ -21,6 +22,7 @@ class MessageRole(str, Enum):
 @dataclass
 class ToolCall:
     """Represents a tool call made by the LLM."""
+
     id: str
     name: str
     parameters: dict[str, Any]
@@ -29,6 +31,7 @@ class ToolCall:
 @dataclass
 class Message:
     """Represents a message in the conversation."""
+
     role: MessageRole
     content: str
     tool_calls: list[ToolCall] | None = None
@@ -54,26 +57,19 @@ class Message:
             if format == "openai":
                 # OpenAI/OpenRouter format
                 import json
+
                 msg["tool_calls"] = [
                     {
                         "id": tc.id,
                         "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.parameters)
-                        }
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.parameters)},
                     }
                     for tc in self.tool_calls
                 ]
             else:
                 # Anthropic format
                 msg["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "name": tc.name,
-                        "parameters": tc.parameters
-                    }
-                    for tc in self.tool_calls
+                    {"id": tc.id, "name": tc.name, "parameters": tc.parameters} for tc in self.tool_calls
                 ]
 
         if self.tool_call_id:
@@ -89,6 +85,7 @@ class Message:
 @dataclass
 class LLMResponse:
     """Represents a response from the LLM."""
+
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"  # "stop", "tool_calls", "length", "error"
@@ -160,12 +157,7 @@ class BaseLLMProvider(ABC):
         pass
 
     @abstractmethod
-    def chat(
-        self,
-        messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs
-    ) -> LLMResponse:
+    def chat(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs) -> LLMResponse:
         """
         Send messages and get a response.
 
@@ -184,10 +176,7 @@ class BaseLLMProvider(ABC):
 
     @abstractmethod
     def stream_chat(
-        self,
-        messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs
     ) -> Generator[str, None, None]:
         """
         Stream response tokens.
@@ -251,9 +240,7 @@ class BaseLLMProvider(ABC):
         if not messages:
             raise ValueError("At least one message is required")
 
-    def normalize_messages(
-        self, messages: list[Message] | list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def normalize_messages(self, messages: list[Message] | list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert the public Message contract to an OpenAI-compatible wire form."""
         if messages and isinstance(messages[0], Message):
             return self._format_messages(messages)  # type: ignore[arg-type]

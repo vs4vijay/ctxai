@@ -5,27 +5,57 @@ Provides a REPL interface for conversing with the AI coding agent.
 """
 
 import asyncio
-import os
+import io
 import logging
+import os
 import sys
-from pathlib import Path
-from typing import Optional, Deque
 from collections import deque
+from pathlib import Path
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit.styles import Style
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.prompt import Confirm
+
+from ..agent.config import AgentConfig, AgentLLMConfig
+from ..agent.core import Agent, AgentLoopConfig
+from ..agent.sessions import SessionRecord, SessionStore
+from ..agent.theme import (
+    NEON_CYAN,
+    NEON_DIM,
+    NEON_GOLD,
+    NEON_GREEN,
+    NEON_PURPLE,
+    NEON_WHITE,
+    NeonConsole,  # type: ignore[attr-defined]
+)
+from ..agent.tools.bash_tool import BashTool
+from ..agent.tools.code_search import SemanticSearchTool
+from ..agent.tools.execution import ToolExecutionContext
+from ..agent.tools.file_ops import (
+    EditFileTool,
+    GlobTool,
+    GrepTool,
+    ListFilesTool,
+    ReadFileTool,
+    WriteFileTool,
+)
+from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
+from ..agent.tools.registry import ToolRegistry
+from ..agent.workflow import format_approval_prompt
+from ..repository_context import discover_repository_indexes
 
 # Force UTF-8 encoding on Windows for Unicode support
-if sys.platform == "win32":
-    import io
-    # Only wrap if not already wrapped
-    if not isinstance(sys.stdout, io.TextIOWrapper):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if sys.platform == "win32" and not isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-# Disable httpx logging to prevent HTTP request logs from appearing in chat
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-# Disable other noisy loggers
-logging.getLogger("openai").setLevel(logging.WARNING)
+# Keep dependency request logs out of the interactive UI.
+for logger_name in ("httpx", "httpcore", "openai"):
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def _check_terminal_compatibility():
@@ -35,11 +65,10 @@ def _check_terminal_compatibility():
         if term in ("xterm-256color", "xterm", "cygwin", "mintty"):
             return (
                 "WARNING: Terminal compatibility issue detected.\n"
-                "prompt_toolkit doesn't fully support Git Bash/MinTTY terminals.\n"
-                "\n"
+                "prompt_toolkit doesn't fully support Git Bash/MinTTY terminals.\n\n"
                 "Solutions:\n"
-                "1. Run in cmd.exe: cmd.exe /c \"uv run ctxai chat\"\n"
-                "2. Run in PowerShell: powershell -Command \"uv run ctxai chat\"\n"
+                '1. Run in cmd.exe: cmd.exe /c "uv run ctxai chat"\n'
+                '2. Run in PowerShell: powershell -Command "uv run ctxai chat"\n'
                 "3. Use winpty: winpty uv run ctxai chat\n"
                 "4. Or set environment: set TERM=vt100"
             )
@@ -63,52 +92,6 @@ def _disable_cursor_blink():
     except Exception:
         pass
 
-
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.prompt import Confirm
-
-from ..agent.config import AgentConfig, AgentLLMConfig
-from ..agent.context import ConversationContext
-from ..agent.sessions import SessionRecord, SessionStore
-from ..agent.core import Agent, AgentLoopConfig
-from ..agent.llm.anthropic_provider import AnthropicProvider
-from ..agent.theme import (
-    NEON_CYAN,
-    NEON_BLUE,
-    NEON_GREEN,
-    NEON_GOLD,
-    NEON_RED,
-    NEON_PURPLE,
-    NEON_WHITE,
-    NEON_DIM,
-    BG_DARK,
-    BG_MID,
-    NeonConsole,
-    NeonCursor,
-    create_prompt_text,  # type: ignore[attr-defined]
-)
-from ..agent.tools.bash_tool import BashTool
-from ..agent.tools.code_search import SemanticSearchTool
-from ..agent.tools.file_ops import (
-    EditFileTool,
-    GlobTool,
-    GrepTool,
-    ListFilesTool,
-    ReadFileTool,
-    WriteFileTool,
-)
-from ..agent.tools.execution import ToolExecutionContext
-from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
-from ..agent.tools.registry import ToolRegistry
-from ..agent.workflow import format_approval_prompt
-from ..repository_context import discover_repository_indexes
-from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.styles import Style
-from prompt_toolkit.cursor_shapes import CursorShape
-import sys
 
 console = NeonConsole(Console(legacy_windows=False))
 
@@ -193,31 +176,32 @@ PROVIDERS_INFO = {
 # MESSAGE QUEUE
 # ============================================================================
 
+
 class MessageQueue:
     """Thread-safe message queue for concurrent chat."""
-    
+
     def __init__(self):
-        self._queue: Deque[str] = deque()
+        self._queue: deque[str] = deque()
         self._lock = asyncio.Lock()
         self._not_empty = asyncio.Condition(self._lock)
-    
+
     async def put(self, message: str):
         """Add a message to the queue."""
         async with self._not_empty:
             self._queue.append(message)
             self._not_empty.notify()
-    
+
     async def get(self) -> str:
         """Get the next message from the queue (blocks if empty)."""
         async with self._not_empty:
             while not self._queue:
                 await self._not_empty.wait()
             return self._queue.popleft()
-    
+
     def is_empty(self) -> bool:
         """Check if queue is empty (non-blocking)."""
         return len(self._queue) == 0
-    
+
     def clear(self):
         """Clear the queue."""
         self._queue.clear()
@@ -226,6 +210,7 @@ class MessageQueue:
 # ============================================================================
 # CHAT COMMAND COMPLETER
 # ============================================================================
+
 
 class ChatCommandCompleter(Completer):
     """Autocompleter for chat commands."""
@@ -266,14 +251,17 @@ class ChatCommandCompleter(Completer):
 # HELPER FUNCTIONS
 # ============================================================================
 
+
 def print_banner(provider: str, model: str, verbose: bool = False):
     """Print welcome banner."""
     console.print()
-    
+
     width = 56
-    
+
     console.print(f"[bold {NEON_CYAN}]╭{'─' * width}╮[/]")
-    console.print(f"[bold {NEON_CYAN}]│ ctxai [bold {NEON_PURPLE}]◆[bold {NEON_PURPLE}] [white]{provider}/{model}[/]  [/]")
+    console.print(
+        f"[bold {NEON_CYAN}]│ ctxai [bold {NEON_PURPLE}]◆[bold {NEON_PURPLE}] [white]{provider}/{model}[/]  [/]"
+    )
     console.print(f"[bold {NEON_CYAN}]│[dim] Type /help for commands, /exit to quit[/]")
     console.print(f"[bold {NEON_CYAN}]╰{'─' * width}╯[/]")
     console.print()
@@ -290,7 +278,8 @@ def print_help():
 • [bold #FFD700]/model [provider/model][/bold #FFD700] - Change provider & model
 • [bold #FFD700]/stats[/bold #FFD700] - Show session statistics
 • [bold #FFD700]/context[/bold #FFD700] - Show context info
-• [bold #FFD700]/exit[/bold #FFD700], [bold #FFD700]/quit[/bold #FFD700], [bold #FFD700]/bye[/bold #FFD700] - Exit the chat
+• [bold #FFD700]/exit[/bold #FFD700], [bold #FFD700]/quit[/bold #FFD700],
+  [bold #FFD700]/bye[/bold #FFD700] - Exit the chat
 • [bold #FFD700]/tools[/bold #FFD700] - List available tools
 • [bold #FFD700]/save [name][/bold #FFD700] - Save a durable, redacted session
 • [bold #FFD700]/resume [name][/bold #FFD700] - Resume a saved session
@@ -321,40 +310,41 @@ def print_help():
         title=f"[bold {NEON_CYAN}]Help[bold {NEON_CYAN}]",
         border_style="primary",
         title_align="left",
-        padding=(1, 2)
+        padding=(1, 2),
     )
 
 
 def show_providers_and_models(current_provider: str, current_model: str):
     """Show all available providers and their models."""
     from ..agent.llm.factory import LLMProviderFactory
-    
+
     console.print(f"\n[bold {NEON_CYAN}]Available Providers & Models[/bold {NEON_CYAN}]")
     console.print(f"[dim]Current: [bold]{current_provider}/{current_model}[/bold][/dim]\n")
-    
+
     for provider_id, info in PROVIDERS_INFO.items():
         available, status_msg = LLMProviderFactory.check_provider_availability(provider_id)
         status = "[OK]" if available else "[X]"
-        status_color = NEON_GREEN if available else NEON_RED
-        
         marker = "●" if provider_id == current_provider else "○"
-        
+
         console.print(f"[bold {NEON_CYAN}]{marker} {info['name']}[/bold {NEON_CYAN}] {status}")
         console.print(f"  [dim]{info['description']}[/dim]")
-        
+
         if available:
             console.print(f"  [dim]Auth: {info['auth']}[/dim]")
-            
+
             if info["models"]:
-                console.print(f"  [dim]Popular models:[/dim]")
+                console.print("  [dim]Popular models:[/dim]")
                 for model_id, desc in info["models"][:5]:
                     if model_id == current_model and provider_id == current_provider:
-                        console.print(f"    [bold {NEON_GOLD}]→[/bold {NEON_GOLD}] [bold {NEON_WHITE}]{model_id}[/bold {NEON_WHITE}] [dim]({desc})[/dim]")
+                        console.print(
+                            f"    [bold {NEON_GOLD}]→[/bold {NEON_GOLD}] "
+                            f"[bold {NEON_WHITE}]{model_id}[/bold {NEON_WHITE}] [dim]({desc})[/dim]"
+                        )
                     else:
                         console.print(f"    [dim]• {model_id}[/dim] [dim]({desc})[/dim]")
         else:
             console.print(f"  [red]{status_msg}[/red]")
-        
+
         console.print()
 
 
@@ -366,21 +356,21 @@ def change_model(
 ) -> tuple[str, str, bool]:
     """
     Handle model change request.
-    
+
     Args:
         input_str: The /model argument (e.g., "claude-3.5-sonnet" or "openrouter/claude-3.5-sonnet")
         config_manager: ConfigManager instance
         current_provider: Current provider
         current_model: Current model
-        
+
     Returns:
         Tuple of (new_provider, new_model, changed)
     """
     from ..agent.llm.factory import LLMProviderFactory
-    
+
     new_provider = current_provider
     new_model = current_model
-    
+
     # Parse input: "provider/model" or just "model"
     if "/" in input_str:
         parts = input_str.split("/", 1)
@@ -388,41 +378,41 @@ def change_model(
         new_model = parts[1].strip()
     else:
         new_model = input_str.strip()
-    
+
     # Check if provider exists
     if new_provider not in PROVIDERS_INFO:
         console.print_error(f"Unknown provider: {new_provider}")
         console.print(f"[dim]Available providers: {', '.join(PROVIDERS_INFO.keys())}[/dim]")
         return current_provider, current_model, False
-    
+
     # Check provider availability
     available, msg = LLMProviderFactory.check_provider_availability(new_provider)
     if not available:
         console.print_error(f"{new_provider} not available: {msg}")
         return current_provider, current_model, False
-    
+
     # Update config
     try:
         # Load current config
         config = config_manager.load()
-        
+
         # Update provider config
         provider_config = config.get_provider_config(new_provider)
         if new_model and new_model != provider_config.model:
             # Set model for this provider
             config.set_provider_model(new_provider, new_model)
-        
+
         # If provider changed, update default_provider
         if new_provider != current_provider:
             config.default_provider = new_provider
-        
+
         # Save config
         config_manager.save(config)
-        
+
         console.print_success(f"Model changed: {new_provider}/{new_model}")
-        
+
         return new_provider, new_model, True
-        
+
     except Exception as e:
         console.print_error(f"Error saving config: {e}")
         return current_provider, current_model, False
@@ -432,24 +422,21 @@ def show_stats(agent: Agent):
     """Show session statistics."""
     try:
         summary = agent.get_conversation_summary()
-        
-        # Get more detailed stats from context
-        context = agent.context
-        
+
         console.print(f"\n[bold {NEON_CYAN}]Session Statistics[/bold {NEON_CYAN}]")
         console.print(f"  [dim]{'─' * 40}[/dim]")
-        
+
         # Parse summary
-        parts = summary.split(',')
+        parts = summary.split(",")
         for part in parts:
-            if 'Messages' in part:
+            if "Messages" in part:
                 console.print(f"  [bold {NEON_GOLD}]Messages:[/bold {NEON_GOLD}] {part.split(':')[1].strip()}")
-            elif '~' in part:
-                tokens = part.split('~')[1].replace(')', '').strip()
+            elif "~" in part:
+                tokens = part.split("~")[1].replace(")", "").strip()
                 console.print(f"  [bold {NEON_GOLD}]Tokens (est.):[/bold {NEON_GOLD}] ~{tokens}")
-        
+
         console.print()
-        
+
     except Exception as e:
         console.print_error(f"Error getting stats: {e}")
 
@@ -458,34 +445,34 @@ def show_context(agent: Agent):
     """Show context information."""
     try:
         context = agent.context
-        
+
         console.print(f"\n[bold {NEON_CYAN}]Context Information[/bold {NEON_CYAN}]")
         console.print(f"  [dim]{'─' * 40}[/dim]")
-        
+
         # Message count
         msg_count = context.get_message_count()
         console.print(f"  [bold {NEON_GOLD}]Total Messages:[/bold {NEON_GOLD}] {msg_count}")
-        
+
         # Token estimate
         tokens = context.get_token_count_estimate()
         console.print(f"  [bold {NEON_GOLD}]Token Estimate:[/bold {NEON_GOLD}] ~{tokens}")
-        
+
         # System prompt length
         if context.messages:
             system_msg = context.messages[0]
             if system_msg.role.value == "system":
                 sys_tokens = len(system_msg.content) // 4  # Rough estimate
                 console.print(f"  [bold {NEON_GOLD}]System Prompt:[/bold {NEON_GOLD}] ~{sys_tokens} tokens")
-        
+
         # Conversation turns
         turns = max(0, (msg_count - 1) // 2)  # Subtract system message
         console.print(f"  [bold {NEON_GOLD}]Conversation Turns:[/bold {NEON_GOLD}] {turns}")
-        
+
         # Available context space (assuming 100k context)
         context_limit = 100000
         used_pct = min(100, (tokens / context_limit) * 100)
         console.print(f"  [bold {NEON_GOLD}]Context Used:[/bold {NEON_GOLD}] {used_pct:.1f}%")
-        
+
         # Show recent messages
         if len(context.messages) > 1:
             console.print(f"\n[bold {NEON_CYAN}]Recent Messages[/bold {NEON_CYAN}]")
@@ -494,9 +481,9 @@ def show_context(agent: Agent):
                 preview = msg.content[:50] + "..." if len(msg.content) > 50 else msg.content
                 color = NEON_GREEN if role == "USER" else NEON_CYAN if role == "ASSISTANT" else NEON_DIM
                 console.print(f"  [{color}]{role}:[/] [dim]{preview}[/dim]")
-        
+
         console.print()
-        
+
     except Exception as e:
         console.print_error(f"Error getting context: {e}")
 
@@ -504,6 +491,7 @@ def show_context(agent: Agent):
 # ============================================================================
 # MAIN CHAT LOOP
 # ============================================================================
+
 
 async def interactive_chat(
     working_directory: Path,
@@ -519,7 +507,7 @@ async def interactive_chat(
 ):
     """
     Run interactive chat mode with concurrent message processing.
-    
+
     Allows typing new messages while AI is processing previous ones.
     Messages are queued and processed in order.
 
@@ -577,13 +565,13 @@ async def interactive_chat(
         LLMProviderFactory.print_provider_status()
 
     # Create repository map if enabled
-    repo_map = None
     if use_repomap:
         try:
             from ..agent.repomap import create_repository_map
+
             if verbose:
                 console.print_dim("Creating repository map...")
-            repo_map = create_repository_map(working_directory, max_tokens=1000)
+            create_repository_map(working_directory, max_tokens=1000)
             if verbose:
                 console.print_success("Repository map created")
         except Exception as e:
@@ -592,8 +580,6 @@ async def interactive_chat(
     # Initialize LLM provider(s)
     if architect_editor:
         # Use architect/editor pattern
-        from ..agent.architect_editor import ArchitectEditorAgent, ArchitectEditorConfig
-
         # Get architect and editor configs
         if architect_model and editor_model:
             # Custom models
@@ -614,12 +600,6 @@ async def interactive_chat(
         # Create providers
         architect = LLMProviderFactory.create_provider(arch_config)
         editor = LLMProviderFactory.create_provider(edit_config)
-
-        # Create architect/editor agent
-        ae_config = ArchitectEditorConfig(
-            architect_provider=architect,
-            editor_provider=editor,
-        )
 
         if verbose:
             console.print_success("Architect/Editor pattern")
@@ -683,9 +663,7 @@ async def interactive_chat(
         require_user_approval=agent_config.behavior.require_user_approval,
         max_iterations=max_iterations,
         verbose=verbose,
-        approval_callback=(
-            lambda call: Confirm.ask(format_approval_prompt(call), default=False)
-        ),
+        approval_callback=(lambda call: Confirm.ask(format_approval_prompt(call), default=False)),
     )
     agent = Agent(loop_config)
 
@@ -705,19 +683,21 @@ async def interactive_chat(
 
     # Create message queue for concurrent processing
     message_queue = MessageQueue()
-    
+
     # Track if we're currently processing
     processing_event = asyncio.Event()
     processing_event.set()  # Start ready to accept input
-    
+
     # Create prompt session with autocomplete
     _enable_cursor_blink()
-    
+
     # Create prompt_toolkit style for cyan cursor
-    neon_style = Style.from_dict({
-        "": "fg:ansicyan bold",
-    })
-    
+    neon_style = Style.from_dict(
+        {
+            "": "fg:ansicyan bold",
+        }
+    )
+
     session = PromptSession(
         completer=ChatCommandCompleter(),
         style=neon_style,
@@ -728,23 +708,23 @@ async def interactive_chat(
     async def process_message(user_input: str):
         """Process a single message through the agent."""
         nonlocal tools, current_provider, current_model, llm, loop_config
-        
+
         try:
             # Print thinking indicator
             console.print()
 
-            console.print(f"[dim]● Thinking...[/dim]")
-            
+            console.print("[dim]● Thinking...[/dim]")
+
             # Create a Live display for thinking (if streaming is supported)
             from rich.live import Live
             from rich.text import Text
-            
+
             thinking_lines = []
-            
+
             def update_thinking(line: str):
                 thinking_lines.append(line)
                 return Text.from_markup(f"[dim]{chr(10).join(thinking_lines[-5:])}[/dim]")
-            
+
             # Try streaming response for better UX
             try:
                 full_response = ""
@@ -752,10 +732,10 @@ async def interactive_chat(
                     async for chunk in agent.stream_message(user_input):
                         full_response += chunk
                         live.update(Text.from_markup(f"[dim]{chunk}[/dim]"))
-                
+
                 # Clear thinking indicator
                 console.print("\r" + " " * 50 + "\r", end="")
-                
+
             except Exception:
                 # Fallback to regular processing
                 console.print("\r" + " " * 50 + "\r", end="")
@@ -769,13 +749,15 @@ async def interactive_chat(
             console.print()
 
             if agent_config.behavior.auto_save_context:
-                session_store.save(SessionRecord(
-                    name=current_session,
-                    context=agent.context,
-                    provider=current_provider,
-                    model=current_model,
-                    project_root=str(working_directory.resolve()),
-                ))
+                session_store.save(
+                    SessionRecord(
+                        name=current_session,
+                        context=agent.context,
+                        provider=current_provider,
+                        model=current_model,
+                        project_root=str(working_directory.resolve()),
+                    )
+                )
 
         except Exception as e:
             console.print_error(str(e))
@@ -790,14 +772,14 @@ async def interactive_chat(
             try:
                 # Wait for next message
                 user_input = await message_queue.get()
-                
+
                 # Wait for any previous processing to complete
                 await processing_event.wait()
                 processing_event.clear()
-                
+
                 # Process this message
                 await process_message(user_input)
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -853,19 +835,24 @@ async def interactive_chat(
                     elif command == "/tools":
                         console.print(f"\n[bold {NEON_CYAN}]Available Tools:[bold {NEON_CYAN}]")
                         for tool_name in tools.list_tools():
-                            console.print(f"  [bold {NEON_GOLD}]•[bold {NEON_GOLD}] [bold {NEON_WHITE}]{tool_name}[bold {NEON_WHITE}]")
+                            console.print(
+                                f"  [bold {NEON_GOLD}]•[bold {NEON_GOLD}] "
+                                f"[bold {NEON_WHITE}]{tool_name}[bold {NEON_WHITE}]"
+                            )
                         continue
 
                     elif command.startswith("/save"):
                         parts = user_input.split(maxsplit=1)
                         current_session = parts[1].strip() if len(parts) > 1 else current_session
-                        path = session_store.save(SessionRecord(
-                            name=current_session,
-                            context=agent.context,
-                            provider=current_provider,
-                            model=current_model,
-                            project_root=str(working_directory.resolve()),
-                        ))
+                        path = session_store.save(
+                            SessionRecord(
+                                name=current_session,
+                                context=agent.context,
+                                provider=current_provider,
+                                model=current_model,
+                                project_root=str(working_directory.resolve()),
+                            )
+                        )
                         console.print_success(f"Session saved: {path}")
                         continue
 
@@ -875,9 +862,7 @@ async def interactive_chat(
                         record = session_store.load(name)
                         agent.context = record.context
                         current_session = name
-                        console.print_success(
-                            f"Session resumed: {name} ({agent.context.get_message_count()} messages)"
-                        )
+                        console.print_success(f"Session resumed: {name} ({agent.context.get_message_count()} messages)")
                         continue
 
                     elif command.startswith("/export"):
@@ -888,20 +873,23 @@ async def interactive_chat(
                         destination = Path(parts[1]).expanduser()
                         if not destination.is_absolute():
                             destination = working_directory / destination
-                        path = session_store.export(SessionRecord(
-                            name=current_session,
-                            context=agent.context,
-                            provider=current_provider,
-                            model=current_model,
-                            project_root=str(working_directory.resolve()),
-                        ), destination)
+                        path = session_store.export(
+                            SessionRecord(
+                                name=current_session,
+                                context=agent.context,
+                                provider=current_provider,
+                                model=current_model,
+                                project_root=str(working_directory.resolve()),
+                            ),
+                            destination,
+                        )
                         console.print_success(f"Session exported: {path}")
                         continue
 
                     elif command.startswith("/model"):
                         # Parse model name
                         parts = user_input.split(maxsplit=1)
-                        
+
                         if len(parts) == 1:
                             # Show all providers and models
                             show_providers_and_models(current_provider, current_model)
@@ -909,7 +897,7 @@ async def interactive_chat(
 
                         # Get the model/provider specification
                         model_spec = parts[1].strip()
-                        
+
                         # Change model
                         new_provider, new_model, changed = change_model(
                             model_spec,
@@ -917,11 +905,11 @@ async def interactive_chat(
                             current_provider,
                             current_model,
                         )
-                        
+
                         if changed:
                             current_provider = new_provider
                             current_model = new_model
-                            
+
                             # Create new LLM provider
                             provider_config = config_manager.load().get_provider_config(new_provider)
                             llm_config = AgentLLMConfig(
@@ -933,14 +921,14 @@ async def interactive_chat(
                                 max_tokens=provider_config.max_tokens,
                             )
                             llm = LLMProviderFactory.create_provider(llm_config)
-                            
+
                             # Update agent
                             loop_config.llm_provider = llm
                             agent.llm = llm
-                            
+
                             # Update banner display
                             print_banner(new_provider, new_model, verbose=False)
-                        
+
                         continue
 
                     else:

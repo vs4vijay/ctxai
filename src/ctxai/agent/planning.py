@@ -7,7 +7,6 @@ Implements planning patterns for complex tasks.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 from uuid import uuid4
 
 
@@ -155,11 +154,7 @@ class Plan:
         """
         completed_steps = {step.step_id for step in self.steps if step.status == StepStatus.DONE}
 
-        return [
-            step
-            for step in self.steps
-            if step.status == StepStatus.PENDING and step.is_ready(completed_steps)
-        ]
+        return [step for step in self.steps if step.status == StepStatus.PENDING and step.is_ready(completed_steps)]
 
     def get_step(self, step_id: str) -> PlanStep | None:
         """

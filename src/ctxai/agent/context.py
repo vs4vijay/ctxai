@@ -4,7 +4,7 @@ Conversation context management for agent.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from .llm.base import Message, MessageRole, ToolCall
 
@@ -20,11 +20,7 @@ class ConversationContext:
 
     def add_message(self, role: MessageRole, content: str, tool_calls: list[ToolCall] = None) -> None:
         """Add a message to conversation history."""
-        message = Message(
-            role=role,
-            content=content,
-            tool_calls=tool_calls
-        )
+        message = Message(role=role, content=content, tool_calls=tool_calls)
         self.messages.append(message)
 
     def add_user_message(self, content: str) -> None:
@@ -41,12 +37,7 @@ class ConversationContext:
 
     def add_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> None:
         """Add tool result message."""
-        message = Message(
-            role=MessageRole.USER,
-            content=result,
-            tool_call_id=tool_call_id,
-            name=tool_name
-        )
+        message = Message(role=MessageRole.USER, content=result, tool_call_id=tool_call_id, name=tool_name)
         self.messages.append(message)
 
     def get_messages_for_llm(self) -> list[Message]:
@@ -81,13 +72,15 @@ class ConversationContext:
         if created_at:
             context.created_at = datetime.fromisoformat(created_at)
         for item in data.get("messages", []):
-            context.messages.append(Message(
-                role=MessageRole(item["role"]),
-                content=str(item.get("content", "")),
-                tool_calls=[ToolCall(**call) for call in item.get("tool_calls", [])] or None,
-                tool_call_id=item.get("tool_call_id"),
-                name=item.get("name"),
-            ))
+            context.messages.append(
+                Message(
+                    role=MessageRole(item["role"]),
+                    content=str(item.get("content", "")),
+                    tool_calls=[ToolCall(**call) for call in item.get("tool_calls", [])] or None,
+                    tool_call_id=item.get("tool_call_id"),
+                    name=item.get("name"),
+                )
+            )
         return context
 
     def set_current_plan(self, plan: Any) -> None:
@@ -134,17 +127,16 @@ class ConversationContext:
             retained_ids.add(id(msg))
             token_count += msg_tokens
 
-        omitted = [
-            msg for msg in self.messages
-            if msg.role != MessageRole.SYSTEM and id(msg) not in retained_ids
-        ]
+        omitted = [msg for msg in self.messages if msg.role != MessageRole.SYSTEM and id(msg) not in retained_ids]
         summary = self._summarize_messages(omitted)
         summary_message = []
         if summary:
-            summary_message = [Message(
-                role=MessageRole.SYSTEM,
-                content="Conversation summary (preserve for future turns):\n" + summary,
-            )]
+            summary_message = [
+                Message(
+                    role=MessageRole.SYSTEM,
+                    content="Conversation summary (preserve for future turns):\n" + summary,
+                )
+            ]
         self.messages = system_messages + summary_message + recent_messages
 
     @staticmethod
@@ -160,9 +152,10 @@ class ConversationContext:
             content = " ".join(message.content.split())
             if not content:
                 continue
-            important = any(term in content.lower() for term in (
-                "decid", "chang", "fail", "error", "todo", "open", "risk", "test", "verify"
-            ))
+            important = any(
+                term in content.lower()
+                for term in ("decid", "chang", "fail", "error", "todo", "open", "risk", "test", "verify")
+            )
             limit = 700 if important else 300
             lines.append(f"- {label}: {content[:limit]}")
         summary = "\n".join(lines)

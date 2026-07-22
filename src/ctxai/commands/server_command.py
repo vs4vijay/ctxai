@@ -88,14 +88,16 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
                         stats = vector_store.get_stats()
 
                         manifest = IndexManifest.load_optional(index_path)
-                        indexes.append({
-                            "name": index_path.name,
-                            "chunks": stats["total_chunks"],
-                            "files": stats.get("unique_files", 0),
-                            "path": str(index_path),
-                            "index_schema_version": manifest.schema_version if manifest else None,
-                            "updated_at": manifest.updated_at if manifest else None,
-                        })
+                        indexes.append(
+                            {
+                                "name": index_path.name,
+                                "chunks": stats["total_chunks"],
+                                "files": stats.get("unique_files", 0),
+                                "path": str(index_path),
+                                "index_schema_version": manifest.schema_version if manifest else None,
+                                "updated_at": manifest.updated_at if manifest else None,
+                            }
+                        )
                     except Exception as e:
                         logger.warning(f"Could not load index {index_path.name}: {e}")
 
@@ -157,8 +159,14 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
                     asyncio.run_coroutine_threadsafe(ctx.report_progress(completed, total, message), loop)
 
             operation = partial(
-                run_index, path_obj, name, include_patterns, exclude_patterns, follow_gitignore,
-                progress_callback=progress, cancel_event=cancel_event,
+                run_index,
+                path_obj,
+                name,
+                include_patterns,
+                exclude_patterns,
+                follow_gitignore,
+                progress_callback=progress,
+                cancel_event=cancel_event,
             )
             future = loop.run_in_executor(None, operation)
             try:
@@ -181,15 +189,18 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             stats = vector_store.get_stats()
 
             logger.info(f"Indexing complete: {stats['total_chunks']} chunks")
-            return success({
-                "index_name": name,
-                "path": str(index_path),
-                "files": indexing_result.files,
-                "chunks": stats["total_chunks"],
-                "embedded_chunks": indexing_result.embedded_chunks,
-                "changed_files": indexing_result.changed_files,
-                "deleted_files": indexing_result.deleted_files,
-            }, message=f"Successfully indexed codebase '{name}'")
+            return success(
+                {
+                    "index_name": name,
+                    "path": str(index_path),
+                    "files": indexing_result.files,
+                    "chunks": stats["total_chunks"],
+                    "embedded_chunks": indexing_result.embedded_chunks,
+                    "changed_files": indexing_result.changed_files,
+                    "deleted_files": indexing_result.deleted_files,
+                },
+                message=f"Successfully indexed codebase '{name}'",
+            )
 
         except IndexingCancelled:
             return failure(MCPErrorCode.CANCELLED, "Indexing cancelled by client")
@@ -256,24 +267,28 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
                 content = result["content"]
                 distance = result["distance"]
                 similarity = max(0, 1 - distance)
-                formatted_results.append({
-                    "file_path": str(Path(metadata["file_path"])),
-                    "start_line": metadata["start_line"],
-                    "end_line": metadata["end_line"],
-                    "chunk_type": metadata["chunk_type"],
-                    "language": metadata["language"],
-                    "similarity": similarity,
-                    "content": content[:500],
-                    "truncated": len(content) > 500,
-                })
+                formatted_results.append(
+                    {
+                        "file_path": str(Path(metadata["file_path"])),
+                        "start_line": metadata["start_line"],
+                        "end_line": metadata["end_line"],
+                        "chunk_type": metadata["chunk_type"],
+                        "language": metadata["language"],
+                        "similarity": similarity,
+                        "content": content[:500],
+                        "truncated": len(content) > 500,
+                    }
+                )
 
             logger.info(f"Query returned {len(results)} results")
-            return success({
-                "index_name": index_name,
-                "query": query,
-                "results": formatted_results,
-                "count": len(formatted_results),
-            })
+            return success(
+                {
+                    "index_name": index_name,
+                    "query": query,
+                    "results": formatted_results,
+                    "count": len(formatted_results),
+                }
+            )
 
         except Exception as e:
             error_msg = f"Error querying codebase: {e}"
@@ -311,16 +326,18 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             manifest = IndexManifest.load_optional(index_path)
 
             logger.info(f"Stats retrieved for {index_name}")
-            return success({
-                "index_name": index_name,
-                "chunks": stats["total_chunks"],
-                "files": stats.get("unique_files", 0),
-                "storage_size_mb": round(size_mb, 3),
-                "path": str(index_path),
-                "index_schema_version": manifest.schema_version if manifest else None,
-                "repository_root": manifest.repository_root if manifest else None,
-                "updated_at": manifest.updated_at if manifest else None,
-            })
+            return success(
+                {
+                    "index_name": index_name,
+                    "chunks": stats["total_chunks"],
+                    "files": stats.get("unique_files", 0),
+                    "storage_size_mb": round(size_mb, 3),
+                    "path": str(index_path),
+                    "index_schema_version": manifest.schema_version if manifest else None,
+                    "repository_root": manifest.repository_root if manifest else None,
+                    "updated_at": manifest.updated_at if manifest else None,
+                }
+            )
 
         except Exception as e:
             error_msg = f"Error getting index stats: {e}"

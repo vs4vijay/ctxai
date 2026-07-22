@@ -8,7 +8,6 @@ authenticated tokens from OAuth device code flow.
 import json
 import os
 from collections.abc import Iterator
-from typing import Optional
 
 import requests
 
@@ -52,9 +51,7 @@ class GitHubCopilotProvider(BaseLLMProvider):
         self.token_data = self._get_token_data(config)
 
         if not self.token_data:
-            raise ValueError(
-                "GitHub Copilot token not found. Run 'ctxai login github-copilot' to authenticate."
-            )
+            raise ValueError("GitHub Copilot token not found. Run 'ctxai login github-copilot' to authenticate.")
 
         # Extract the actual API token
         if isinstance(self.token_data, dict):
@@ -304,15 +301,12 @@ GITHUB_COPILOT_MODELS = {
     "gpt-4": "gpt-4",
     "gpt-4-turbo": "gpt-4-turbo",
     "gpt-3.5-turbo": "gpt-3.5-turbo",
-
     # Reasoning models
     "o1-preview": "o1-preview",
     "o1-mini": "o1-mini",
-
     # Claude models (via Copilot)
     "claude-3.5-sonnet": "claude-3.5-sonnet",
     "claude-3-opus": "claude-3-opus",
-
     # Codex models (legacy)
     "gpt-5-codex": "gpt-5-codex",
 }

@@ -23,62 +23,79 @@ def make_agent(temp_dir, mock_llm_config, responses, approvals):
     registry.register(EditFileTool(context=context))
     registry.register(BashTool(AgentConfig().tools, context=context))
     llm = MockLLMProvider(config=mock_llm_config, responses=responses)
-    return Agent(AgentLoopConfig(
-        llm_provider=llm,
-        tool_registry=registry,
-        agent_config=AgentConfig(),
-        working_directory=temp_dir,
-        available_indexes=[],
-        max_iterations=12,
-        planning_enabled=True,
-        require_user_approval=True,
-        approval_callback=lambda call: approvals.append(call) or True,
-    ))
+    return Agent(
+        AgentLoopConfig(
+            llm_provider=llm,
+            tool_registry=registry,
+            agent_config=AgentConfig(),
+            working_directory=temp_dir,
+            available_indexes=[],
+            max_iterations=12,
+            planning_enabled=True,
+            require_user_approval=True,
+            approval_callback=lambda call: approvals.append(call) or True,
+        )
+    )
 
 
 def plan_call(command):
-    return {"name": "submit_plan", "parameters": {
-        "goal": "Refactor the configured value and verify the module",
-        "reasoning": "The inspected constant is the smallest safe change point.",
-        "actions": [
-            {
-                "action_id": "edit-value",
-                "description": "Update the value",
-                "tool": "edit_file",
-                "parameters": {"path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2"},
-                "evidence": ["app.py:1-1"],
-                "completion_criteria": "app.py contains VALUE = 2",
-            },
-            {
-                "action_id": "compile",
-                "description": "Compile the changed module",
-                "tool": "bash",
-                "parameters": {"command": command},
-                "evidence": ["app.py:1-1"],
-                "completion_criteria": "The compiler exits successfully",
-            },
-        ],
-    }}
+    return {
+        "name": "submit_plan",
+        "parameters": {
+            "goal": "Refactor the configured value and verify the module",
+            "reasoning": "The inspected constant is the smallest safe change point.",
+            "actions": [
+                {
+                    "action_id": "edit-value",
+                    "description": "Update the value",
+                    "tool": "edit_file",
+                    "parameters": {"path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2"},
+                    "evidence": ["app.py:1-1"],
+                    "completion_criteria": "app.py contains VALUE = 2",
+                },
+                {
+                    "action_id": "compile",
+                    "description": "Compile the changed module",
+                    "tool": "bash",
+                    "parameters": {"command": command},
+                    "evidence": ["app.py:1-1"],
+                    "completion_criteria": "The compiler exits successfully",
+                },
+            ],
+        },
+    }
 
 
 @pytest.mark.e2e
 @pytest.mark.agent
 @pytest.mark.asyncio
-async def test_complex_task_plans_approves_exact_actions_and_tracks_progress(
-    temp_dir, mock_llm_config
-):
+async def test_complex_task_plans_approves_exact_actions_and_tracks_progress(temp_dir, mock_llm_config):
     (temp_dir / "app.py").write_text("VALUE = 1\n")
     command = f"{sys.executable} -m py_compile app.py"
     approvals = []
-    agent = make_agent(temp_dir, mock_llm_config, [
-        create_mock_response(tool_calls=[{"name": "read_file", "parameters": {"path": "app.py"}}]),
-        create_mock_response(tool_calls=[plan_call(command)]),
-        create_mock_response(tool_calls=[{"name": "edit_file", "parameters": {
-            "path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2",
-        }}]),
-        create_mock_response(tool_calls=[{"name": "bash", "parameters": {"command": command}}]),
-        create_mock_response("Refactor and focused verification completed."),
-    ], approvals)
+    agent = make_agent(
+        temp_dir,
+        mock_llm_config,
+        [
+            create_mock_response(tool_calls=[{"name": "read_file", "parameters": {"path": "app.py"}}]),
+            create_mock_response(tool_calls=[plan_call(command)]),
+            create_mock_response(
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "parameters": {
+                            "path": "app.py",
+                            "old_text": "VALUE = 1",
+                            "new_text": "VALUE = 2",
+                        },
+                    }
+                ]
+            ),
+            create_mock_response(tool_calls=[{"name": "bash", "parameters": {"command": command}}]),
+            create_mock_response("Refactor and focused verification completed."),
+        ],
+        approvals,
+    )
 
     report = await agent.process_message("Refactor VALUE end to end")
 
@@ -92,9 +109,7 @@ async def test_complex_task_plans_approves_exact_actions_and_tracks_progress(
     assert approvals[1].parameters["approval_target"] == command
     assert command in format_approval_prompt(approvals[1])
     assert "Proposed diff:" in format_approval_prompt(approvals[0])
-    assert agent.last_run and all(
-        action.status == "completed" for action in agent.last_run.plan.actions
-    )
+    assert agent.last_run and all(action.status == "completed" for action in agent.last_run.plan.actions)
 
 
 @pytest.mark.e2e
@@ -104,13 +119,27 @@ async def test_complex_mutation_without_plan_is_denied(temp_dir, mock_llm_config
     target = temp_dir / "app.py"
     target.write_text("VALUE = 1\n")
     approvals = []
-    agent = make_agent(temp_dir, mock_llm_config, [
-        create_mock_response(tool_calls=[{"name": "read_file", "parameters": {"path": "app.py"}}]),
-        create_mock_response(tool_calls=[{"name": "edit_file", "parameters": {
-            "path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2",
-        }}]),
-        create_mock_response("Done."),
-    ], approvals)
+    agent = make_agent(
+        temp_dir,
+        mock_llm_config,
+        [
+            create_mock_response(tool_calls=[{"name": "read_file", "parameters": {"path": "app.py"}}]),
+            create_mock_response(
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "parameters": {
+                            "path": "app.py",
+                            "old_text": "VALUE = 1",
+                            "new_text": "VALUE = 2",
+                        },
+                    }
+                ]
+            ),
+            create_mock_response("Done."),
+        ],
+        approvals,
+    )
 
     report = await agent.process_message("Refactor this across the application")
 
@@ -126,18 +155,34 @@ async def test_complex_mutation_without_plan_is_denied(temp_dir, mock_llm_config
 async def test_plan_rejects_evidence_that_was_not_inspected(temp_dir, mock_llm_config):
     (temp_dir / "app.py").write_text("VALUE = 1\n")
     approvals = []
-    agent = make_agent(temp_dir, mock_llm_config, [
-        create_mock_response(tool_calls=[{"name": "submit_plan", "parameters": {
-            "goal": "Refactor value",
-            "reasoning": "Use the value definition.",
-            "actions": [{
-                "description": "Edit value", "tool": "edit_file",
-                "parameters": {"path": "app.py", "old_text": "1", "new_text": "2"},
-                "evidence": ["app.py:1-1"], "completion_criteria": "Value is updated",
-            }],
-        }}]),
-        create_mock_response("Cannot proceed."),
-    ], approvals)
+    agent = make_agent(
+        temp_dir,
+        mock_llm_config,
+        [
+            create_mock_response(
+                tool_calls=[
+                    {
+                        "name": "submit_plan",
+                        "parameters": {
+                            "goal": "Refactor value",
+                            "reasoning": "Use the value definition.",
+                            "actions": [
+                                {
+                                    "description": "Edit value",
+                                    "tool": "edit_file",
+                                    "parameters": {"path": "app.py", "old_text": "1", "new_text": "2"},
+                                    "evidence": ["app.py:1-1"],
+                                    "completion_criteria": "Value is updated",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            ),
+            create_mock_response("Cannot proceed."),
+        ],
+        approvals,
+    )
 
     report = await agent.process_message("Refactor VALUE across the application")
 

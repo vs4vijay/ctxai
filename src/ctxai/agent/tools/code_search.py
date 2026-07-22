@@ -24,23 +24,36 @@ class SemanticSearchTool(BaseTool):
                     "index_name", ToolParameterType.STRING, "Matching repository index override", required=False
                 ),
                 ToolParameter(
-                    "n_results", ToolParameterType.INTEGER, "Results to return (default 5, max 20)",
-                    required=False, default=5,
+                    "n_results",
+                    ToolParameterType.INTEGER,
+                    "Results to return (default 5, max 20)",
+                    required=False,
+                    default=5,
                 ),
                 ToolParameter(
-                    "token_budget", ToolParameterType.INTEGER, "Maximum approximate context tokens",
-                    required=False, default=2000,
+                    "token_budget",
+                    ToolParameterType.INTEGER,
+                    "Maximum approximate context tokens",
+                    required=False,
+                    default=2000,
                 ),
                 ToolParameter(
-                    "debug", ToolParameterType.BOOLEAN, "Explain why context was selected",
-                    required=False, default=False,
+                    "debug",
+                    ToolParameterType.BOOLEAN,
+                    "Explain why context was selected",
+                    required=False,
+                    default=False,
                 ),
             ],
         )
 
     async def execute(
-        self, query: str, index_name: str | None = None, n_results: int = 5,
-        token_budget: int = 2000, debug: bool = False,
+        self,
+        query: str,
+        index_name: str | None = None,
+        n_results: int = 5,
+        token_budget: int = 2000,
+        debug: bool = False,
     ) -> dict[str, Any]:
         try:
             from ctxai.config import ConfigManager

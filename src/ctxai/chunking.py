@@ -5,7 +5,6 @@ Preserves semantic meaning by respecting code structure.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from tree_sitter_language_pack import get_parser
 

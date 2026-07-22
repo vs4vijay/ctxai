@@ -71,9 +71,14 @@ async def test_one_file_edit_requires_inspection_and_reports_verification(temp_d
         mock_llm_config,
         [
             create_mock_response(tool_calls=[{"name": "read_file", "parameters": {"path": "app.py"}}]),
-            create_mock_response(tool_calls=[{"name": "edit_file", "parameters": {
-                "path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2"
-            }}]),
+            create_mock_response(
+                tool_calls=[
+                    {
+                        "name": "edit_file",
+                        "parameters": {"path": "app.py", "old_text": "VALUE = 1", "new_text": "VALUE = 2"},
+                    }
+                ]
+            ),
             create_mock_response(tool_calls=[{"name": "bash", "parameters": {"command": command}}]),
             create_mock_response("Updated VALUE and compiled the module."),
         ],
@@ -98,12 +103,12 @@ async def test_multi_file_edit_reports_actual_files(temp_dir, mock_llm_config):
         temp_dir,
         mock_llm_config,
         [
-            create_mock_response(tool_calls=[{"name": "write_file", "parameters": {
-                "path": "one.py", "content": "ONE = 1\n"
-            }}]),
-            create_mock_response(tool_calls=[{"name": "write_file", "parameters": {
-                "path": "two.py", "content": "TWO = 2\n"
-            }}]),
+            create_mock_response(
+                tool_calls=[{"name": "write_file", "parameters": {"path": "one.py", "content": "ONE = 1\n"}}]
+            ),
+            create_mock_response(
+                tool_calls=[{"name": "write_file", "parameters": {"path": "two.py", "content": "TWO = 2\n"}}]
+            ),
             create_mock_response(tool_calls=[{"name": "bash", "parameters": {"command": command}}]),
             create_mock_response("Created both modules."),
         ],
@@ -125,9 +130,9 @@ async def test_failed_required_check_cannot_report_success(temp_dir, mock_llm_co
         temp_dir,
         mock_llm_config,
         [
-            create_mock_response(tool_calls=[{"name": "write_file", "parameters": {
-                "path": "broken.py", "content": "def broken(:\n"
-            }}]),
+            create_mock_response(
+                tool_calls=[{"name": "write_file", "parameters": {"path": "broken.py", "content": "def broken(:\n"}}]
+            ),
             create_mock_response(tool_calls=[{"name": "bash", "parameters": {"command": command}}]),
             create_mock_response("Everything passed successfully."),
         ],
@@ -152,9 +157,9 @@ async def test_approval_denial_prevents_mutation(temp_dir, mock_llm_config):
         mock_llm_config,
         [
             create_mock_response(tool_calls=[{"name": "read_file", "parameters": {"path": "app.py"}}]),
-            create_mock_response(tool_calls=[{"name": "edit_file", "parameters": {
-                "path": "app.py", "old_text": "1", "new_text": "2"
-            }}]),
+            create_mock_response(
+                tool_calls=[{"name": "edit_file", "parameters": {"path": "app.py", "old_text": "1", "new_text": "2"}}]
+            ),
             create_mock_response("The change is complete."),
         ],
         approval=lambda call: False,

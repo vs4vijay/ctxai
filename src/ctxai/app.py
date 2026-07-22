@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -97,6 +96,7 @@ def main_callback(ctx: typer.Context):
     # If no subcommand was invoked, default to chat
     if ctx.invoked_subcommand is None:
         from .commands.chat_command import start_chat
+
         start_chat(
             working_directory=Path.cwd(),
             provider=None,  # Use default_provider from config
@@ -414,7 +414,10 @@ def chat(
         None,  # Changed from "openrouter" to None - use config default
         "--provider",
         "-p",
-        help="LLM provider: openrouter, github-copilot, ollama, anthropic, openai, custom (uses config default if not specified)",
+        help=(
+            "LLM provider: openrouter, github-copilot, ollama, anthropic, openai, custom "
+            "(uses config default if not specified)"
+        ),
     ),
     model: str = typer.Option(
         None,
@@ -574,8 +577,6 @@ def code(
     """
     import asyncio
 
-    from .commands.chat_command import interactive_chat
-
     async def run_task():
         from rich.console import Console
 
@@ -584,8 +585,8 @@ def code(
         from .agent.llm.anthropic_provider import AnthropicProvider
         from .agent.tools.bash_tool import BashTool
         from .agent.tools.code_search import SemanticSearchTool
-        from .agent.tools.file_ops import EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool
         from .agent.tools.execution import ToolExecutionContext
+        from .agent.tools.file_ops import EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool
         from .agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
         from .agent.tools.registry import ToolRegistry
         from .agent.workflow import format_approval_prompt
@@ -636,9 +637,7 @@ def code(
             require_user_approval=agent_config.behavior.require_user_approval,
             max_iterations=max_iterations,
             verbose=verbose,
-            approval_callback=(
-                lambda call: typer.confirm(format_approval_prompt(call))
-            ),
+            approval_callback=(lambda call: typer.confirm(format_approval_prompt(call))),
         )
         agent = Agent(loop_config)
 
@@ -648,6 +647,7 @@ def code(
             response = await agent.process_message(task)
 
         from rich.markdown import Markdown
+
         console.print("\n[bold green]Result:[/bold green]")
         console.print(Markdown(response))
 
@@ -871,6 +871,7 @@ def models_pull(
     success = pull_ollama_model(model_name=model, verbose=verbose)
     if not success:
         import typer
+
         raise typer.Exit(code=1)
 
 
@@ -894,12 +895,13 @@ def models_library(
     """
     from rich.console import Console
     from rich.table import Table
+
     from .commands.models_command import list_ollama_library_models
 
     console = Console()
     models = list_ollama_library_models(limit=limit)
 
-    console.print(f"\n[bold cyan]Popular Ollama Library Models:[/bold cyan]\n")
+    console.print("\n[bold cyan]Popular Ollama Library Models:[/bold cyan]\n")
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Model Name", style="cyan")
@@ -909,7 +911,7 @@ def models_library(
         table.add_row(m["name"], m["description"])
 
     console.print(table)
-    console.print(f"\n[dim]To pull a model: ctxai models pull <name>[/dim]")
+    console.print("\n[dim]To pull a model: ctxai models pull <name>[/dim]")
 
 
 app.add_typer(models_app, name="models")

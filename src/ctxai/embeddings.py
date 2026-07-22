@@ -11,7 +11,6 @@ Supported providers:
 
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from .config import EmbeddingConfig
 

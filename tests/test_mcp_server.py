@@ -2,8 +2,7 @@
 Tests for MCP server functionality.
 """
 
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,7 +10,6 @@ import pytest
 pytest.importorskip("mcp", reason="MCP not installed")
 
 from ctxai.commands.server_command import create_server
-from ctxai.config import Config, EmbeddingConfig, IndexConfig
 
 
 def test_create_server():

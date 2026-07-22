@@ -4,14 +4,12 @@ End-to-end tests for indexing and query workflows.
 Tests the complete pipeline from code traversal to semantic search.
 """
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from ctxai.commands.index_command import index_codebase
 from ctxai.commands.query_command import query_codebase
-from ctxai.utils import get_indexes_dir
 from ctxai.vector_store import VectorStore
 
 
@@ -30,15 +28,12 @@ def test_full_indexing_and_query_workflow(sample_python_code, temp_dir, patch_em
     6. Result retrieval and formatting
     """
     # Patch get_indexes_dir to use our temp directory
-    with patch('ctxai.commands.index_command.get_indexes_dir', return_value=temp_dir / ".ctxai" / "indexes"):
-        with patch('ctxai.commands.query_command.get_indexes_dir', return_value=temp_dir / ".ctxai" / "indexes"):
+    with patch("ctxai.commands.index_command.get_indexes_dir", return_value=temp_dir / ".ctxai" / "indexes"):
+        with patch("ctxai.commands.query_command.get_indexes_dir", return_value=temp_dir / ".ctxai" / "indexes"):
             # Create index
             index_name = "test-index"
             index_codebase(
-                path=sample_python_code,
-                index_name=index_name,
-                include_patterns=["*.py"],
-                follow_gitignore=False
+                path=sample_python_code, index_name=index_name, include_patterns=["*.py"], follow_gitignore=False
             )
 
             # Verify index was created
@@ -58,7 +53,7 @@ def test_full_indexing_and_query_workflow(sample_python_code, temp_dir, patch_em
                 query="function that greets someone",
                 project_path=temp_dir,
                 n_results=3,
-                show_content=True
+                show_content=True,
             )
 
             # Capture output
@@ -81,20 +76,14 @@ def test_indexing_respects_gitignore(sample_code_with_gitignore, temp_dir, patch
     2. Ignored files are not indexed
     3. Non-ignored files are indexed
     """
-    with patch('ctxai.commands.index_command.get_indexes_dir', return_value=temp_dir / ".ctxai" / "indexes"):
+    with patch("ctxai.commands.index_command.get_indexes_dir", return_value=temp_dir / ".ctxai" / "indexes"):
         # Index with gitignore enabled
         index_name = "gitignore-test"
-        index_codebase(
-            path=sample_code_with_gitignore,
-            index_name=index_name,
-            follow_gitignore=True
-        )
+        index_codebase(path=sample_code_with_gitignore, index_name=index_name, follow_gitignore=True)
 
         # Load index and check what files were indexed
         indexes_dir = temp_dir / ".ctxai" / "indexes"
         vector_store = VectorStore(indexes_dir, index_name)
-        stats = vector_store.get_stats()
-
         # Get all file paths from chunks
         collection = vector_store.collection
         results = collection.get(include=["metadatas"])
@@ -122,15 +111,12 @@ def test_incremental_indexing(sample_python_code, temp_dir, patch_embeddings_fac
     3. Re-indexing updates the index
     4. Both old and new files are present
     """
-    with patch('ctxai.commands.index_command.get_indexes_dir', return_value=temp_dir / ".ctxai" / "indexes"):
+    with patch("ctxai.commands.index_command.get_indexes_dir", return_value=temp_dir / ".ctxai" / "indexes"):
         index_name = "incremental-test"
 
         # Initial indexing
         index_codebase(
-            path=sample_python_code,
-            index_name=index_name,
-            include_patterns=["*.py"],
-            follow_gitignore=False
+            path=sample_python_code, index_name=index_name, include_patterns=["*.py"], follow_gitignore=False
         )
 
         # Get initial stats
@@ -155,10 +141,7 @@ class DataProcessor:
 
         # Re-index
         index_codebase(
-            path=sample_python_code,
-            index_name=index_name,
-            include_patterns=["*.py"],
-            follow_gitignore=False
+            path=sample_python_code, index_name=index_name, include_patterns=["*.py"], follow_gitignore=False
         )
 
         # Verify new chunks were added
@@ -189,8 +172,8 @@ def test_multi_language_indexing(sample_multi_language_code, temp_dir, patch_emb
     3. Correct language metadata is stored
     4. Query returns results from multiple languages
     """
-    with patch('ctxai.commands.index_command.get_indexes_dir', return_value=temp_dir / ".ctxai" / "indexes"):
-        with patch('ctxai.commands.query_command.get_indexes_dir', return_value=temp_dir / ".ctxai" / "indexes"):
+    with patch("ctxai.commands.index_command.get_indexes_dir", return_value=temp_dir / ".ctxai" / "indexes"):
+        with patch("ctxai.commands.query_command.get_indexes_dir", return_value=temp_dir / ".ctxai" / "indexes"):
             index_name = "multi-lang-test"
 
             # Index multi-language codebase
@@ -198,7 +181,7 @@ def test_multi_language_indexing(sample_multi_language_code, temp_dir, patch_emb
                 path=sample_multi_language_code,
                 index_name=index_name,
                 include_patterns=["*.py", "*.js"],
-                follow_gitignore=False
+                follow_gitignore=False,
             )
 
             # Load index
@@ -226,11 +209,7 @@ def test_multi_language_indexing(sample_multi_language_code, temp_dir, patch_emb
 
             # Query should work across languages
             query_codebase(
-                index_name=index_name,
-                query="calculator class",
-                project_path=temp_dir,
-                n_results=10,
-                show_content=False
+                index_name=index_name, query="calculator class", project_path=temp_dir, n_results=10, show_content=False
             )
 
             # If query works without error, the test passes

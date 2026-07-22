@@ -79,8 +79,14 @@ def test_all_concrete_provider_classes_satisfy_the_shared_interface() -> None:
     from ctxai.agent.llm.openai_provider import OpenAIProvider
     from ctxai.agent.llm.openrouter_provider import OpenRouterProvider
 
-    classes = [AnthropicProvider, CustomProvider, GitHubCopilotProvider, OllamaProvider,
-               OpenAIProvider, OpenRouterProvider]
+    classes = [
+        AnthropicProvider,
+        CustomProvider,
+        GitHubCopilotProvider,
+        OllamaProvider,
+        OpenAIProvider,
+        OpenRouterProvider,
+    ]
     assert not [provider.__name__ for provider in classes if inspect.isabstract(provider)]
 
 
@@ -124,12 +130,14 @@ def test_fallback_is_observable_and_never_silently_crosses_boundary() -> None:
 
 
 def test_fallback_requires_opt_in_and_configuration_round_trips() -> None:
-    config = AgentLLMConfig.from_dict({
-        "provider": "ollama",
-        "fallback_providers": ["openai"],
-        "fallback_enabled": True,
-        "allow_fallback_boundary_crossing": True,
-    })
+    config = AgentLLMConfig.from_dict(
+        {
+            "provider": "ollama",
+            "fallback_providers": ["openai"],
+            "fallback_enabled": True,
+            "allow_fallback_boundary_crossing": True,
+        }
+    )
     assert config.fallback_enabled is True
     assert config.allow_fallback_boundary_crossing is True
     assert AgentLLMConfig().fallback_enabled is False
@@ -140,5 +148,11 @@ def test_published_compatibility_matrix_is_generated_from_contract() -> None:
     documented = Path("docs/PROVIDER_COMPATIBILITY.md").read_text(encoding="utf-8")
     assert documented == render_compatibility_matrix()
     assert {spec.name for spec in PROVIDER_SPECS} == {
-        "anthropic", "openai", "openrouter", "github-copilot", "ollama", "custom", "nvidia"
+        "anthropic",
+        "openai",
+        "openrouter",
+        "github-copilot",
+        "ollama",
+        "custom",
+        "nvidia",
     }

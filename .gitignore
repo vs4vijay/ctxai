@@ -161,6 +161,7 @@ cython_debug/
 
 # ctxai local indexes
 .ctxai/
+.sesskey
 
 .claude/settings.local.json
 

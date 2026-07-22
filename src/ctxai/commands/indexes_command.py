@@ -5,10 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..index_manifest import MANIFEST_FILENAME, IndexManifest, IndexManifestError
+from ..index_manifest import IndexManifest, IndexManifestError
 from ..index_operations import IndexOperations
-from ..utils import get_indexes_dir
-from ..vector_store import VectorStore, VectorStoreError
 
 
 @dataclass(frozen=True)

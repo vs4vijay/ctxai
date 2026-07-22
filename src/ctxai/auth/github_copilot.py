@@ -7,7 +7,6 @@ allowing CLI authentication without browser interaction.
 
 import json
 import time
-from typing import Optional
 
 import requests
 from rich.console import Console
@@ -207,12 +206,16 @@ class GitHubCopilotAuth:
                 return False, "No Copilot token in response", None
 
             # Return the full token data (includes expiry, etc.)
-            return True, None, {
-                "token": copilot_token,
-                "expires_at": data.get("expires_at"),
-                "refresh_token": self.refresh_token,
-                "access_token": self.access_token,
-            }
+            return (
+                True,
+                None,
+                {
+                    "token": copilot_token,
+                    "expires_at": data.get("expires_at"),
+                    "refresh_token": self.refresh_token,
+                    "access_token": self.access_token,
+                },
+            )
 
         except requests.RequestException as e:
             return False, f"Request failed: {str(e)}", None

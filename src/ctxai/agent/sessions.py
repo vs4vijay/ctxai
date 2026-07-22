@@ -21,8 +21,15 @@ _SECRET_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b", re.IGNORECASE),
 )
 _SECRET_KEYS = {
-    "api_key", "apikey", "access_token", "auth_token", "token", "password",
-    "secret", "client_secret", "authorization",
+    "api_key",
+    "apikey",
+    "access_token",
+    "auth_token",
+    "token",
+    "password",
+    "secret",
+    "client_secret",
+    "authorization",
 }
 
 
@@ -30,8 +37,7 @@ def redact_secrets(value: Any) -> Any:
     """Recursively redact common credential shapes before persistence/export."""
     if isinstance(value, dict):
         return {
-            key: "[REDACTED]" if str(key).lower().replace("-", "_") in _SECRET_KEYS
-            else redact_secrets(item)
+            key: "[REDACTED]" if str(key).lower().replace("-", "_") in _SECRET_KEYS else redact_secrets(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -71,15 +77,17 @@ class SessionStore:
     def save(self, record: SessionRecord) -> Path:
         path = self._path(record.name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = redact_secrets({
-            "schema_version": SESSION_SCHEMA_VERSION,
-            "name": record.name,
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-            "project_root": str(self.project_root),
-            "provider": record.provider,
-            "model": record.model,
-            "context": record.context.to_dict(),
-        })
+        payload = redact_secrets(
+            {
+                "schema_version": SESSION_SCHEMA_VERSION,
+                "name": record.name,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "project_root": str(self.project_root),
+                "provider": record.provider,
+                "model": record.model,
+                "context": record.context.to_dict(),
+            }
+        )
         fd, temporary = tempfile.mkstemp(prefix=f".{record.name}-", suffix=".tmp", dir=path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

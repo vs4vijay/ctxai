@@ -11,12 +11,11 @@ Provides access to 100+ models through a single API:
 
 import os
 from collections.abc import Iterator
-from typing import Optional
 
 import requests
 
 from ..config import AgentLLMConfig
-from .base import BaseLLMProvider, LLMResponse, MessageRole, ToolCall
+from .base import BaseLLMProvider, LLMResponse, ToolCall
 
 
 class OpenRouterProvider(BaseLLMProvider):
@@ -81,6 +80,7 @@ class OpenRouterProvider(BaseLLMProvider):
         """
         # Convert Message objects to dicts if needed
         from .base import Message
+
         if messages and isinstance(messages[0], Message):
             messages = self._format_messages(messages)
 
@@ -131,6 +131,7 @@ class OpenRouterProvider(BaseLLMProvider):
             for tc in message["tool_calls"]:
                 # Parse function arguments
                 import json
+
                 parameters = json.loads(tc["function"]["arguments"])
 
                 tool_calls.append(
@@ -204,6 +205,7 @@ class OpenRouterProvider(BaseLLMProvider):
 
                     try:
                         import json
+
                         data = json.loads(data_str)
                         if data["choices"][0]["delta"].get("content"):
                             yield data["choices"][0]["delta"]["content"]
@@ -261,29 +263,24 @@ OPENROUTER_MODELS = {
     # Best for coding (architect)
     "claude-sonnet": "anthropic/claude-3.5-sonnet",
     "claude-opus": "anthropic/claude-3-opus",
-
     # Fast and good (editor)
     "gpt-4o": "openai/gpt-4o",
     "gpt-4o-mini": "openai/gpt-4o-mini",
     "gpt-4-turbo": "openai/gpt-4-turbo",
-
     # Reasoning models (architect for complex tasks)
     "o1": "openai/o1",
     "o1-mini": "openai/o1-mini",
     "deepseek-r1": "deepseek/deepseek-r1-0528:free",
-
     # Free models (completely free)
     "llama-free": "meta-llama/llama-3.3-70b-instruct:free",
     "qwen-coder-free": "qwen/qwen3-coder:free",
     "mistral-free": "mistralai/mistral-small-3.1-24b-instruct:free",
     "gemma-27b-free": "google/gemma-3-27b-it:free",
-
     # Budget options (zero-cost or cheap)
     "deepseek-chat": "deepseek/deepseek-chat",
     "gemini-flash": "google/gemini-2.5-flash",
     "llama-70b": "meta-llama/llama-3.1-70b-instruct",
     "mixtral-8x7b": "mistralai/mixtral-8x7b-instruct",
-
     # Google models
     "gemini-pro": "google/gemini-2.5-pro",
 }

@@ -62,7 +62,7 @@ async def example_ollama_local():
 
     try:
         from ctxai.agent.config import AgentLLMConfig
-        from ctxai.agent.llm.ollama_provider import OLLAMA_CODING_MODELS, OllamaProvider
+        from ctxai.agent.llm.ollama_provider import OllamaProvider
 
         # Create Ollama provider
         config = AgentLLMConfig(
@@ -82,9 +82,7 @@ async def example_ollama_local():
             console.print(f"\nAvailable models: {', '.join(models[:5])}")
 
         # Simple chat example
-        messages = [
-            {"role": "user", "content": "Write a Python function to check if a number is prime"}
-        ]
+        messages = [{"role": "user", "content": "Write a Python function to check if a number is prime"}]
 
         console.print("\n[cyan]Generating code...[/cyan]")
         response = ollama.chat(messages)
@@ -153,7 +151,7 @@ async def example_mixed_providers():
             architect_provider=architect,
             editor_provider=editor,
         )
-        agent = ArchitectEditorAgent(config)
+        ArchitectEditorAgent(config)
 
         console.print("[green]✓ Mixed agent created:[/green]")
         console.print(f"  Architect: {architect}")

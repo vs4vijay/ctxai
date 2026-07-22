@@ -10,7 +10,7 @@ import pytest
 from ctxai.agent.config import AgentConfig
 from ctxai.agent.context import ConversationContext
 from ctxai.agent.core import Agent, AgentLoopConfig
-from ctxai.agent.llm.base import MessageRole, ProviderCapabilities, ToolCall
+from ctxai.agent.llm.base import ProviderCapabilities, ToolCall
 from ctxai.agent.sessions import SessionRecord, SessionStore
 from ctxai.agent.tools.registry import ToolRegistry
 from tests.mocks.mock_llm import MockLLMProvider
@@ -67,22 +67,22 @@ def test_context_compaction_preserves_decisions_failures_and_valid_tool_messages
     assert "Decision" in summary
     assert context.messages[-1].content == "The documentation task remains open."
     restored = ConversationContext.from_dict(context.to_dict())
-    assert [message.to_dict() for message in restored.messages] == [
-        message.to_dict() for message in context.messages
-    ]
+    assert [message.to_dict() for message in restored.messages] == [message.to_dict() for message in context.messages]
 
 
 @pytest.mark.asyncio
 async def test_multi_turn_model_switch_preserves_context_and_provider_capabilities(tmp_path: Path) -> None:
     first = MockLLMProvider(responses=[{"content": "first answer"}])
     tools = ToolRegistry()
-    agent = Agent(AgentLoopConfig(
-        llm_provider=first,
-        tool_registry=tools,
-        agent_config=AgentConfig(),
-        working_directory=tmp_path,
-        available_indexes=[],
-    ))
+    agent = Agent(
+        AgentLoopConfig(
+            llm_provider=first,
+            tool_registry=tools,
+            agent_config=AgentConfig(),
+            working_directory=tmp_path,
+            available_indexes=[],
+        )
+    )
     await agent.process_message("first question")
 
     second = MockLLMProvider(responses=[{"content": "second answer"}])

@@ -4,7 +4,6 @@ Search indexed codebase using natural language queries.
 """
 
 from pathlib import Path
-from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel

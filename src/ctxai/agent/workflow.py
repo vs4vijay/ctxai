@@ -132,15 +132,23 @@ class TaskRun:
         """Classify requests whose scope, uncertainty, or risk merits a plan."""
         normalized = goal.lower()
         signals = (
-            "refactor", "migrate", "redesign", "across", "multiple files",
-            "end to end", "architecture", "breaking change", "delete", "remove all",
-            "security", "database", "dependency upgrade",
+            "refactor",
+            "migrate",
+            "redesign",
+            "across",
+            "multiple files",
+            "end to end",
+            "architecture",
+            "breaking change",
+            "delete",
+            "remove all",
+            "security",
+            "database",
+            "dependency upgrade",
         )
         return any(signal in normalized for signal in signals)
 
-    def submit_plan(
-        self, *, goal: str, reasoning: str, actions: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def submit_plan(self, *, goal: str, reasoning: str, actions: list[dict[str, Any]]) -> dict[str, Any]:
         """Validate and store a task-specific plan grounded in inspected evidence."""
         if not goal.strip() or not reasoning.strip() or not actions:
             return self._deny(
@@ -173,14 +181,16 @@ class TaskRun:
                         FailureKind.INCOMPLETE_WORKFLOW,
                         f"Plan evidence was not inspected: {citation}",
                     )
-            planned.append(PlannedAction(
-                action_id=str(item.get("action_id") or f"action-{index}"),
-                description=str(item.get("description", "")).strip() or f"Run {tool}",
-                tool=tool,
-                parameters=parameters,
-                evidence=[str(value) for value in evidence],
-                completion_criteria=criteria,
-            ))
+            planned.append(
+                PlannedAction(
+                    action_id=str(item.get("action_id") or f"action-{index}"),
+                    description=str(item.get("description", "")).strip() or f"Run {tool}",
+                    tool=tool,
+                    parameters=parameters,
+                    evidence=[str(value) for value in evidence],
+                    completion_criteria=criteria,
+                )
+            )
         self.plan = StructuredPlan(goal=goal.strip(), reasoning=reasoning.strip(), actions=planned)
         self.failure_kind = None
         self.failure_message = None
@@ -207,10 +217,14 @@ class TaskRun:
                     str(parameters.get("old_text", "")),
                     str(parameters.get("new_text", "")),
                 )
-            parameters["proposed_diff"] = "".join(difflib.unified_diff(
-                before.splitlines(keepends=True), after.splitlines(keepends=True),
-                fromfile=f"a/{target_value}", tofile=f"b/{target_value}",
-            ))
+            parameters["proposed_diff"] = "".join(
+                difflib.unified_diff(
+                    before.splitlines(keepends=True),
+                    after.splitlines(keepends=True),
+                    fromfile=f"a/{target_value}",
+                    tofile=f"b/{target_value}",
+                )
+            )
         parameters["approval_target"] = target_value or parameters.get("command") or call.name
         return ToolCall(id=call.id, name=call.name, parameters=parameters)
 
@@ -286,11 +300,13 @@ class TaskRun:
             self.transition(TaskState.APPROVE)
             approval_call = self._approval_call(call)
             approved = approval_callback is not None and approval_callback(approval_call)
-            self.approvals.append({
-                "tool": call.name,
-                "parameters": approval_call.parameters,
-                "approved": approved,
-            })
+            self.approvals.append(
+                {
+                    "tool": call.name,
+                    "parameters": approval_call.parameters,
+                    "approved": approved,
+                }
+            )
             if not approved:
                 return self._deny(
                     FailureKind.APPROVAL_DENIAL,
@@ -351,18 +367,13 @@ class TaskRun:
         return {"success": False, "result": None, "error": message, "error_type": kind.value}
 
     def can_succeed(self) -> bool:
-        plan_complete = self.plan is None or all(
-            action.status == "completed" for action in self.plan.actions
-        )
+        plan_complete = self.plan is None or all(action.status == "completed" for action in self.plan.actions)
         if not self.mutated:
             return plan_complete and (
                 self.failure_kind is None or self.failure_kind == FailureKind.RECOVERABLE_TOOL_ERROR
             )
         return (
-            plan_complete
-            and self.diff_reviewed
-            and bool(self.checks)
-            and all(check.success for check in self.checks)
+            plan_complete and self.diff_reviewed and bool(self.checks) and all(check.success for check in self.checks)
         )
 
     def final_report(self, model_summary: str) -> str:
@@ -388,9 +399,9 @@ class TaskRun:
             except ValueError:
                 changed.append(str(path))
         changed_text = ", ".join(changed) if changed else "None"
-        checks_text = "; ".join(
-            f"{check.command} ({'passed' if check.success else 'failed'})" for check in self.checks
-        ) or "None"
+        checks_text = (
+            "; ".join(f"{check.command} ({'passed' if check.success else 'failed'})" for check in self.checks) or "None"
+        )
         risks = "None identified" if success else (self.failure_message or "Task did not complete")
         plan_text = self.plan.progress if self.plan is not None else "Not required"
         return (

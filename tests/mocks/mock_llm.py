@@ -6,7 +6,7 @@ enabling fast, deterministic testing without costs.
 """
 
 from collections.abc import Generator
-from typing import Any, Optional
+from typing import Any
 
 from ctxai.agent.config import AgentLLMConfig
 from ctxai.agent.llm.base import (
@@ -39,11 +39,7 @@ class MockLLMProvider(BaseLLMProvider):
         # Create dummy config if none provided
         if config is None:
             config = AgentLLMConfig(
-                provider="mock",
-                model="mock-model",
-                api_key="mock-key",
-                temperature=0.7,
-                max_tokens=4096
+                provider="mock", model="mock-model", api_key="mock-key", temperature=0.7, max_tokens=4096
             )
 
         super().__init__(config)
@@ -55,12 +51,7 @@ class MockLLMProvider(BaseLLMProvider):
         """Get the default model for this provider."""
         return "mock-model-v1"
 
-    def chat(
-        self,
-        messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs
-    ) -> LLMResponse:
+    def chat(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs) -> LLMResponse:
         """
         Return predefined response based on call count.
 
@@ -73,11 +64,13 @@ class MockLLMProvider(BaseLLMProvider):
             Predefined LLMResponse for current call count
         """
         # Track call for assertions
-        self.call_history.append({
-            "messages": [msg.to_dict() for msg in messages],
-            "tools": tools,
-            "kwargs": kwargs,
-        })
+        self.call_history.append(
+            {
+                "messages": [msg.to_dict() for msg in messages],
+                "tools": tools,
+                "kwargs": kwargs,
+            }
+        )
 
         # Return next response or default if we've exhausted responses
         if self.call_count >= len(self.responses):
@@ -86,7 +79,7 @@ class MockLLMProvider(BaseLLMProvider):
                 content="Task completed successfully.",
                 tool_calls=[],
                 finish_reason="stop",
-                usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}
+                usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
             )
             self.call_count += 1
             return response
@@ -99,11 +92,13 @@ class MockLLMProvider(BaseLLMProvider):
         tool_calls = []
         if "tool_calls" in response_config:
             for i, tc in enumerate(response_config["tool_calls"]):
-                tool_calls.append(ToolCall(
-                    id=tc.get("id", f"call_{self.call_count}_{i}"),
-                    name=tc["name"],
-                    parameters=tc.get("parameters", {})
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.get("id", f"call_{self.call_count}_{i}"),
+                        name=tc["name"],
+                        parameters=tc.get("parameters", {}),
+                    )
+                )
 
         # Determine finish reason
         finish_reason = response_config.get("finish_reason")
@@ -115,18 +110,11 @@ class MockLLMProvider(BaseLLMProvider):
             content=response_config.get("content", ""),
             tool_calls=tool_calls,
             finish_reason=finish_reason,
-            usage=response_config.get("usage", {
-                "prompt_tokens": 100,
-                "completion_tokens": 20,
-                "total_tokens": 120
-            })
+            usage=response_config.get("usage", {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}),
         )
 
     def stream_chat(
-        self,
-        messages: list[Message],
-        tools: list[dict[str, Any]] | None = None,
-        **kwargs
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs
     ) -> Generator[str, None, None]:
         """
         Mock streaming - yields content character by character.

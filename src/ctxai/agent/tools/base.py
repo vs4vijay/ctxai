@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 class ToolParameterType(str, Enum):
     """Tool parameter types."""
+
     STRING = "string"
     NUMBER = "number"
     INTEGER = "integer"
@@ -23,6 +24,7 @@ class ToolParameterType(str, Enum):
 @dataclass
 class ToolParameter:
     """Represents a tool parameter."""
+
     name: str
     type: ToolParameterType
     description: str
@@ -46,9 +48,7 @@ class ToolParameter:
             param_dict["default"] = self.default
 
         if self.properties:
-            param_dict["properties"] = {
-                name: prop.to_dict() for name, prop in self.properties.items()
-            }
+            param_dict["properties"] = {name: prop.to_dict() for name, prop in self.properties.items()}
 
         if self.items:
             param_dict["items"] = self.items.to_dict()
@@ -59,6 +59,7 @@ class ToolParameter:
 @dataclass
 class ToolSchema:
     """Schema definition for a tool."""
+
     name: str
     description: str
     parameters: list[ToolParameter] = field(default_factory=list)
@@ -142,13 +143,14 @@ class BaseTool(ABC):
         """
         class_name = self.__class__.__name__
         # Remove 'Tool' suffix
-        if class_name.endswith('Tool'):
+        if class_name.endswith("Tool"):
             class_name = class_name[:-4]
 
         # Convert CamelCase to snake_case
         import re
-        name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
-        name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
+
+        name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", class_name)
+        name = re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
         return name
 

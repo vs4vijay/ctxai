@@ -7,7 +7,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -63,9 +62,7 @@ def test_index_survives_real_process_restart(sample_multi_language_code, temp_di
 
 @pytest.mark.e2e
 @pytest.mark.indexing
-def test_manifest_noop_change_and_delete_updates(
-    sample_python_code, temp_dir, patch_embeddings_factory, monkeypatch
-):
+def test_manifest_noop_change_and_delete_updates(sample_python_code, temp_dir, patch_embeddings_factory, monkeypatch):
     indexes_dir = temp_dir / ".ctxai" / "indexes"
     monkeypatch.setattr("ctxai.commands.index_command.get_indexes_dir", lambda _path: indexes_dir)
     provider = patch_embeddings_factory
@@ -140,8 +137,6 @@ def test_indexes_cli_lifecycle(sample_python_code, temp_dir, patch_embeddings_fa
     doctor = runner.invoke(app, ["indexes", "doctor", "managed", "--project-path", str(temp_dir)])
     assert doctor.exit_code == 0
     assert "healthy" in doctor.stdout
-    deleted = runner.invoke(
-        app, ["indexes", "delete", "managed", "--yes", "--project-path", str(temp_dir)]
-    )
+    deleted = runner.invoke(app, ["indexes", "delete", "managed", "--yes", "--project-path", str(temp_dir)])
     assert deleted.exit_code == 0
     assert not (indexes_dir / "managed").exists()

@@ -1,117 +1,51 @@
 # ctxai Roadmap
 
-## ✅ Completed (v0.0.1)
+Last reviewed: 2026-07-23
 
-- [x] CLI with Typer framework
-- [x] Code traversal with gitignore support
-- [x] Tree-sitter based intelligent chunking
-- [x] OpenAI embeddings generation
-- [x] ChromaDB vector storage
-- [x] Index command with progress tracking
-- [x] Support for multiple programming languages
-- [x] Rich CLI output with progress bars
+This roadmap summarizes validated capabilities and upcoming product work. [plan.md](plan.md) is the detailed source of truth; [plan2.md](plan2.md) defines requirements for the next intelligence phase.
 
-## 🚧 In Progress
+## Validated foundation
 
-### MCP Server Integration
-- [ ] Implement MCP server protocol
-- [ ] Search endpoint for semantic queries
-- [ ] Integration with GitHub Copilot
-- [ ] Support for multiple indexes
-- [ ] Query filtering by language/file type
+- [x] Persistent, incremental, gitignore-aware syntax and semantic indexing
+- [x] Stable manifests, index integrity checks, lifecycle commands, and retrieval baselines
+- [x] Project-rooted filesystem, command, semantic-search, and read-only Git tools
+- [x] Hybrid grounded retrieval with file-and-line evidence and token budgeting
+- [x] Verified one-shot changes with diffs, approvals, focused checks, and audit records
+- [x] Durable, redacted interactive sessions and provider/model switching
+- [x] Versioned MCP index and query service with real-client protocol tests
+- [x] Provider capability contracts and privacy-boundary-aware fallback behavior
+- [x] Evidence-backed planning and exact-action approval for risky or complex work
+- [x] Local dashboard for index health, grounded search, inspection, and deletion
 
-### Search Functionality
-- [ ] CLI search command
-- [ ] Fuzzy matching
-- [ ] Result ranking improvements
-- [ ] Context window expansion
-- [ ] Search history
+## Next: intelligence advantage
 
-## 📋 Planned Features
+- [ ] Build a persistent symbol and relationship graph for definitions, imports, calls, inheritance, tests, and references
+- [ ] Expand semantic retrieval with graph relationships while preserving bounded, inspectable evidence
+- [ ] Add an executable retrieval-evaluation CLI with Recall@K, MRR, latency, and context-efficiency metrics
+- [ ] Add privacy-preserving retrieval traces and dashboard observability
+- [ ] Enforce retrieval-quality regression gates in CI
+- [ ] Add change-impact analysis using callers, references, tests, and documentation relationships
+- [ ] Detect index freshness and support explicit or opt-in automatic updates
 
-### Core Features
-- [ ] Incremental indexing (update only changed files)
-- [ ] Index versioning and migration
-- [ ] Multi-repository support
-- [ ] Custom embedding models support
-- [ ] Local embedding models (no API required)
-- [ ] Hybrid search (semantic + keyword)
+The first five items above are specified as vertical slices in [plan2.md](plan2.md).
 
-### CLI Improvements
-- [ ] Interactive shell mode (`ctxai shell`)
-- [ ] Index management commands (list, delete, info)
-- [ ] Configuration file support
-- [ ] Verbose/debug logging modes
-- [ ] Export/import indexes
+## Product hardening
 
-### Dashboard
-- [ ] Web-based dashboard (`ctxai dashboard`)
-- [ ] Visual index browser
-- [ ] Search interface
-- [ ] Index statistics and analytics
-- [ ] Code snippets preview
+- [ ] Add a privacy and provider-cost ledger for context leaving the machine
+- [ ] Export reusable evidence-linked context packs
+- [ ] Add a repository-wide `ctxai doctor` command
+- [ ] Validate clean installations and supported platforms continuously
+- [ ] Expand static typing from the validated core boundary to the complete package
+- [ ] Maintain zero repository-wide lint and formatting errors
 
-### Developer Experience
-- [ ] Python API for programmatic usage
-- [ ] Hooks/plugins system
-- [ ] Custom chunking strategies
-- [ ] Pre-commit hooks
-- [ ] CI/CD integration examples
+## Deferred until the foundation justifies them
 
-### Performance
-- [ ] Parallel processing
-- [ ] Streaming for large files
-- [ ] Cache layer for embeddings
-- [ ] Compression for storage
-- [ ] Memory optimization
+- Multi-agent orchestration
+- IDE extensions
+- Enterprise collaboration surfaces
+- Generic web/search tools unrelated to repository understanding
+- Architect/editor mode or cost-saving claims without benchmark evidence
 
-### Advanced Features
-- [ ] Code relationship graph
-- [ ] Duplicate code detection
-- [ ] Code quality metrics
-- [ ] Security vulnerability scanning
-- [ ] License compliance checking
-- [ ] Documentation generation
+## Release standard
 
-### Integrations
-- [ ] VS Code extension
-- [ ] GitHub Actions
-- [ ] GitLab CI
-- [ ] Docker support
-- [ ] IDE plugins (PyCharm, IntelliJ)
-
-### AI Enhancements
-- [ ] Code explanation generation
-- [ ] Automatic tagging
-- [ ] Code summarization
-- [ ] Related code suggestions
-- [ ] Documentation generation
-
-## 🎯 Future Vision
-
-### Agent Framework Integration
-- Integration with Autogen
-- Pydantic AI support
-- Memory integration (mem0)
-- Multi-agent workflows
-
-### Advanced Search
-- Natural language code generation
-- Code refactoring suggestions
-- Pattern detection
-- API usage examples
-
-### Enterprise Features
-- Team collaboration
-- Shared indexes
-- Access control
-- Audit logging
-- Custom deployment options
-
-## Contributing
-
-Want to help build these features? Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute.
-
-## Version History
-
-- **v0.0.1** (Current) - Initial release with basic indexing and storage
+A feature is marked validated only when its complete user outcome has passing acceptance tests. Functional or experimental code is not presented as production-ready, and documentation must distinguish validated behavior from planned work.

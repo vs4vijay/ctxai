@@ -70,9 +70,7 @@ class IndexOperations:
         stale = False
         if manifest is not None:
             if storage_chunks is not None and storage_chunks != manifest.chunk_count:
-                problems.append(
-                    f"manifest has {manifest.chunk_count} chunks but storage has {storage_chunks}"
-                )
+                problems.append(f"manifest has {manifest.chunk_count} chunks but storage has {storage_chunks}")
             if manifest.file_count != len(manifest.files):
                 problems.append("manifest file count does not match its file records")
             repository = Path(manifest.repository_root)

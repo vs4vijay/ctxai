@@ -2,7 +2,6 @@
 Core agent implementation with tool calling and planning.
 """
 
-import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +10,7 @@ from rich.console import Console
 
 from .config import AgentConfig
 from .context import ConversationContext
-from .llm.base import BaseLLMProvider, MessageRole, ToolCall
+from .llm.base import BaseLLMProvider, ToolCall
 from .prompts import get_system_prompt, get_tool_error_recovery_prompt
 from .tools.registry import ToolRegistry
 from .workflow import ApprovalCallback, TaskRun, discover_verification_commands
@@ -51,6 +50,7 @@ PLAN_TOOL_SCHEMA = {
 @dataclass
 class AgentLoopConfig:
     """Configuration for agent execution."""
+
     llm_provider: BaseLLMProvider
     tool_registry: ToolRegistry
     agent_config: AgentConfig
@@ -144,10 +144,7 @@ class Agent:
                 # Check if LLM wants to use tools
                 if response.has_tool_calls:
                     # Add assistant message with tool calls
-                    self.context.add_assistant_message(
-                        response.content,
-                        tool_calls=response.tool_calls
-                    )
+                    self.context.add_assistant_message(response.content, tool_calls=response.tool_calls)
 
                     # Execute tools
                     tool_results = await self._execute_tools(response.tool_calls, run=run)
@@ -158,9 +155,7 @@ class Agent:
                         result_text = self._format_tool_result(result)
                         current_results.append(result_text)
                         self.context.add_tool_result(
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.name,
-                            result=result_text
+                            tool_call_id=tool_call.id, tool_name=tool_call.name, result=result_text
                         )
 
                     # Check if tools are failing repeatedly (stuck in loop)
@@ -179,7 +174,7 @@ class Agent:
                             )
                     else:
                         consecutive_tool_failures = 0
-                    
+
                     last_tool_results = current_results
                     iteration += 1
                     continue
@@ -200,15 +195,13 @@ class Agent:
 
                 # Try to recover
                 recovery_prompt = get_tool_error_recovery_prompt(
-                    tool_name="LLM",
-                    error=str(e),
-                    original_goal=user_message
+                    tool_name="LLM", error=str(e), original_goal=user_message
                 )
                 self.context.add_user_message(recovery_prompt)
                 iteration += 1
                 continue
 
-# Max iterations reached
+        # Max iterations reached
         error_msg = (
             f"! Max iterations ({self.config.max_iterations}) reached. "
             "The task may be too complex or an error occurred. "
@@ -224,9 +217,7 @@ class Agent:
         """
         yield await self.process_message(user_message)
 
-    async def _execute_tools(
-        self, tool_calls: list[ToolCall], *, run: TaskRun | None = None
-    ) -> list[dict]:
+    async def _execute_tools(self, tool_calls: list[ToolCall], *, run: TaskRun | None = None) -> list[dict]:
         """
         Execute tool calls.
 
@@ -245,9 +236,11 @@ class Agent:
 
             try:
                 if tool_call.name == "submit_plan":
-                    result = run.submit_plan(**tool_call.parameters) if run is not None else {
-                        "success": False, "error": "Planning is unavailable for this run"
-                    }
+                    result = (
+                        run.submit_plan(**tool_call.parameters)
+                        if run is not None
+                        else {"success": False, "error": "Planning is unavailable for this run"}
+                    )
                     results.append(result)
                     continue
                 denial = None
@@ -258,9 +251,7 @@ class Agent:
                         require_approval=self.config.require_user_approval,
                         approval_callback=self.config.approval_callback,
                     )
-                result = denial or await self.tools.execute_tool(
-                    tool_call.name, **tool_call.parameters
-                )
+                result = denial or await self.tools.execute_tool(tool_call.name, **tool_call.parameters)
                 results.append(result)
                 if run is not None:
                     run.observe(tool_call, result)
@@ -272,11 +263,7 @@ class Agent:
                         self.console.print(f"[yellow]⚠ {tool_call.name} failed: {result.get('error')}[/yellow]")
 
             except Exception as e:
-                error_result = {
-                    "success": False,
-                    "result": None,
-                    "error": f"Tool execution exception: {str(e)}"
-                }
+                error_result = {"success": False, "result": None, "error": f"Tool execution exception: {str(e)}"}
                 results.append(error_result)
 
                 if self.config.verbose:
@@ -288,8 +275,7 @@ class Agent:
     def _plan_tool_schema(tool_format: str) -> dict:
         schema = PLAN_TOOL_SCHEMA["function"]
         if tool_format == "anthropic":
-            return {"name": schema["name"], "description": schema["description"],
-                    "input_schema": schema["parameters"]}
+            return {"name": schema["name"], "description": schema["description"], "input_schema": schema["parameters"]}
         return PLAN_TOOL_SCHEMA
 
     def _format_tool_result(self, result: dict) -> str:

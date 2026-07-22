@@ -37,17 +37,20 @@ def build_index(project: Path, name: str = "repo-index") -> None:
         is_target = number == 6
         content = (
             "def authorize_payment(request):\n    return policy.check(request)"
-            if is_target else f"def unrelated_{number}():\n    return 'background code {number}'"
+            if is_target
+            else f"def unrelated_{number}():\n    return 'background code {number}'"
         )
-        chunks.append(CodeChunk(
-            content=content,
-            file_path=(project / ("payments.py" if is_target else f"module_{number}.py")).resolve(),
-            start_line=10 + number,
-            end_line=11 + number,
-            chunk_type="function_definition",
-            language="python",
-            metadata={"name": "authorize_payment" if is_target else f"unrelated_{number}"},
-        ))
+        chunks.append(
+            CodeChunk(
+                content=content,
+                file_path=(project / ("payments.py" if is_target else f"module_{number}.py")).resolve(),
+                start_line=10 + number,
+                end_line=11 + number,
+                chunk_type="function_definition",
+                language="python",
+                metadata={"name": "authorize_payment" if is_target else f"unrelated_{number}"},
+            )
+        )
         vectors.append([0.0, 1.0] if is_target else [1.0, number / 100])
     store = VectorStore(index_path, name)
     store.add_chunks(chunks, vectors)
@@ -86,14 +89,22 @@ def test_hybrid_retrieval_beats_vector_only_and_assembler_deduplicates(tmp_path)
     vector_only = retriever.store.search([1.0, 0.0], n_results=7)
     hybrid = retriever.retrieve("authorize_payment policy", limit=7)
     expected = str((project / "payments.py").resolve())
-    vector_metrics = evaluate_retrieval([{
-        "expected_locations": [expected],
-        "retrieved_locations": [item["metadata"]["file_path"] for item in vector_only],
-    }])
-    hybrid_metrics = evaluate_retrieval([{
-        "expected_locations": [expected],
-        "retrieved_locations": [item.file_path for item in hybrid],
-    }])
+    vector_metrics = evaluate_retrieval(
+        [
+            {
+                "expected_locations": [expected],
+                "retrieved_locations": [item["metadata"]["file_path"] for item in vector_only],
+            }
+        ]
+    )
+    hybrid_metrics = evaluate_retrieval(
+        [
+            {
+                "expected_locations": [expected],
+                "retrieved_locations": [item.file_path for item in hybrid],
+            }
+        ]
+    )
 
     assert hybrid_metrics.mrr > vector_metrics.mrr
     assembled = ContextAssembler(token_budget=100).assemble("repo-index", [hybrid[0], hybrid[0]])

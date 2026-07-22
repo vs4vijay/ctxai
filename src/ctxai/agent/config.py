@@ -4,7 +4,6 @@ Agent configuration classes.
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -45,6 +44,7 @@ class AgentLLMConfig:
         # If not in environment, check keystore
         try:
             from ctxai.auth.keystore import get_keystore
+
             keystore = get_keystore()
             return keystore.get_key(provider.lower())
         except (ImportError, Exception):
@@ -75,9 +75,7 @@ class AgentLLMConfig:
             api_key=None,  # Always load from env
             fallback_providers=data.get("fallback_providers", ["openai", "ollama"]),
             fallback_enabled=data.get("fallback_enabled", False),
-            allow_fallback_boundary_crossing=data.get(
-                "allow_fallback_boundary_crossing", False
-            ),
+            allow_fallback_boundary_crossing=data.get("allow_fallback_boundary_crossing", False),
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 4096),
             timeout=data.get("timeout", 60),
@@ -90,15 +88,17 @@ class AgentToolsConfig:
 
     enabled_tools: list[str] | None = None  # None = all tools enabled
     bash_allowed_commands: list[str] | None = None  # Whitelist (None = use blacklist)
-    bash_blocked_commands: list[str] = field(default_factory=lambda: [
-        "rm -rf /",
-        "dd if=",
-        "mkfs",
-        ":(){ :|:& };:",  # Fork bomb
-        "chmod -R 777",
-        "> /dev/sda",
-        "mv / /dev/null",
-    ])
+    bash_blocked_commands: list[str] = field(
+        default_factory=lambda: [
+            "rm -rf /",
+            "dd if=",
+            "mkfs",
+            ":(){ :|:& };:",  # Fork bomb
+            "chmod -R 777",
+            "> /dev/sda",
+            "mv / /dev/null",
+        ]
+    )
     bash_timeout: int = 30
     max_file_size_mb: int = 10
     allow_outside_project: bool = False  # Allow file ops outside project dir
