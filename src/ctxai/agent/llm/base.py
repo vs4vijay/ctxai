@@ -101,6 +101,17 @@ class LLMResponse:
         return len(self.tool_calls) > 0
 
 
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    """Features a provider/model can safely expose to the agent."""
+
+    tools: bool = True
+    streaming: bool = True
+    images: bool = False
+    structured_output: bool = False
+    context_size: int = 100_000
+
+
 class BaseLLMProvider(ABC):
     """
     Abstract base class for LLM providers.
@@ -182,6 +193,13 @@ class BaseLLMProvider(ABC):
             True if function calling is supported
         """
         pass
+
+    def get_capabilities(self) -> ProviderCapabilities:
+        """Return normalized capabilities used by chat and agent orchestration."""
+        return ProviderCapabilities(
+            tools=self.supports_function_calling(),
+            streaming=self.__class__.stream_chat is not BaseLLMProvider.stream_chat,
+        )
 
     def _format_messages(self, messages: list[Message], format: str = "openai") -> list[dict[str, Any]]:
         """

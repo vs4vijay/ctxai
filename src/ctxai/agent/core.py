@@ -95,7 +95,8 @@ class Agent:
 
             # Get tool schemas
             tool_format = self._get_tool_format()
-            tools = self.tools.get_all_schemas(format=tool_format)
+            capabilities = self.llm.get_capabilities()
+            tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
 
             # Call LLM
             try:
@@ -213,7 +214,8 @@ class Agent:
 
             # Get tool schemas
             tool_format = self._get_tool_format()
-            tools = self.tools.get_all_schemas(format=tool_format)
+            capabilities = self.llm.get_capabilities()
+            tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
 
             try:
                 # Use regular chat (simpler, more reliable)

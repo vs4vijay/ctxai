@@ -71,6 +71,7 @@ from rich.prompt import Confirm
 
 from ..agent.config import AgentConfig, AgentLLMConfig
 from ..agent.context import ConversationContext
+from ..agent.sessions import SessionRecord, SessionStore
 from ..agent.core import Agent, AgentLoopConfig
 from ..agent.llm.anthropic_provider import AnthropicProvider
 from ..agent.theme import (
@@ -240,6 +241,9 @@ class ChatCommandCompleter(Completer):
             "/context": "Show context info",
             "/status": "Show agent status",
             "/tools": "List available tools",
+            "/save": "Save session: /save [name]",
+            "/resume": "Resume session: /resume [name]",
+            "/export": "Export session: /export <path>",
         }
 
     def get_completions(self, document, complete_event):
@@ -287,6 +291,9 @@ def print_help():
 • [bold #FFD700]/context[/bold #FFD700] - Show context info
 • [bold #FFD700]/exit[/bold #FFD700], [bold #FFD700]/quit[/bold #FFD700], [bold #FFD700]/bye[/bold #FFD700] - Exit the chat
 • [bold #FFD700]/tools[/bold #FFD700] - List available tools
+• [bold #FFD700]/save [name][/bold #FFD700] - Save a durable, redacted session
+• [bold #FFD700]/resume [name][/bold #FFD700] - Resume a saved session
+• [bold #FFD700]/export <path>[/bold #FFD700] - Export a redacted Markdown transcript
 
 [bold cyan]/model Usage[/bold cyan]
 • [bold #FFD700]/model[/bold #FFD700] - Show all providers & models
@@ -679,6 +686,10 @@ async def interactive_chat(
     )
     agent = Agent(loop_config)
 
+    # Durable session state is repository-scoped and never stores provider credentials.
+    session_store = SessionStore(working_directory)
+    current_session = "default"
+
     # Track current provider/model for /model command
     current_provider = provider
     current_model = model_display
@@ -718,6 +729,7 @@ async def interactive_chat(
         try:
             # Print thinking indicator
             console.print()
+
             console.print(f"[dim]● Thinking...[/dim]")
             
             # Create a Live display for thinking (if streaming is supported)
@@ -752,6 +764,15 @@ async def interactive_chat(
             console.print(Markdown(full_response))
             console.print(f"[bold {NEON_CYAN}]---[/]")
             console.print()
+
+            if agent_config.behavior.auto_save_context:
+                session_store.save(SessionRecord(
+                    name=current_session,
+                    context=agent.context,
+                    provider=current_provider,
+                    model=current_model,
+                    project_root=str(working_directory.resolve()),
+                ))
 
         except Exception as e:
             console.print_error(str(e))
@@ -808,6 +829,7 @@ async def interactive_chat(
                     elif command == "/clear":
                         agent.clear_conversation()
                         message_queue.clear()
+                        session_store.clear(current_session)
                         console.print_success("Conversation cleared")
                         continue
 
@@ -831,8 +853,46 @@ async def interactive_chat(
                             console.print(f"  [bold {NEON_GOLD}]•[bold {NEON_GOLD}] [bold {NEON_WHITE}]{tool_name}[bold {NEON_WHITE}]")
                         continue
 
-                    elif command == "/save":
-                        console.print_warning("Session save not yet implemented")
+                    elif command.startswith("/save"):
+                        parts = user_input.split(maxsplit=1)
+                        current_session = parts[1].strip() if len(parts) > 1 else current_session
+                        path = session_store.save(SessionRecord(
+                            name=current_session,
+                            context=agent.context,
+                            provider=current_provider,
+                            model=current_model,
+                            project_root=str(working_directory.resolve()),
+                        ))
+                        console.print_success(f"Session saved: {path}")
+                        continue
+
+                    elif command.startswith("/resume"):
+                        parts = user_input.split(maxsplit=1)
+                        name = parts[1].strip() if len(parts) > 1 else current_session
+                        record = session_store.load(name)
+                        agent.context = record.context
+                        current_session = name
+                        console.print_success(
+                            f"Session resumed: {name} ({agent.context.get_message_count()} messages)"
+                        )
+                        continue
+
+                    elif command.startswith("/export"):
+                        parts = user_input.split(maxsplit=1)
+                        if len(parts) == 1:
+                            console.print_error("Usage: /export <path>")
+                            continue
+                        destination = Path(parts[1]).expanduser()
+                        if not destination.is_absolute():
+                            destination = working_directory / destination
+                        path = session_store.export(SessionRecord(
+                            name=current_session,
+                            context=agent.context,
+                            provider=current_provider,
+                            model=current_model,
+                            project_root=str(working_directory.resolve()),
+                        ), destination)
+                        console.print_success(f"Session exported: {path}")
                         continue
 
                     elif command.startswith("/model"):
