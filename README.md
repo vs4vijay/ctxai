@@ -290,13 +290,19 @@ ctxai dashboard --port 8080
 ```
 
 The dashboard provides:
-- 📊 View all indexes with statistics (chunk count, size, timestamps)
-- 🔍 Query interface with natural language search
-- 📄 Browse all chunks with metadata
-- ⚙️ View configuration and CTXAI_HOME settings
-- 🎨 Beautiful, dark-themed UI
+- Index health, freshness, schema, embedding identity, and chunk statistics
+- Natural-language query results with file and line evidence
+- Index inspection and explicit deletion
 
 Open your browser to `http://localhost:3000` to access the dashboard.
+
+The dashboard binds to `127.0.0.1` by default and has no authentication or TLS. Remote binding is
+rejected unless both a non-loopback `--host` and `--allow-remote` are supplied. Only use that override
+on a trusted network behind appropriate access controls; for example:
+
+```bash
+ctxai dashboard --host 0.0.0.0 --allow-remote
+```
 
 **Note:** Dashboard requires FastHTML. Install it with:
 ```bash

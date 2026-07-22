@@ -19,10 +19,10 @@ __all__ = [
 ]
 
 
-def start_dashboard(port: int = 3000):
+def start_dashboard(port: int = 3000, host: str = "127.0.0.1", allow_remote: bool = False):
     """Lazy import for dashboard to avoid chromadb dependency."""
     from .dashboard_command import start_dashboard as _start_dashboard
-    return _start_dashboard(port)
+    return _start_dashboard(port, host=host, allow_remote=allow_remote)
 
 
 def index_codebase(**kwargs):

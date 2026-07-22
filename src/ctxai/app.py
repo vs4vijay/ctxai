@@ -257,6 +257,16 @@ def dashboard(
         "-p",
         help="Port to run the dashboard on",
     ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Address to bind (remote addresses expose an unauthenticated dashboard)",
+    ),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Acknowledge that remote binding has no authentication or TLS",
+    ),
 ):
     """
     Start the web dashboard for browsing and querying indexed codebases.
@@ -269,7 +279,7 @@ def dashboard(
     """
     from .commands.dashboard_command import start_dashboard
 
-    start_dashboard(port=port)
+    start_dashboard(port=port, host=host, allow_remote=allow_remote)
 
 
 @app.command()
