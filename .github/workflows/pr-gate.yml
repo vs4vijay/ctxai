@@ -10,6 +10,9 @@ concurrency:
   group: pr-gate-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   quick-checks:
     name: Quick Checks (Lint + Unit Tests)
@@ -23,27 +26,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: 'pip'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
           enable-cache: true
 
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Lint with Ruff
         run: |
@@ -60,11 +51,12 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: success()
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           flags: unittests
           name: pr-unit-tests
+          fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
@@ -81,27 +73,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: 'pip'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
           enable-cache: true
 
-      - name: Cache uv dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-uv-${{ hashFiles('**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Run E2E tests
         run: |
@@ -112,11 +92,12 @@ jobs:
 
       - name: Upload E2E coverage
         if: success()
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           flags: e2e
           name: pr-e2e-tests
+          fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
@@ -134,27 +115,15 @@ jobs:
           python-version: "3.13"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-
-      # - name: Install pre-commit
-      #   run: |
-      #     pip install pre-commit
-      #     pre-commit install --install-hooks
-
-      # - name: Run pre-commit
-      #   run: pre-commit run --all-files
-
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras --all-groups
 
       - name: Run Bandit security scan
-        run: |
-          uv run bandit -r src/ -f json -o bandit-report.json || true
+        run: uv run bandit -r src/ -f json -o bandit-report.json
 
       - name: Upload security results
         if: always()
