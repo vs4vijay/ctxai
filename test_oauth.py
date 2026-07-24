@@ -80,12 +80,13 @@ def test_integration():
 
         # Force the config to use our temporary keystore
         import sys
-        sys.modules['ctxai.auth.keystore'] = type(sys)('ctxai.auth.keystore')
-        sys.modules['ctxai.auth.keystore'].get_keystore = lambda: keystore
+
+        sys.modules["ctxai.auth.keystore"] = type(sys)("ctxai.auth.keystore")
+        sys.modules["ctxai.auth.keystore"].get_keystore = lambda: keystore
 
         # Test if config can retrieve the key
         config = AgentLLMConfig(provider="openrouter")
-        api_key = config.get_api_key_for_provider("openrouter")
+        config.get_api_key_for_provider("openrouter")
 
         # Note: This might not work due to the check for module existence
         # but it demonstrates the intended behavior

@@ -92,6 +92,14 @@ ctxai dashboard --port 8080
 ### Options
 
 - `--port, -p`: Port to run the dashboard on (default: 3000)
+- `--host`: Bind address (default: `127.0.0.1`)
+- `--allow-remote`: Explicitly acknowledge unauthenticated non-loopback exposure
+
+### Security model
+
+The dashboard is a local administration interface. It has no authentication or TLS and binds to
+`127.0.0.1` by default. A non-loopback `--host` is rejected unless `--allow-remote` is also present.
+Use remote binding only on a trusted network behind suitable authentication and transport security.
 
 ### Features
 

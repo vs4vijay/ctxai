@@ -12,7 +12,7 @@ import requests
 
 # Fix Windows encoding issues
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 def get_api_key():
@@ -54,9 +54,7 @@ def test_simple_chat(api_key):
 
     body = {
         "model": "meta-llama/llama-3.3-70b-instruct:free",
-        "messages": [
-            {"role": "user", "content": "Say 'Hello!' and nothing else."}
-        ],
+        "messages": [{"role": "user", "content": "Say 'Hello!' and nothing else."}],
         "temperature": 0.7,
         "max_tokens": 100,
     }
@@ -103,23 +101,16 @@ def test_function_calling(api_key):
                 "description": "Get the weather for a location",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city name"
-                        }
-                    },
-                    "required": ["location"]
-                }
-            }
+                    "properties": {"location": {"type": "string", "description": "The city name"}},
+                    "required": ["location"],
+                },
+            },
         }
     ]
 
     body = {
         "model": "meta-llama/llama-3.3-70b-instruct:free",
-        "messages": [
-            {"role": "user", "content": "What's the weather in San Francisco?"}
-        ],
+        "messages": [{"role": "user", "content": "What's the weather in San Francisco?"}],
         "tools": tools,
         "tool_choice": "auto",
         "temperature": 0.7,
@@ -181,22 +172,15 @@ def test_with_tool_result(api_key):
                 "description": "Get the weather for a location",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city name"
-                        }
-                    },
-                    "required": ["location"]
-                }
-            }
+                    "properties": {"location": {"type": "string", "description": "The city name"}},
+                    "required": ["location"],
+                },
+            },
         }
     ]
 
     # Step 1: Initial request
-    messages = [
-        {"role": "user", "content": "What's the weather in Paris?"}
-    ]
+    messages = [{"role": "user", "content": "What's the weather in Paris?"}]
 
     body = {
         "model": "meta-llama/llama-3.3-70b-instruct:free",
@@ -226,18 +210,18 @@ def test_with_tool_result(api_key):
         print(f"[OK] Model requested tool: {tool_call['function']['name']}")
 
         # Step 2: Provide tool result
-        messages.append({
-            "role": "assistant",
-            "content": message.get("content", ""),
-            "tool_calls": message["tool_calls"]
-        })
+        messages.append(
+            {"role": "assistant", "content": message.get("content", ""), "tool_calls": message["tool_calls"]}
+        )
 
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call["id"],
-            "name": tool_call["function"]["name"],
-            "content": "The weather in Paris is sunny, 22°C"
-        })
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call["id"],
+                "name": tool_call["function"]["name"],
+                "content": "The weather in Paris is sunny, 22°C",
+            }
+        )
 
         print("Step 2: Sending tool result back")
         body["messages"] = messages

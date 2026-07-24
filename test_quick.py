@@ -9,7 +9,7 @@ import requests
 
 # Fix Windows encoding
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # Get API key
 keystore_path = Path.home() / ".ctxai" / "keys.json"
@@ -30,9 +30,7 @@ print("=" * 60)
 
 body = {
     "model": "deepseek/deepseek-chat",
-    "messages": [
-        {"role": "user", "content": "Say 'Hello!' and nothing else."}
-    ],
+    "messages": [{"role": "user", "content": "Say 'Hello!' and nothing else."}],
     "temperature": 0.7,
     "max_tokens": 100,
 }
@@ -60,23 +58,16 @@ tools = [
             "description": "Get the weather for a location",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city name"
-                    }
-                },
-                "required": ["location"]
-            }
-        }
+                "properties": {"location": {"type": "string", "description": "The city name"}},
+                "required": ["location"],
+            },
+        },
     }
 ]
 
 body = {
     "model": "deepseek/deepseek-chat",
-    "messages": [
-        {"role": "user", "content": "What's the weather in Paris? Use the get_weather tool."}
-    ],
+    "messages": [{"role": "user", "content": "What's the weather in Paris? Use the get_weather tool."}],
     "tools": tools,
     "tool_choice": "auto",
     "temperature": 0.7,
@@ -102,17 +93,13 @@ if response.status_code == 200:
 
         messages = [
             {"role": "user", "content": "What's the weather in Paris? Use the get_weather tool."},
-            {
-                "role": "assistant",
-                "content": message.get("content", ""),
-                "tool_calls": message["tool_calls"]
-            },
+            {"role": "assistant", "content": message.get("content", ""), "tool_calls": message["tool_calls"]},
             {
                 "role": "tool",
                 "tool_call_id": message["tool_calls"][0]["id"],
                 "name": "get_weather",
-                "content": "The weather in Paris is sunny, 22°C"
-            }
+                "content": "The weather in Paris is sunny, 22°C",
+            },
         ]
 
         body2 = {

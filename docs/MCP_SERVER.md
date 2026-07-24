@@ -1,6 +1,6 @@
 # MCP Server Documentation
 
-The ctxai MCP (Model Context Protocol) server exposes code indexing and querying functionality as tools that can be used by LLMs and AI agents.
+The ctxai MCP (Model Context Protocol) server exposes code indexing and querying functionality as tools that can be used by LLMs and AI agents. ctxai 0.0.2 supports MCP Python SDK `>=1.16,<1.17`; this range is exercised through the public `ClientSession` transport in the acceptance suite.
 
 ## Overview
 
@@ -81,6 +81,18 @@ The server will communicate via stdin/stdout following the MCP protocol.
 
 ## Available Tools
 
+All tools return a structured JSON object using result schema `1.0`:
+
+```json
+{
+  "schema_version": "1.0",
+  "ok": true,
+  "data": {}
+}
+```
+
+Failures use the same envelope with `ok: false` and an `error` containing a stable `code` and human-readable `message`. Current codes are `invalid_input`, `not_found`, `cancelled`, `timeout`, `index_failed`, `query_failed`, `storage_failed`, and `internal_error`.
+
 ### 1. list_indexes
 
 Lists all available code indexes with their statistics.
@@ -104,8 +116,11 @@ Indexes a codebase for semantic search.
 - `include_patterns` (optional): Array of file patterns to include (e.g., ["*.py", "*.js"])
 - `exclude_patterns` (optional): Array of patterns to exclude beyond .gitignore
 - `follow_gitignore` (optional): Whether to follow .gitignore (default: true)
+- `timeout_seconds` (optional): Operation deadline from 1 to 3600 seconds (default: 300)
 
-**Returns**: Success message with index statistics
+**Returns**: Versioned structured result with index statistics
+
+The server emits MCP progress notifications while it discovers, chunks, embeds, stores, and publishes an index. Client cancellation is cooperative: ctxai stops at the next safe boundary; if storage commit has started, it finishes manifest publication to keep the index consistent. A deadline returns the stable `timeout` error code.
 
 **Example usage in Claude**:
 ```
@@ -428,7 +443,7 @@ Planned improvements:
 - [ ] **Streaming Results**: Stream results as they're found
 - [ ] **HTTP Server**: Optional HTTP API mode
 - [ ] **Multi-client**: Support multiple concurrent clients
-- [ ] **Progress Updates**: Real-time progress for long operations
+- [x] **Progress Updates**: Real-time progress and cooperative cancellation for indexing
 - [ ] **Caching**: Cache query results for speed
 - [ ] **Incremental Indexing**: Update only changed files
 - [ ] **Resource Limits**: CPU/memory usage controls

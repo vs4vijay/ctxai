@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Fix Windows encoding
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))

@@ -42,8 +42,9 @@ def test_copilot_provider_initialization():
 
         # Force the config to use our temporary keystore
         import sys
-        sys.modules['ctxai.auth.keystore'] = type(sys)('ctxai.auth.keystore')
-        sys.modules['ctxai.auth.keystore'].get_keystore = lambda: keystore
+
+        sys.modules["ctxai.auth.keystore"] = type(sys)("ctxai.auth.keystore")
+        sys.modules["ctxai.auth.keystore"].get_keystore = lambda: keystore
 
         # Get API key from config
         token = config.get_api_key_for_provider("github-copilot")
@@ -52,7 +53,6 @@ def test_copilot_provider_initialization():
 
         # Test provider instantiation (will fail without token in env, but that's expected)
         try:
-            from src.ctxai.agent.llm.github_copilot_provider import GitHubCopilotProvider
             # This will fail because it tries to access the real keystore, but at least it imports
             print("[OK] GitHubCopilotProvider class can be imported")
         except ValueError as e:

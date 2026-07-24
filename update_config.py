@@ -96,7 +96,7 @@ class Config:
 """
 
 # Write to file
-with open('src/ctxai/config_new.py', 'w') as f:
+with open("src/ctxai/config_new.py", "w") as f:
     f.write(new_config)
-    
+
 print("Created config_new.py - continuing with full file...")
