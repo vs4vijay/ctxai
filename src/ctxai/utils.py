@@ -47,6 +47,49 @@ def get_ctxai_home(project_path: Path | None = None) -> Path:
     return Path.cwd() / ".ctxai"
 
 
+def get_global_ctxai_home() -> Path:
+    """
+    Get the global .ctxai directory path (defaults + credentials).
+
+    Priority:
+    1. CTXAI_HOME environment variable (absolute path)
+    2. ~/.ctxai (user home)
+
+    Returns:
+        Path to the global .ctxai directory
+
+    Examples:
+        export CTXAI_HOME=/path/to/global/.ctxai
+        get_global_ctxai_home() -> Path('/path/to/global/.ctxai')
+
+        # No env var: falls back to the user's home
+        get_global_ctxai_home() -> Path('/Users/you/.ctxai')
+    """
+    ctxai_home = os.getenv("CTXAI_HOME")
+    if ctxai_home:
+        return Path(ctxai_home).expanduser().resolve()
+    return Path.home() / ".ctxai"
+
+
+def get_project_ctxai_home(project_path: Path | None = None) -> Path:
+    """
+    Get the project .ctxai directory path (project-specific config).
+
+    Priority:
+    1. project_path/.ctxai (if project_path provided)
+    2. Current directory/.ctxai (default)
+
+    Args:
+        project_path: Optional project root path
+
+    Returns:
+        Path to the project .ctxai directory
+    """
+    if project_path:
+        return Path(project_path) / ".ctxai"
+    return Path.cwd() / ".ctxai"
+
+
 def get_indexes_dir(project_path: Path | None = None) -> Path:
     """
     Get the indexes directory.

@@ -56,7 +56,7 @@ Run the tool itself: `uv run ctxai` (interactive chat), `ctxai index <path> <nam
 - **Error handling**: typed exceptions + `FailureKind` taxonomy in the workflow; MCP surfaces errors through the envelope code table; user-facing messages via `console.print("[red]...[/red]")`.
 - **Async**: agent loop and MCP handlers are async (`Agent.process_message`, `asyncio.run` inside CLI commands); LLM providers expose sync `chat`/`stream_chat`. Tests use pytest-asyncio `asyncio_mode = auto`.
 - **DI pattern**: interfaces (`BaseLLMProvider`, `BaseEmbeddingProvider`) implemented by providers/adapters; construction via factory (`EmbeddingsFactory`, LLM provider factory) with config objects injected; `AgentLoopConfig` carries the full dependency set. Tests seam-patch factories (`patch_embeddings_factory`) or module symbols.
-- **State**: config in `.ctxai/config.toml` (or `$CTXAI_HOME/config.toml`); credentials in `~/.ctxai/keys.json`; indexes in `get_ctxai_home()/indexes`; sessions via `SessionStore`.
+- **State**: config in `.ctxai/config.toml` — global defaults (`~/.ctxai/config.toml` or `$CTXAI_HOME/config.toml`) merged with project overrides (`<project>/.ctxai/config.toml`), project wins key by key; credentials in global home `keys.json`; indexes in `get_ctxai_home()/indexes`; sessions via `SessionStore`.
 - **Untouchable/experimental**: `config_new.py` is an unused alternate TOML config draft (nothing imports it — don't build on it). `agent/architect_editor.py` architect/editor mode is experimental and disabled pending benchmark evidence; the validated path is single-agent planning + exact-action approval. Don't build around either.
 
 ## Important Files

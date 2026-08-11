@@ -325,12 +325,16 @@ def config(
         "-e",
         help="Show configuration file location for manual editing",
     ),
+    global_config: bool = typer.Option(
+        False,
+        "--global",
+        help="Use the global configuration (~/.ctxai/config.toml or $CTXAI_HOME) instead of the project one",
+    ),
     project_path: Path | None = typer.Option(
         None,
         "--project-path",
         "-p",
-        help="Project path for configuration (uses CTXAI_HOME if not provided)",
-        exists=True,
+        help="Project path for configuration (uses current directory if not provided)",
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
@@ -339,23 +343,29 @@ def config(
     """
     Manage ctxai configuration settings (similar to git config).
 
-    Configuration is stored in .ctxai/config.json and can be managed at:
-    - Global level (CTXAI_HOME environment variable)
-    - Project level (.ctxai in current directory)
+    Configuration is stored in config.toml with two layers:
+    - Global defaults: ~/.ctxai/config.toml (or $CTXAI_HOME/config.toml)
+    - Project overrides: .ctxai/config.toml in the project/current directory
+
+    Project values override global defaults key by key. Use --global to
+    read/write the global layer instead.
 
     Examples:
-        # List all configuration
+        # List all configuration (merged global + project)
         ctxai config --list
 
         # Get a specific value
         ctxai config --get embedding.provider
 
-        # Set a value
+        # Set a value (writes to the project .ctxai/config.toml)
         ctxai config --set embedding.provider --value openai
         ctxai config --set embedding.api_key --value sk-xxx
         ctxai config --set indexing.chunk_size --value 1500
 
-        # Unset a value (revert to default)
+        # Set a global default (writes to ~/.ctxai/config.toml)
+        ctxai config --global --set default_provider --value openrouter
+
+        # Unset a value (revert to global/default)
         ctxai config --unset embedding.api_key
 
         # View raw config file
@@ -387,25 +397,25 @@ def config(
 
     if operations_count == 0:
         # Default to listing config
-        list_config(project_path=project_path)
+        list_config(project_path=project_path, global_config=global_config)
     elif operations_count > 1:
         typer.echo("Error: Please specify only one operation at a time")
         raise typer.Exit(code=1)
     elif list_all:
-        list_config(project_path=project_path)
+        list_config(project_path=project_path, global_config=global_config)
     elif get:
-        get_config(key=get, project_path=project_path)
+        get_config(key=get, project_path=project_path, global_config=global_config)
     elif set_key:
         if value is None:
             typer.echo("Error: --value is required when using --set")
             raise typer.Exit(code=1)
-        set_config(key=set_key, value=value, project_path=project_path)
+        set_config(key=set_key, value=value, project_path=project_path, global_config=global_config)
     elif unset:
-        unset_config(key=unset, project_path=project_path)
+        unset_config(key=unset, project_path=project_path, global_config=global_config)
     elif show_file:
-        show_config_file(project_path=project_path)
+        show_config_file(project_path=project_path, global_config=global_config)
     elif edit:
-        edit_config(project_path=project_path)
+        edit_config(project_path=project_path, global_config=global_config)
 
 
 @app.command()

@@ -45,6 +45,8 @@ __all__ = [
     "ProjectSizeLimitError",
     "CodeTraversal",
     "get_ctxai_home",
+    "get_global_ctxai_home",
+    "get_project_ctxai_home",
     "get_indexes_dir",
     "get_config_path",
     "ensure_ctxai_home",
@@ -80,7 +82,9 @@ _LAZY_IMPORTS = {
     "get_config_path": ("ctxai.utils", "get_config_path"),
     "get_ctxai_home": ("ctxai.utils", "get_ctxai_home"),
     "get_ctxai_home_info": ("ctxai.utils", "get_ctxai_home_info"),
+    "get_global_ctxai_home": ("ctxai.utils", "get_global_ctxai_home"),
     "get_indexes_dir": ("ctxai.utils", "get_indexes_dir"),
+    "get_project_ctxai_home": ("ctxai.utils", "get_project_ctxai_home"),
     "is_using_global_home": ("ctxai.utils", "is_using_global_home"),
     # Vector store
     "VectorStore": ("ctxai.vector_store", "VectorStore"),

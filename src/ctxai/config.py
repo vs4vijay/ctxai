@@ -1,7 +1,10 @@
 """
 Configuration management for ctxai.
-Handles .ctxai/config.toml for user preferences and settings.
-Respects CTXAI_HOME environment variable for custom .ctxai location.
+Handles hierarchical .ctxai/config.toml for user preferences and settings.
+
+Configuration layers (project overrides global, key by key):
+- Global defaults: ~/.ctxai/config.toml (or $CTXAI_HOME/config.toml)
+- Project overrides: <project>/.ctxai/config.toml (or ./.ctxai/config.toml)
 
 Supports multiple LLM provider configurations with:
 - default_provider: which provider to use by default
@@ -16,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import tomlkit
 
-from .utils import get_ctxai_home
+from .utils import get_global_ctxai_home, get_project_ctxai_home
 
 if TYPE_CHECKING:
     pass
@@ -46,6 +49,34 @@ def _save_toml(path: Path, data: dict) -> None:
         return value
 
     path.write_text(tomlkit.dumps(without_none(data)), encoding="utf-8")
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep-merge two dicts; override values win (recursively for nested dicts)."""
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _diff_dict(merged: dict, base: dict) -> dict:
+    """Keep only entries of ``merged`` that differ from ``base`` (recursively)."""
+    result = {}
+    for key, value in merged.items():
+        base_value = base.get(key)
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            sub = _diff_dict(value, base_value)
+            if sub:
+                result[key] = sub
+        elif key not in base or value != base_value:
+            if value is None and key not in base:
+                # Default-absent field; skipping keeps the layer free of empty tables
+                continue
+            result[key] = value
+    return result
 
 
 # ============================================================================
@@ -287,44 +318,52 @@ class Config:
 
 
 class ConfigManager:
-    """Manages configuration loading and saving. Supports both JSON and TOML formats."""
+    """Manages configuration loading and saving. Supports hierarchical TOML config:
+    global defaults (``~/.ctxai/config.toml`` or ``$CTXAI_HOME/config.toml``) merged
+    with per-project overrides (``<project>/.ctxai/config.toml``); project wins."""
 
-    def __init__(self, project_path: Path | None = None):
+    def __init__(self, project_path: Path | None = None, *, use_global: bool = False):
         """
         Initialize config manager.
 
         Args:
-            project_path: Optional project root path. If not provided,
-                         uses CTXAI_HOME env var or current directory.
+            project_path: Optional project root path. If not provided, uses the
+                current directory for the project layer.
+            use_global: If True, read/write only the global config file (no
+                project merge). Used by ``ctxai config --global``.
         """
         self.project_path = project_path
-        self.ctxai_home = get_ctxai_home(project_path)
-
-        # Determine config path - check for both formats, prefer TOML
-        self._detect_config_path()
-
+        self._use_global = use_global
+        self.global_home = get_global_ctxai_home()
+        self.project_home = get_project_ctxai_home(project_path)
+        self.global_config_path = self.global_home / "config.toml"
+        self.project_config_path = self.project_home / "config.toml"
+        # Target file for save(): the project layer by default, global with --global.
+        self.config_path = self.global_config_path if use_global else self.project_config_path
         self._config: Config | None = None
 
-    def _detect_config_path(self) -> None:
-        """Detect existing config file or set default path (TOML only)."""
-        toml_path = self.ctxai_home / "config.toml"
-
-        # TOML only
-        if toml_path.exists():
-            self.config_path = toml_path
-            self._format = "toml"
-        else:
-            # Default to TOML for new configs
-            self.config_path = toml_path
-            self._format = "toml"
-
     def get_config_path(self) -> Path:
-        """Get the config file path."""
+        """Get the config file path (the file save() writes to)."""
         return self.config_path
+
+    @staticmethod
+    def _load_file(path: Path) -> dict:
+        """Load a TOML layer; warn and return {} on any error."""
+        if not path.exists():
+            return {}
+        try:
+            return _load_toml(path)
+        except Exception as e:
+            print(f"Warning: Could not load config from {path}: {e}")
+            return {}
 
     def load(self) -> Config:
         """
-        Load configuration from file or create default.
+        Load the effective configuration.
+
+        Without use_global: deep-merge the global config with the project
+        config (project values win). With use_global: global config only.
+        When neither layer exists, defaults are materialized at the target path.
 
         Returns:
             Config object
@@ -332,10 +371,25 @@ class ConfigManager:
         if self._config is not None:
             return self._config
 
-        if self.config_path.exists():
+        if self._use_global:
+            data = self._load_file(self.global_config_path)
+            if data:
+                try:
+                    self._config = Config.from_dict(data)
+                except Exception as e:
+                    print(f"Warning: Could not load config from {self.global_config_path}: {e}")
+                    print("Using default configuration")
+                    self._config = Config.default()
+            else:
+                self._config = Config.default()
+                self.save()  # Materialize global config for user reference
+            return self._config
+
+        global_data = self._load_file(self.global_config_path)
+        project_data = self._load_file(self.project_config_path)
+        data = _deep_merge(global_data, project_data)
+        if data:
             try:
-                # Load TOML format
-                data = _load_toml(self.config_path)
                 self._config = Config.from_dict(data)
             except Exception as e:
                 print(f"Warning: Could not load config from {self.config_path}: {e}")
@@ -343,13 +397,18 @@ class ConfigManager:
                 self._config = Config.default()
         else:
             self._config = Config.default()
-            self.save()  # Save default config for user reference
+            if not self.project_config_path.exists():
+                self.save()  # Save default config for user reference
 
         return self._config
 
     def save(self, config: Config | None = None) -> None:
         """
         Save configuration to TOML file.
+
+        The global layer is written in full. The project layer is written as
+        overrides only: values identical to the global layer are omitted, so a
+        project file never freezes global defaults.
 
         Args:
             config: Config to save, or use currently loaded config
@@ -361,10 +420,19 @@ class ConfigManager:
             raise ValueError("No configuration to save")
 
         # Ensure directory exists
-        self.ctxai_home.mkdir(parents=True, exist_ok=True)
+        home = self.global_home if self._use_global else self.project_home
+        home.mkdir(parents=True, exist_ok=True)
 
         data = self._config.to_dict()
-        _save_toml(self.config_path, data)
+        if not self._use_global:
+            global_raw = self._load_file(self.global_config_path)
+            try:
+                global_data = Config.from_dict(global_raw).to_dict() if global_raw else {}
+            except Exception:
+                global_data = {}
+            data = _diff_dict(data, global_data)
+        if self._use_global or data:
+            _save_toml(self.config_path, data)
 
     # =========================================================================
     # Provider Configuration Methods

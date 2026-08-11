@@ -10,6 +10,8 @@ from pathlib import Path
 
 from rich.console import Console
 
+from ..utils import get_global_ctxai_home
+
 console = Console()
 
 
@@ -21,10 +23,11 @@ class KeyStore:
         Initialize key store.
 
         Args:
-            config_dir: Custom config directory (default: ~/.ctxai)
+            config_dir: Custom config directory (default: the global .ctxai home,
+                i.e. ~/.ctxai or $CTXAI_HOME)
         """
         if config_dir is None:
-            config_dir = Path.home() / ".ctxai"
+            config_dir = get_global_ctxai_home()
 
         self.config_dir = Path(config_dir)
         self.keystore_file = self.config_dir / "keys.json"

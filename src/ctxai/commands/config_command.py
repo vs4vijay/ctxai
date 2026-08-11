@@ -5,9 +5,8 @@ Manages configuration settings similar to git config.
 Supports multi-provider configuration:
 - ctxai config --list
 - ctxai config --set default_provider custom
-- ctxai config --set providers.custom.model zai-org/GLM-5-FP8
-- ctxai config --set providers.custom.api_key your-key
 - ctxai config --set providers.custom.base_url https://api.us-west-2.modal.direct/v1
+- ctxai config --global --set default_provider custom  (writes ~/.ctxai/config.toml)
 """
 
 from pathlib import Path
@@ -17,26 +16,27 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..config import ConfigManager
-from ..utils import is_using_global_home
 
 console = Console(legacy_windows=False)
 
 
-def list_config(project_path: Path | None = None):
+def list_config(project_path: Path | None = None, global_config: bool = False):
     """
     List all configuration settings.
 
     Args:
-        project_path: Optional project path (uses CTXAI_HOME if not provided)
+        project_path: Optional project path (uses current directory if not provided)
+        global_config: Use the global configuration instead of the project one
     """
-    config_manager = ConfigManager(project_path)
+    config_manager = ConfigManager(project_path, use_global=global_config)
     config = config_manager.load()
 
     # Show where config is located
-    if is_using_global_home():
+    if global_config:
         console.print(f"[dim]Global config: {config_manager.config_path}[/dim]\n")
     else:
-        console.print(f"[dim]Project config: {config_manager.config_path}[/dim]\n")
+        console.print(f"[dim]Global config (defaults): {config_manager.global_config_path}[/dim]")
+        console.print(f"[dim]Project config (overrides): {config_manager.config_path}[/dim]\n")
 
     # Create main config table
     table = Table(title="Configuration Settings", show_header=True, header_style="bold cyan")
@@ -118,15 +118,16 @@ def list_config(project_path: Path | None = None):
     console.print()
 
 
-def get_config(key: str, project_path: Path | None = None):
+def get_config(key: str, project_path: Path | None = None, global_config: bool = False):
     """
     Get a specific configuration value.
 
     Args:
         key: Configuration key in dot notation (e.g., "providers.custom.model")
         project_path: Optional project path
+        global_config: Use the global configuration instead of the project one
     """
-    config_manager = ConfigManager(project_path)
+    config_manager = ConfigManager(project_path, use_global=global_config)
     config = config_manager.load()
 
     # Parse the key
@@ -186,7 +187,7 @@ def get_config(key: str, project_path: Path | None = None):
         console.print(f"[red][X][/red] Error retrieving config: {e}\n")
 
 
-def set_config(key: str, value: str, project_path: Path | None = None):
+def set_config(key: str, value: str, project_path: Path | None = None, global_config: bool = False):
     """
     Set a configuration value.
 
@@ -194,8 +195,9 @@ def set_config(key: str, value: str, project_path: Path | None = None):
         key: Configuration key in dot notation
         value: Value to set
         project_path: Optional project path
+        global_config: Use the global configuration instead of the project one
     """
-    config_manager = ConfigManager(project_path)
+    config_manager = ConfigManager(project_path, use_global=global_config)
     config = config_manager.load()
 
     # Parse the key
@@ -297,15 +299,16 @@ def set_config(key: str, value: str, project_path: Path | None = None):
         console.print(f"[red][X][/red] Error setting config: {e}\n")
 
 
-def unset_config(key: str, project_path: Path | None = None):
+def unset_config(key: str, project_path: Path | None = None, global_config: bool = False):
     """
     Unset (remove) a configuration value, reverting to default.
 
     Args:
         key: Configuration key in dot notation
         project_path: Optional project path
+        global_config: Use the global configuration instead of the project one
     """
-    config_manager = ConfigManager(project_path)
+    config_manager = ConfigManager(project_path, use_global=global_config)
     config = config_manager.load()
 
     parts = key.split(".")
@@ -361,9 +364,9 @@ def unset_config(key: str, project_path: Path | None = None):
         console.print(f"[red][X][/red] Error unsetting config: {e}\n")
 
 
-def show_config_file(project_path: Path | None = None):
+def show_config_file(project_path: Path | None = None, global_config: bool = False):
     """Display the raw configuration file content."""
-    config_manager = ConfigManager(project_path)
+    config_manager = ConfigManager(project_path, use_global=global_config)
 
     if not config_manager.config_path.exists():
         console.print(f"[yellow]No configuration file found at: {config_manager.config_path}[/yellow]\n")
@@ -388,18 +391,19 @@ def show_config_file(project_path: Path | None = None):
         console.print(f"[red][X][/red] Error reading config file: {e}\n")
 
 
-def edit_config(project_path: Path | None = None):
+def edit_config(project_path: Path | None = None, global_config: bool = False):
     """Print instructions for manually editing the configuration file."""
-    config_manager = ConfigManager(project_path)
+    config_manager = ConfigManager(project_path, use_global=global_config)
     config_manager.load()
 
     console.print("\n[bold cyan]Configuration file location:[/bold cyan]")
     console.print(f"  {config_manager.config_path}\n")
 
-    if is_using_global_home():
-        console.print("[dim]Using global CTXAI_HOME configuration[/dim]\n")
+    if global_config:
+        console.print("[dim]Editing the global configuration (applies to all projects).[/dim]\n")
     else:
-        console.print("[dim]Using project-local configuration[/dim]\n")
+        console.print(f"[dim]Global config (defaults): {config_manager.global_config_path}[/dim]")
+        console.print(f"[dim]Project config (overrides): {config_manager.config_path}[/dim]\n")
 
     console.print("[yellow]You can manually edit this file with your preferred editor.[/yellow]")
     console.print("[yellow]Or use 'ctxai config --set <key> <value>' to modify settings.[/yellow]\n")
