@@ -154,6 +154,17 @@ PROVIDERS_INFO = {
             ("deepseek-coder-v2:16b", "DeepSeek coding"),
         ],
     },
+    "nvidia": {
+        "name": "NVIDIA NIM",
+        "description": "NVIDIA hosted models (OpenAI-compatible)",
+        "auth": "NVIDIA_API_KEY env var (optional for model list)",
+        "models": [
+            ("meta/llama-3.1-405b-instruct", "Llama 3.1 405B"),
+            ("nvidia/llama-3.1-nemotron-70b-instruct", "Nemotron 70B"),
+            ("mistralai/mistral-large", "Mistral Large"),
+            ("01-ai/yi-large", "Yi Large"),
+        ],
+    },
     "github-copilot": {
         "name": "GitHub Copilot",
         "description": "Via Copilot subscription",
@@ -219,6 +230,7 @@ class ChatCommandCompleter(Completer):
         self.commands = {
             "/help": "Show help message",
             "/clear": "Clear conversation history",
+            "/provider": "Choose or add a provider (global config)",
             "/model": "Change provider/model",
             "/exit": "Exit the chat",
             "/quit": "Exit the chat",
@@ -275,6 +287,7 @@ def print_help():
 [bold cyan]Chat Commands[/bold cyan]
 • [bold #FFD700]/help[/bold #FFD700] - Show this help message
 • [bold #FFD700]/clear[/bold #FFD700] - Clear conversation history  
+• [bold #FFD700]/provider[/bold #FFD700] - Choose or add a provider (saved globally)
 • [bold #FFD700]/model [provider/model][/bold #FFD700] - Change provider & model
 • [bold #FFD700]/stats[/bold #FFD700] - Show session statistics
 • [bold #FFD700]/context[/bold #FFD700] - Show context info
@@ -284,6 +297,11 @@ def print_help():
 • [bold #FFD700]/save [name][/bold #FFD700] - Save a durable, redacted session
 • [bold #FFD700]/resume [name][/bold #FFD700] - Resume a saved session
 • [bold #FFD700]/export <path>[/bold #FFD700] - Export a redacted Markdown transcript
+
+[bold cyan]/provider Usage[/bold cyan]
+• [bold #FFD700]/provider[/bold #FFD700] - Interactive provider menu
+• [bold #FFD700]/provider anthropic[/bold #FFD700] - Switch provider (prompts for model)
+• [bold #FFD700]/provider add[/bold #FFD700] - Add a custom OpenAI-compatible provider
 
 [bold cyan]/model Usage[/bold cyan]
 • [bold #FFD700]/model[/bold #FFD700] - Show all providers & models
@@ -412,10 +430,208 @@ def change_model(
         console.print_success(f"Model changed: {new_provider}/{new_model}")
 
         return new_provider, new_model, True
-
     except Exception as e:
         console.print_error(f"Error saving config: {e}")
         return current_provider, current_model, False
+
+
+def handle_provider_command(
+    input_str: str,
+    global_config_manager,
+    current_provider: str,
+    current_model: str,
+) -> tuple[str, str, bool]:
+    """
+    Handle /provider command — interactive selection, quick switch, or add new.
+
+    Writes to the global config (~/.ctxai/config.toml or $CTXAI_HOME).
+
+    Args:
+        input_str: /provider argument (empty, provider name, or "add")
+        global_config_manager: ConfigManager with use_global=True
+        current_provider: Current provider name
+        current_model: Current model name
+
+    Returns:
+        Tuple of (new_provider, new_model, changed)
+    """
+
+    from ..agent.llm.factory import LLMProviderFactory
+
+    ps = PromptSession()
+
+    # ── /provider (no args) — interactive menu ─────────────────────────────
+    if not input_str:
+        providers = list(PROVIDERS_INFO.keys())
+        console.print(
+            f"\n[bold {NEON_CYAN}]Providers[/bold {NEON_CYAN}]  [dim](current: [bold]{current_provider}[/bold])[/dim]\n"
+        )
+
+        numbered = []
+        for pid in providers:
+            available, msg = LLMProviderFactory.check_provider_availability(pid)
+            status = "[green][ok][/green]" if available else "[red][--][/red]"
+            marker = "▸" if pid == current_provider else " "
+            info = PROVIDERS_INFO[pid]
+            model_hint = info["models"][0][0] if info["models"] else "[dim]custom[/dim]"
+            console.print(
+                f"  {marker} [bold]{len(numbered) + 1}.[/bold] {info['name']:<24} {status}  [dim]{model_hint}[/dim]"
+            )
+            numbered.append(pid)
+
+        console.print(f"  {len(numbered) + 1}. [bold]+ Add new provider...[/bold]\n")
+
+        choice = ps.prompt(f"Pick [1-{len(numbered) + 1}]: ").strip()
+        if not choice:
+            return current_provider, current_model, False
+
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            console.print_error("Invalid choice")
+            return current_provider, current_model, False
+
+        if idx < 0 or idx > len(numbered):
+            console.print_error("Invalid choice")
+            return current_provider, current_model, False
+
+        if idx == len(numbered):
+            return _add_provider_interactive(global_config_manager, current_provider, current_model, ps)
+
+        return handle_provider_command(numbered[idx], global_config_manager, current_provider, current_model)
+
+    # ── /provider add — interactive new provider ───────────────────────────
+    if input_str.lower() == "add":
+        return _add_provider_interactive(global_config_manager, current_provider, current_model, ps)
+
+    # ── /provider <name> — quick switch ────────────────────────────────────
+    provider_name = input_str.strip().lower()
+
+    if provider_name not in PROVIDERS_INFO and provider_name != "custom":
+        console.print_error(f"Unknown provider: {provider_name}")
+        console.print(f"[dim]Available: {', '.join(PROVIDERS_INFO.keys())} or /provider add[/dim]")
+        return current_provider, current_model, False
+
+    available, msg = LLMProviderFactory.check_provider_availability(provider_name)
+    if not available:
+        console.print_warning(f"{provider_name}: {msg}")
+        if not Confirm.ask("Set as default anyway?", default=True):
+            return current_provider, current_model, False
+
+    # Ask for model — live discovery API first, static catalog fallback
+    from ..agent.llm.model_discovery import discover_models
+
+    discovered = discover_models(provider_name, global_config_manager)
+    if discovered:
+        console.print(
+            f"\n[bold {NEON_CYAN}]Models for {provider_name}[/bold {NEON_CYAN}] "
+            f"[dim](live — {len(discovered)} available)[/dim]"
+        )
+        for i, dm in enumerate(discovered[:25], 1):
+            label = dm.name if dm.name and dm.name != dm.id else dm.id
+            suffix = f"  [dim]({dm.id})[/dim]" if dm.name and dm.name != dm.id else ""
+            ctx = f"  [dim]{dm.context_length:,} ctx[/dim]" if dm.context_length else ""
+            console.print(f"  [bold]{i}.[/bold] {label}{suffix}{ctx}")
+        if len(discovered) > 25:
+            console.print(
+                f"  [dim]… {len(discovered) - 25} more — pick any number 1-{len(discovered)} or type a model id[/dim]"
+            )
+
+        pick = ps.prompt(
+            f"\nPick model [1-{len(discovered)}] or type id (Enter keeps [bold]{current_model}[/bold]): ",
+        ).strip()
+
+        if pick:
+            try:
+                idx = int(pick) - 1
+                new_model = discovered[idx].id if 0 <= idx < len(discovered) else pick
+            except ValueError:
+                new_model = pick
+        else:
+            # Enter keeps the current model
+            new_model = current_model
+    else:
+        info = PROVIDERS_INFO.get(provider_name, {})
+        models = info.get("models", [])
+
+        if models:
+            console.print(f"\n[bold {NEON_CYAN}]Models for {provider_name}:[/bold {NEON_CYAN}]")
+            for i, (mid, desc) in enumerate(models, 1):
+                console.print(f"  [bold]{i}.[/bold] {mid}  [dim]{desc}[/dim]")
+
+            pick = ps.prompt(
+                f"\nPick model [1-{len(models)}] or type name (Enter keeps [bold]{current_model}[/bold]): ",
+            ).strip()
+
+            if pick:
+                try:
+                    idx = int(pick) - 1
+                    new_model = models[idx][0] if 0 <= idx < len(models) else pick
+                except ValueError:
+                    new_model = pick
+            else:
+                # Enter keeps the current model
+                new_model = current_model
+        else:
+            new_model = (
+                ps.prompt(
+                    f"Model name (Enter keeps [bold]{current_model}[/bold]): ",
+                ).strip()
+                or current_model
+            )
+
+    # Write to global config
+    config = global_config_manager.load()
+    config.default_provider = provider_name
+    config.set_provider_model(provider_name, new_model)
+    global_config_manager.save(config)
+
+    console.print_success(f"Global default set: {provider_name}/{new_model}")
+    return provider_name, new_model, True
+
+
+def _add_provider_interactive(
+    global_config_manager,
+    current_provider: str,
+    current_model: str,
+    ps=None,
+) -> tuple[str, str, bool]:
+    """Interactive add a new custom provider and write to global config."""
+    if ps is None:
+        ps = PromptSession()
+
+    console.print(f"\n[bold {NEON_CYAN}]Add Custom Provider[/bold {NEON_CYAN}]\n")
+
+    name = ps.prompt("  Provider name: ").strip()
+    if not name:
+        return current_provider, current_model, False
+
+    base_url = ps.prompt("  Base URL (OpenAI-compatible): ").strip()
+    if not base_url:
+        console.print_error("Base URL is required")
+        return current_provider, current_model, False
+
+    api_key = ps.prompt("  API key (or Enter to skip): ").strip() or None
+    model = ps.prompt("  Default model: ").strip()
+    if not model:
+        console.print_error("Model name is required")
+        return current_provider, current_model, False
+
+    # Write to global config
+    config = global_config_manager.load()
+    config.set_provider_config(
+        name,
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        enabled=True,
+    )
+    config.default_provider = name
+    global_config_manager.save(config)
+
+    console.print_success(f"Added {name} ({base_url}) → global config")
+    console.print_success(f"Now using: {name}/{model}")
+    return name, model, True
 
 
 def show_stats(agent: Agent):
@@ -532,8 +748,9 @@ async def interactive_chat(
         console.print_warning(compat_warning)
         return
 
-    # Load config
+    # Load config (project layer)
     config_manager = ConfigManager(working_directory)
+    global_config_manager = ConfigManager(working_directory, use_global=True)
     config = config_manager.load()
 
     if architect_editor:
@@ -884,6 +1101,43 @@ async def interactive_chat(
                             destination,
                         )
                         console.print_success(f"Session exported: {path}")
+                        continue
+
+                    elif command.startswith("/provider"):
+                        parts = user_input.split(maxsplit=1)
+                        provider_arg = parts[1].strip() if len(parts) > 1 else ""
+
+                        new_provider, new_model, changed = handle_provider_command(
+                            provider_arg,
+                            global_config_manager,
+                            current_provider,
+                            current_model,
+                        )
+
+                        if changed:
+                            current_provider = new_provider
+                            current_model = new_model
+
+                            # Create new LLM provider
+                            merged_config = config_manager.load()
+                            provider_config = merged_config.get_provider_config(new_provider)
+                            llm_config = AgentLLMConfig(
+                                provider=new_provider,
+                                model=new_model,
+                                api_key=provider_config.api_key,
+                                base_url=provider_config.base_url,
+                                temperature=provider_config.temperature,
+                                max_tokens=provider_config.max_tokens,
+                            )
+                            llm = LLMProviderFactory.create_provider(llm_config)
+
+                            # Update agent
+                            loop_config.llm_provider = llm
+                            agent.llm = llm
+
+                            # Update banner
+                            print_banner(new_provider, new_model, verbose=False)
+
                         continue
 
                     elif command.startswith("/model"):
