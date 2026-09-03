@@ -12,6 +12,7 @@ from typing import Any
 
 from .editing import EditError, edit_diff, simulate_edit
 from .llm.base import ProviderErrorKind, ToolCall
+from .run_recorder import RunEventKind
 
 
 class TaskState(str, Enum):
@@ -143,6 +144,38 @@ class UsageRecord:
     completion_tokens: int
     total_tokens: int
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to the persisted dictionary shape (HH-04 transcripts).
+
+        Returns:
+            Dictionary representation of the usage snapshot.
+        """
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> UsageRecord:
+        """Create from a dictionary.
+
+        Args:
+            data: Dictionary produced by ``to_dict``.
+
+        Returns:
+            The reconstructed ``UsageRecord``.
+        """
+        return cls(
+            provider=str(data.get("provider", "")),
+            model=str(data.get("model", "")),
+            prompt_tokens=int(data.get("prompt_tokens", 0)),
+            completion_tokens=int(data.get("completion_tokens", 0)),
+            total_tokens=int(data.get("total_tokens", 0)),
+        )
+
 
 @dataclass
 class UsageLedger:
@@ -230,6 +263,11 @@ class TaskRun:
     def __post_init__(self) -> None:
         self.project_root = Path(os.path.realpath(self.project_root))
         self.plan_required = self.requires_plan(self.goal)
+        # Drain cursors for to_event_payloads(): how many entries of each
+        # evidence list have already been emitted as transcript events.
+        self._emitted_transitions = 1  # transitions[0] is the initial state carried by run_started
+        self._emitted_approvals = 0
+        self._emitted_checks = 0
 
     @staticmethod
     def requires_plan(goal: str) -> bool:
@@ -336,6 +374,61 @@ class TaskRun:
         if self.state != state:
             self.state = state
             self.transitions.append(state)
+
+    def to_event_payloads(self) -> list[tuple[RunEventKind, dict[str, Any]]]:
+        """Drain new workflow evidence as redactable transcript event payloads.
+
+        Returns state transitions, approvals, and checks recorded since the
+        previous call (the initial ``UNDERSTAND`` state is carried by the
+        ``run_started`` event, not emitted as a transition). The agent loop
+        calls this at tool-batch boundaries so recording stays outside its
+        control flow; each payload passes through the recorder's redaction
+        before persistence.
+
+        Returns:
+            A list of ``(RunEventKind, payload)`` pairs in emission order:
+            new transitions, then new approvals, then new checks.
+        """
+        events: list[tuple[RunEventKind, dict[str, Any]]] = []
+        for state in self.transitions[self._emitted_transitions :]:
+            events.append(
+                (
+                    RunEventKind.STATE_TRANSITION,
+                    {
+                        "state": state.value,
+                        "failure_kind": self.failure_kind.value if self.failure_kind else None,
+                        "failure_message": self.failure_message,
+                    },
+                )
+            )
+        self._emitted_transitions = len(self.transitions)
+
+        for approval in self.approvals[self._emitted_approvals :]:
+            events.append(
+                (
+                    RunEventKind.APPROVAL,
+                    {
+                        "tool": approval.get("tool"),
+                        "parameters": approval.get("parameters") or {},
+                        "approved": bool(approval.get("approved")),
+                    },
+                )
+            )
+        self._emitted_approvals = len(self.approvals)
+
+        for check in self.checks[self._emitted_checks :]:
+            events.append(
+                (
+                    RunEventKind.CHECK,
+                    {
+                        "command": check.command,
+                        "success": check.success,
+                        "output": check.output,
+                    },
+                )
+            )
+        self._emitted_checks = len(self.checks)
+        return events
 
     def classify_failure(self, result: dict[str, Any], tool_name: str) -> FailureKind:
         error_type = str(result.get("error_type", ""))

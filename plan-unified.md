@@ -64,7 +64,7 @@ open repository
 | HH-01 Hardened tool execution | No secret leaks, bounded output, deterministic edits | Validated (2026-09-04) |
 | HH-02 Resilient agent loop | Retries, fail-fast, clean cancellation | Validated (2026-09-04) |
 | HH-03 Context window management | Measured tokens, mid-loop compaction | Validated (2026-09-04) |
-| HH-04 Run transcripts and cost ledger | Redacted local run records with usage/cost | Planned |
+| HH-04 Run transcripts and cost ledger | Redacted local run records with usage/cost | Validated (2026-09-04) |
 | HH-05 True streaming interaction | Live token and tool events in chat | Planned |
 | HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Planned |
 | HH-07 Approval ergonomics and planner control | once/session/deny approvals bound to exact diffs | Planned |
@@ -441,7 +441,7 @@ changes (owned by `repository_context.py`/RE slices).
 can list and inspect past runs from the CLI and see per-run token usage and estimated cost without
 any data leaving the machine.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-04).
 
 **Scope**
 

@@ -154,8 +154,9 @@ function of history + config — no wall-clock, no randomness — and never remo
    helper into a single user-role message placed after the leading system messages; a later
    compaction replaces that summary in place (there is exactly one summary slot).
 4. **Records** the event as counters/attributes on the context — `compaction_count`,
-   `elided_message_count`, `last_compaction` — which HH-04 will persist as `compaction` transcript
-   events. No-op compactions (nothing new to elide) are not counted.
+   `elided_message_count`, `last_compaction` — which are persisted as `compaction` transcript
+   events (see [docs/RUN_TRANSCRIPTS.md](RUN_TRANSCRIPTS.md)). No-op compactions (nothing new to
+   elide) are not counted.
 
 Always preserved, byte-for-byte: the system prompt, every assistant `tool_calls` payload, and the
 `tool_call_id`/`tool_use_id` pairing the OpenAI and Anthropic request validators require. Compaction
@@ -177,7 +178,8 @@ same reason: it drops or keeps whole groups, so it can never orphan a tool resul
 - The `/context` chat command reports measured tokens (and their basis), the budget and soft limit,
   compaction count, elided tool-result count, and the last run's provider-reported usage totals.
 - Per-run usage is aggregated by `UsageLedger` (`agent/workflow.py`); totals equal the sum of
-  per-call provider-reported usage. It is held on `TaskRun.usage`; persistence lands with HH-04.
+  per-call provider-reported usage. It is held on `TaskRun.usage` and persisted per run as
+  `llm_call` transcript events with a cost estimate ([docs/RUN_TRANSCRIPTS.md](RUN_TRANSCRIPTS.md)).
 
 
 

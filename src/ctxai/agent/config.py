@@ -162,7 +162,9 @@ class AgentBehaviorConfig:
     ``context_size`` above which the loop compacts the conversation before the
     next LLM call. It bounds the *context window* budget;
     ``AgentLLMConfig.max_tokens`` remains the separate completion budget and
-    the two are never conflated.
+    the two are never conflated. ``record_runs`` controls local run
+    transcripts (HH-04): on by default (local-only, redacted, nothing
+    uploaded) with the oldest transcripts pruned beyond ``run_retention``.
     """
 
     planning_enabled: bool = True
@@ -173,10 +175,14 @@ class AgentBehaviorConfig:
     stream_responses: bool = True  # Stream LLM responses
     loop_break_threshold: int = 3  # Identical consecutive tool-result tuples before the loop breaks
     context_soft_limit_ratio: float = 0.8  # Compact above this fraction of the provider context_size
+    record_runs: bool = True  # Write redacted local run transcripts under .ctxai/runs (HH-04)
+    run_retention: int = 50  # Maximum run transcripts kept per project (oldest pruned at run start)
 
     def __post_init__(self) -> None:
         if not 0 < self.context_soft_limit_ratio <= 1:
             raise ValueError("context_soft_limit_ratio must be within (0, 1]")
+        if self.run_retention < 1:
+            raise ValueError("run_retention must be at least 1")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -189,6 +195,8 @@ class AgentBehaviorConfig:
             "stream_responses": self.stream_responses,
             "loop_break_threshold": self.loop_break_threshold,
             "context_soft_limit_ratio": self.context_soft_limit_ratio,
+            "record_runs": self.record_runs,
+            "run_retention": self.run_retention,
         }
 
     @classmethod
@@ -203,6 +211,8 @@ class AgentBehaviorConfig:
             stream_responses=data.get("stream_responses", True),
             loop_break_threshold=data.get("loop_break_threshold", 3),
             context_soft_limit_ratio=data.get("context_soft_limit_ratio", 0.8),
+            record_runs=data.get("record_runs", True),
+            run_retention=data.get("run_retention", 50),
         )
 
 

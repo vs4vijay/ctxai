@@ -562,6 +562,16 @@ The agent loop survives transient provider failures and cancels cleanly (see
 - **Clean cancellation**: Ctrl+C (or task cancellation) completes the current tool call, marks the run failed with `infrastructure_failure`, and persists the session — no half-written files, no injected recovery prompts.
 - **Loop detection**: three identical consecutive tool-result batches (configurable via `behavior.loop_break_threshold`) end the run with a status-bearing final report instead of burning the iteration budget.
 
+### Run Transcripts and Cost Ledger
+
+Every agent run records a redacted JSON Lines transcript under `.ctxai/runs/<run_id>.jsonl` inside
+your project (see [docs/RUN_TRANSCRIPTS.md](docs/RUN_TRANSCRIPTS.md) for the full contract):
+
+- **Local-only**: transcripts are written, redacted, and read back entirely on your machine — nothing is uploaded.
+- **Redacted**: tool parameters/results, messages, and approvals pass through secret redaction and repository-relative path normalization before anything is persisted.
+- **Inspectable**: `ctxai runs list`, `ctxai runs show RUN_ID [--kind KIND] [--json]`, and `ctxai runs delete RUN_ID | --all` manage past runs; final reports append a `usage: … ; cost: …` line (unknown model costs say "unknown", never a fabricated zero).
+- **Bounded**: `behavior.record_runs` (default on) and `behavior.run_retention` (default 50, oldest pruned) control the ledger.
+
 ### Key Components
 
 **Search Components:**
