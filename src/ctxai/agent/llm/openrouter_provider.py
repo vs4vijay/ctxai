@@ -120,7 +120,8 @@ class OpenRouterProvider(BaseLLMProvider):
 
         # Parse response
         data = response.json()
-        message = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        message = choice["message"]
 
         # Extract content
         content = message.get("content", "")
@@ -142,9 +143,29 @@ class OpenRouterProvider(BaseLLMProvider):
                     )
                 )
 
+        # Map finish reason onto the shared vocabulary ("stop", "tool_calls", "length")
+        raw_finish_reason = choice.get("finish_reason")
+        finish_reason = "stop"
+        if raw_finish_reason == "tool_calls":
+            finish_reason = "tool_calls"
+        elif raw_finish_reason == "length":
+            finish_reason = "length"
+
+        # Extract provider-reported usage (tokens only)
+        usage: dict[str, int] = {}
+        raw_usage = data.get("usage") or {}
+        if raw_usage:
+            usage = {
+                "prompt_tokens": int(raw_usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(raw_usage.get("completion_tokens") or 0),
+                "total_tokens": int(raw_usage.get("total_tokens") or 0),
+            }
+
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
             raw_response=data,
         )
 

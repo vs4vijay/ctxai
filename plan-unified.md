@@ -63,7 +63,7 @@ open repository
 | VS-09 Web dashboard and index operations | Index health, search, and management in a browser | Validated (2026-07-23) |
 | HH-01 Hardened tool execution | No secret leaks, bounded output, deterministic edits | Validated (2026-09-04) |
 | HH-02 Resilient agent loop | Retries, fail-fast, clean cancellation | Validated (2026-09-04) |
-| HH-03 Context window management | Measured tokens, mid-loop compaction | Planned |
+| HH-03 Context window management | Measured tokens, mid-loop compaction | Validated (2026-09-04) |
 | HH-04 Run transcripts and cost ledger | Redacted local run records with usage/cost | Planned |
 | HH-05 True streaming interaction | Live token and tool events in chat | Planned |
 | HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Planned |
@@ -383,7 +383,7 @@ accounting (HH-04).
 tool results are elided deterministically, usage is measured from real provider reports, and a task
 that would overflow compacts and continues instead of failing.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-04).
 
 **Scope**
 

@@ -104,9 +104,28 @@ class OpenAIProvider(BaseLLMProvider):
                     )
                 )
 
+        # Map finish reason onto the shared vocabulary ("stop", "tool_calls", "length")
+        raw_finish_reason = response.choices[0].finish_reason
+        finish_reason = "stop"
+        if raw_finish_reason == "tool_calls":
+            finish_reason = "tool_calls"
+        elif raw_finish_reason == "length":
+            finish_reason = "length"
+
+        # Extract provider-reported usage (tokens only)
+        usage: dict[str, int] = {}
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
             raw_response=response.model_dump(),
         )
 

@@ -124,6 +124,88 @@ class CheckEvidence:
 
 
 @dataclass
+class UsageRecord:
+    """One provider-reported usage snapshot for a single LLM call.
+
+    Stores token counts only — never message content.
+
+    Attributes:
+        provider: Provider class name that reported the usage.
+        model: Model identifier the call was made against.
+        prompt_tokens: Provider-reported prompt (input) tokens.
+        completion_tokens: Provider-reported completion (output) tokens.
+        total_tokens: Reported total, or prompt + completion when absent.
+    """
+
+    provider: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+@dataclass
+class UsageLedger:
+    """Aggregates provider-reported token usage for one agent run.
+
+    Each successful LLM call records its ``LLMResponse.usage`` payload here;
+    totals are therefore exactly the sum of the per-call provider reports.
+    """
+
+    records: list[UsageRecord] = field(default_factory=list)
+
+    def record(self, provider: str, model: str, usage: dict[str, Any]) -> None:
+        """Record one provider-reported usage payload.
+
+        Empty payloads (providers that reported nothing) are ignored.
+
+        Args:
+            provider: Provider class name that made the call.
+            model: Model identifier used for the call.
+            usage: Provider-reported usage dict (``prompt_tokens``,
+                ``completion_tokens``, optionally ``total_tokens``).
+        """
+        if not usage:
+            return
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        reported_total = usage.get("total_tokens")
+        total_tokens = int(reported_total) if reported_total is not None else prompt_tokens + completion_tokens
+        self.records.append(
+            UsageRecord(
+                provider=provider,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
+        )
+
+    @property
+    def call_count(self) -> int:
+        """Number of recorded LLM calls.
+
+        Returns:
+            Count of recorded usage snapshots.
+        """
+        return len(self.records)
+
+    def totals(self) -> dict[str, int]:
+        """Aggregate recorded usage across the run.
+
+        Returns:
+            Dictionary with ``prompt_tokens``, ``completion_tokens``,
+            ``total_tokens`` sums and the number of recorded ``calls``.
+        """
+        return {
+            "prompt_tokens": sum(record.prompt_tokens for record in self.records),
+            "completion_tokens": sum(record.completion_tokens for record in self.records),
+            "total_tokens": sum(record.total_tokens for record in self.records),
+            "calls": len(self.records),
+        }
+
+
+@dataclass
 class TaskRun:
     goal: str
     project_root: Path = field(default_factory=lambda: Path.cwd().resolve())
@@ -138,6 +220,7 @@ class TaskRun:
     plan_required: bool = False
     plan: StructuredPlan | None = None
     approvals: list[dict[str, Any]] = field(default_factory=list)
+    usage: UsageLedger = field(default_factory=UsageLedger)
 
     MUTATION_TOOLS = frozenset({"write_file", "edit_file"})
     INSPECTION_TOOLS = frozenset({"read_file", "semantic_search", "grep", "glob", "list_files"})

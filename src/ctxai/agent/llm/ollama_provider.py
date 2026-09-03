@@ -116,9 +116,22 @@ class OllamaProvider(BaseLLMProvider):
                     )
                 )
 
+        # Extract provider-reported usage (tokens only).
+        # Ollama reports prompt_eval_count/eval_count in the final chat response.
+        usage: dict[str, int] = {}
+        prompt_tokens = int(data.get("prompt_eval_count") or 0)
+        completion_tokens = int(data.get("eval_count") or 0)
+        if prompt_tokens or completion_tokens:
+            usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
+
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
+            usage=usage,
             raw_response=data,
         )
 

@@ -6,6 +6,7 @@ enabling fast, deterministic testing without costs.
 """
 
 from collections.abc import Generator
+from dataclasses import replace
 from typing import Any
 
 from ctxai.agent.config import AgentLLMConfig
@@ -13,6 +14,7 @@ from ctxai.agent.llm.base import (
     BaseLLMProvider,
     LLMResponse,
     Message,
+    ProviderCapabilities,
     ToolCall,
 )
 
@@ -22,10 +24,17 @@ class MockLLMProvider(BaseLLMProvider):
     Mock LLM that returns predefined responses.
 
     Useful for testing agent workflows without actual API calls.
-    Supports configuring exact sequences of responses including tool calls.
+    Supports configuring exact sequences of responses including tool calls,
+    per-response usage payloads, and an injected context_size for
+    context-budget (HH-03) tests.
     """
 
-    def __init__(self, config: AgentLLMConfig = None, responses: list[dict[str, Any]] = None):
+    def __init__(
+        self,
+        config: AgentLLMConfig = None,
+        responses: list[dict[str, Any]] = None,
+        context_size: int | None = None,
+    ):
         """
         Initialize mock LLM provider.
 
@@ -35,6 +44,9 @@ class MockLLMProvider(BaseLLMProvider):
                 - content: Response text
                 - tool_calls: List of tool call dicts with 'name', 'parameters', optionally 'id'
                 - finish_reason: One of "stop", "tool_calls", "length"
+                - usage: Usage dict (prompt_tokens/completion_tokens/total_tokens)
+            context_size: Optional context size reported by get_capabilities()
+                (defaults to the ProviderCapabilities default when None)
         """
         # Create dummy config if none provided
         if config is None:
@@ -46,10 +58,23 @@ class MockLLMProvider(BaseLLMProvider):
         self.responses = responses or []
         self.call_count = 0
         self.call_history = []  # Track all calls for assertions
+        self.context_size = context_size
 
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
         return "mock-model-v1"
+
+    def get_capabilities(self) -> ProviderCapabilities:
+        """
+        Report capabilities, honoring an injected context_size.
+
+        Returns:
+            ProviderCapabilities with the injected context_size when set.
+        """
+        capabilities = super().get_capabilities()
+        if self.context_size is not None:
+            return replace(capabilities, context_size=self.context_size)
+        return capabilities
 
     def chat(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs) -> LLMResponse:
         """
@@ -161,13 +186,21 @@ class MockLLMProvider(BaseLLMProvider):
         self.call_history = []
 
 
-def create_mock_response(content: str = "", tool_calls: list[dict[str, Any]] = None) -> dict[str, Any]:
+def create_mock_response(
+    content: str = "",
+    tool_calls: list[dict[str, Any]] = None,
+    usage: dict[str, int] | None = None,
+    finish_reason: str | None = None,
+) -> dict[str, Any]:
     """
     Helper function to create a mock response configuration.
 
     Args:
         content: Response text content
         tool_calls: Optional list of tool calls to include
+        usage: Optional provider-reported usage dict (tokens only), e.g.
+            {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}
+        finish_reason: Optional finish reason ("stop", "tool_calls", "length")
 
     Returns:
         Response configuration dict
@@ -178,11 +211,18 @@ def create_mock_response(content: str = "", tool_calls: list[dict[str, Any]] = N
         ...         content="I'll read the file",
         ...         tool_calls=[{"name": "read_file", "parameters": {"path": "test.py"}}]
         ...     ),
-        ...     create_mock_response(content="The file contains: ...")
+        ...     create_mock_response(
+        ...         content="The file contains: ...",
+        ...         usage={"prompt_tokens": 500, "completion_tokens": 8, "total_tokens": 508},
+        ...     ),
         ... ]
         >>> provider = MockLLMProvider(responses=responses)
     """
-    response = {"content": content}
+    response: dict[str, Any] = {"content": content}
     if tool_calls:
         response["tool_calls"] = tool_calls
+    if usage is not None:
+        response["usage"] = usage
+    if finish_reason is not None:
+        response["finish_reason"] = finish_reason
     return response
