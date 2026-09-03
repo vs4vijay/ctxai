@@ -552,6 +552,16 @@ environment policy, output limits, and edit semantics):
 - **Edit uniqueness**: `edit_file` requires exactly one match unless you pass `replace_all`; zero- or multi-match edits fail without writing and name the match count. A whitespace-tolerant fallback applies the change to the original bytes when the pattern differs only in indentation or trailing whitespace. Approval-time previews are byte-identical to applied edits, including regex edits.
 - **Threat model**: command classification remains an in-process policy check; OS-level sandboxing lands with HH-08.
 
+### Loop Resilience Guarantees
+
+The agent loop survives transient provider failures and cancels cleanly (see
+[docs/AGENT_LOOP.md](docs/AGENT_LOOP.md) for the full behavior contract):
+
+- **Transparent retries**: rate limits, timeouts, and transport blips on the LLM call are retried up to 3 times with bounded exponential backoff and jitter (`retry 2/3 after 2.1s (rate_limit)`); only the LLM call is retried — tools are never re-executed.
+- **Fail fast**: authentication and unsupported-capability errors end the run within one iteration with a provider-qualified message and no recovery prompt; malformed responses get exactly one recovery attempt.
+- **Clean cancellation**: Ctrl+C (or task cancellation) completes the current tool call, marks the run failed with `infrastructure_failure`, and persists the session — no half-written files, no injected recovery prompts.
+- **Loop detection**: three identical consecutive tool-result batches (configurable via `behavior.loop_break_threshold`) end the run with a status-bearing final report instead of burning the iteration budget.
+
 ### Key Components
 
 **Search Components:**

@@ -593,6 +593,7 @@ def code(
         from .agent.config import AgentConfig, AgentLLMConfig
         from .agent.core import Agent, AgentLoopConfig
         from .agent.llm.anthropic_provider import AnthropicProvider
+        from .agent.resilience import format_retry_notice
         from .agent.tools.bash_tool import BashTool
         from .agent.tools.code_search import SemanticSearchTool
         from .agent.tools.execution import ToolExecutionContext
@@ -649,6 +650,7 @@ def code(
             max_iterations=max_iterations,
             verbose=verbose,
             approval_callback=(lambda call: typer.confirm(format_approval_prompt(call))),
+            on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
         )
         agent = Agent(loop_config)
 

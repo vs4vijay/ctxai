@@ -197,16 +197,27 @@ async def test_agent_max_iterations(temp_dir, mock_llm_config):
 
     Verifies:
     1. Agent respects max_iterations limit
-    2. Appropriate warning message is returned
+    2. The exit returns a status-bearing final report (not a bare string)
     3. Prevents infinite loops
+
+    Tool calls alternate between two files with different content so the
+    identical-result loop breaker does not fire first.
     """
+    # Create files with distinct content so tool results differ per iteration
+    (temp_dir / "alpha.py").write_text("alpha = 1")
+    (temp_dir / "beta.py").write_text("beta = 2")
+
     # Configure mock to always return tool calls (infinite loop scenario)
     responses = [
         create_mock_response(
-            content="Let me check that file.",
-            tool_calls=[{"name": "read_file", "parameters": {"path": str(temp_dir / "test.py")}}],
-        )
-    ] * 20  # More responses than max iterations
+            content="Let me check alpha.",
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(temp_dir / "alpha.py")}}],
+        ),
+        create_mock_response(
+            content="Let me check beta.",
+            tool_calls=[{"name": "read_file", "parameters": {"path": str(temp_dir / "beta.py")}}],
+        ),
+    ] * 10  # More responses than max iterations
 
     mock_llm = MockLLMProvider(config=mock_llm_config, responses=responses)
 
@@ -228,14 +239,12 @@ async def test_agent_max_iterations(temp_dir, mock_llm_config):
 
     agent = Agent(loop_config)
 
-    # Create a dummy file so tool doesn't fail
-    (temp_dir / "test.py").write_text("dummy content")
-
     # Process message
-    response = await agent.process_message("Read test.py multiple times")
+    response = await agent.process_message("Read both files repeatedly")
 
-    # Verify max iterations warning
-    assert "max iterations" in response.lower() or "reached" in response.lower()
+    # Verify max iterations exit is status-bearing
+    assert response.startswith("Status:")
+    assert "max iterations (3)" in response.lower()
     assert mock_llm.call_count == 3, f"Should stop at max_iterations (3), but called {mock_llm.call_count} times"
 
 

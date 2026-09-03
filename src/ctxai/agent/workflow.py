@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .editing import EditError, edit_diff, simulate_edit
-from .llm.base import ToolCall
+from .llm.base import ProviderErrorKind, ToolCall
 
 
 class TaskState(str, Enum):
@@ -32,6 +32,27 @@ class FailureKind(str, Enum):
     INFRASTRUCTURE_FAILURE = "infrastructure_failure"
     APPROVAL_DENIAL = "approval_denial"
     INCOMPLETE_WORKFLOW = "incomplete_workflow"
+
+
+_PROVIDER_FAILURE_KINDS: dict[ProviderErrorKind, FailureKind] = {
+    kind: FailureKind.INFRASTRUCTURE_FAILURE for kind in ProviderErrorKind
+}
+
+
+def classify_provider_failure(kind: ProviderErrorKind) -> FailureKind:
+    """Map a provider error kind onto the shared FailureKind taxonomy.
+
+    Provider faults (authentication, rate limits, timeouts, transport,
+    malformed responses, cancellation) are infrastructure failures: they are
+    never caused by the model's plan or by tool misuse.
+
+    Args:
+        kind: Normalized provider error kind raised by the LLM call.
+
+    Returns:
+        The FailureKind recorded on the TaskRun.
+    """
+    return _PROVIDER_FAILURE_KINDS.get(kind, FailureKind.INFRASTRUCTURE_FAILURE)
 
 
 ApprovalCallback = Callable[[ToolCall], bool]

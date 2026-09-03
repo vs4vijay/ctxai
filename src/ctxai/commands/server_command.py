@@ -23,6 +23,7 @@ except ImportError:
 
 from rich.console import Console
 
+from ..agent.llm.base import ProviderError, ProviderErrorKind
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
 from ..index_manifest import IndexManifest
@@ -47,6 +48,26 @@ INDEX_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 def _valid_index_name(name: str) -> bool:
     """Keep index lookups below the configured indexes directory."""
     return bool(INDEX_NAME_PATTERN.fullmatch(name))
+
+
+def _provider_error_code(error: Exception) -> str | None:
+    """Map a ProviderError onto the stable MCP envelope codes.
+
+    Non-provider errors return ``None`` so callers keep their default codes.
+
+    Args:
+        error: The raised exception.
+
+    Returns:
+        The MCP error code for provider errors, otherwise ``None``.
+    """
+    if not isinstance(error, ProviderError):
+        return None
+    if error.kind is ProviderErrorKind.CANCELLED:
+        return MCPErrorCode.CANCELLED
+    if error.kind is ProviderErrorKind.TIMEOUT:
+        return MCPErrorCode.TIMEOUT
+    return MCPErrorCode.INTERNAL_ERROR
 
 
 def create_server(project_path: Path | None = None) -> "FastMCP":
@@ -207,7 +228,7 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
         except Exception as e:
             error_msg = f"Error indexing codebase: {e}"
             logger.error(error_msg, exc_info=True)
-            return failure(MCPErrorCode.INDEX_FAILED, error_msg)
+            return failure(_provider_error_code(e) or MCPErrorCode.INDEX_FAILED, error_msg)
 
     @mcp.tool()
     async def query_codebase(index_name: str, query: str, n_results: int = 5) -> dict[str, Any]:
@@ -293,7 +314,7 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
         except Exception as e:
             error_msg = f"Error querying codebase: {e}"
             logger.error(error_msg, exc_info=True)
-            return failure(MCPErrorCode.QUERY_FAILED, error_msg)
+            return failure(_provider_error_code(e) or MCPErrorCode.QUERY_FAILED, error_msg)
 
     @mcp.tool()
     async def get_index_stats(index_name: str) -> dict[str, Any]:
@@ -342,7 +363,7 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
         except Exception as e:
             error_msg = f"Error getting index stats: {e}"
             logger.error(error_msg, exc_info=True)
-            return failure(MCPErrorCode.STORAGE_FAILED, error_msg)
+            return failure(_provider_error_code(e) or MCPErrorCode.STORAGE_FAILED, error_msg)
 
     return mcp
 
