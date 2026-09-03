@@ -21,7 +21,7 @@ from rich.markdown import Markdown
 from rich.prompt import Confirm
 
 from ..agent.config import AgentConfig, AgentLLMConfig
-from ..agent.core import Agent, AgentLoopConfig
+from ..agent.core import Agent, AgentLoopConfig, format_compaction_notice
 from ..agent.resilience import format_retry_notice
 from ..agent.sessions import SessionRecord, SessionStore
 from ..agent.theme import (
@@ -237,7 +237,7 @@ class ChatCommandCompleter(Completer):
             "/quit": "Exit the chat",
             "/bye": "Exit the chat",
             "/stats": "Show statistics",
-            "/context": "Show context info",
+            "/context": "Show context budget, usage, and compaction state",
             "/status": "Show agent status",
             "/tools": "List available tools",
             "/save": "Save session: /save [name]",
@@ -291,7 +291,7 @@ def print_help():
 • [bold #FFD700]/provider[/bold #FFD700] - Choose or add a provider (saved globally)
 • [bold #FFD700]/model [provider/model][/bold #FFD700] - Change provider & model
 • [bold #FFD700]/stats[/bold #FFD700] - Show session statistics
-• [bold #FFD700]/context[/bold #FFD700] - Show context info
+• [bold #FFD700]/context[/bold #FFD700] - Show context budget, measured usage, and compaction state
 • [bold #FFD700]/exit[/bold #FFD700], [bold #FFD700]/quit[/bold #FFD700],
   [bold #FFD700]/bye[/bold #FFD700] - Exit the chat
 • [bold #FFD700]/tools[/bold #FFD700] - List available tools
@@ -659,9 +659,12 @@ def show_stats(agent: Agent):
 
 
 def show_context(agent: Agent):
-    """Show context information."""
+    """Show context budget, measured token usage, and compaction state (HH-03)."""
     try:
         context = agent.context
+        behavior = agent.config.agent_config.behavior
+        capabilities = agent.llm.get_capabilities()
+        context_size = getattr(capabilities, "context_size", None)
 
         console.print(f"\n[bold {NEON_CYAN}]Context Information[/bold {NEON_CYAN}]")
         console.print(f"  [dim]{'─' * 40}[/dim]")
@@ -670,11 +673,46 @@ def show_context(agent: Agent):
         msg_count = context.get_message_count()
         console.print(f"  [bold {NEON_GOLD}]Total Messages:[/bold {NEON_GOLD}] {msg_count}")
 
-        # Token estimate
-        tokens = context.get_token_count_estimate()
-        console.print(f"  [bold {NEON_GOLD}]Token Estimate:[/bold {NEON_GOLD}] ~{tokens}")
+        # Measured (or estimated) context tokens
+        measured = context.estimate_context_tokens()
+        basis = (
+            "measured from provider usage"
+            if context.last_reported_prompt_tokens is not None
+            else "estimated (~4 chars/token)"
+        )
+        console.print(f"  [bold {NEON_GOLD}]Context Tokens:[/bold {NEON_GOLD}] ~{measured} [dim]({basis})[/dim]")
 
-        # System prompt length
+        # Budget model: provider-declared context_size and the soft limit
+        if isinstance(context_size, int) and context_size > 0:
+            budget = int(context_size * behavior.context_soft_limit_ratio)
+            used_pct = min(100.0, (measured / context_size) * 100)
+            console.print(
+                f"  [bold {NEON_GOLD}]Context Budget:[/bold {NEON_GOLD}] "
+                f"{context_size:,} tokens ({agent.llm.__class__.__name__})"
+            )
+            console.print(
+                f"  [bold {NEON_GOLD}]Soft Limit:[/bold {NEON_GOLD}] "
+                f"{budget:,} tokens (ratio {behavior.context_soft_limit_ratio:g}) — compaction triggers above this"
+            )
+            console.print(f"  [bold {NEON_GOLD}]Context Used:[/bold {NEON_GOLD}] {used_pct:.1f}%")
+        else:
+            console.print(f"  [bold {NEON_GOLD}]Context Budget:[/bold {NEON_GOLD}] unknown (compaction disabled)")
+
+        # Compaction state
+        console.print(f"  [bold {NEON_GOLD}]Compactions:[/bold {NEON_GOLD}] {context.compaction_count}")
+        console.print(f"  [bold {NEON_GOLD}]Elided Tool Results:[/bold {NEON_GOLD}] {context.elided_message_count}")
+
+        # Per-run usage ledger (provider-reported, tokens only)
+        run = agent.last_run
+        if run is not None and run.usage.call_count:
+            totals = run.usage.totals()
+            console.print(
+                f"  [bold {NEON_GOLD}]Last Run Usage:[/bold {NEON_GOLD}] "
+                f"{totals['prompt_tokens']:,} prompt + {totals['completion_tokens']:,} completion = "
+                f"{totals['total_tokens']:,} tokens over {totals['calls']} call(s)"
+            )
+
+        # System prompt size
         if context.messages:
             system_msg = context.messages[0]
             if system_msg.role.value == "system":
@@ -684,11 +722,6 @@ def show_context(agent: Agent):
         # Conversation turns
         turns = max(0, (msg_count - 1) // 2)  # Subtract system message
         console.print(f"  [bold {NEON_GOLD}]Conversation Turns:[/bold {NEON_GOLD}] {turns}")
-
-        # Available context space (assuming 100k context)
-        context_limit = 100000
-        used_pct = min(100, (tokens / context_limit) * 100)
-        console.print(f"  [bold {NEON_GOLD}]Context Used:[/bold {NEON_GOLD}] {used_pct:.1f}%")
 
         # Show recent messages
         if len(context.messages) > 1:
@@ -889,6 +922,7 @@ async def interactive_chat(
         approval_callback=(lambda call: Confirm.ask(format_approval_prompt(call), default=False)),
         cancel_event=asyncio.Event(),
         on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
+        on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
         session_store=session_store,
         session_name=current_session,
     )

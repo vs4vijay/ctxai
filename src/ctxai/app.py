@@ -591,7 +591,7 @@ def code(
         from rich.console import Console
 
         from .agent.config import AgentConfig, AgentLLMConfig
-        from .agent.core import Agent, AgentLoopConfig
+        from .agent.core import Agent, AgentLoopConfig, format_compaction_notice
         from .agent.llm.anthropic_provider import AnthropicProvider
         from .agent.resilience import format_retry_notice
         from .agent.tools.bash_tool import BashTool
@@ -651,6 +651,7 @@ def code(
             verbose=verbose,
             approval_callback=(lambda call: typer.confirm(format_approval_prompt(call))),
             on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
+            on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
         )
         agent = Agent(loop_config)
 

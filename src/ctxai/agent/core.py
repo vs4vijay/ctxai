@@ -61,6 +61,39 @@ PLAN_TOOL_SCHEMA = {
 }
 
 
+@dataclass(frozen=True)
+class CompactionNotice:
+    """Structured description of one context compaction, rendered on CLI surfaces.
+
+    Attributes:
+        tokens_before: Heuristic token estimate before compaction.
+        tokens_after: Heuristic token estimate after compaction.
+        elided_messages: Tool-result bodies replaced by markers in this compaction.
+        target_tokens: Soft context budget (context_size * soft-limit ratio).
+    """
+
+    tokens_before: int
+    tokens_after: int
+    elided_messages: int
+    target_tokens: int
+
+
+def format_compaction_notice(notice: CompactionNotice) -> str:
+    """Render a compaction notice in the documented one-line CLI format.
+
+    Args:
+        notice: The compaction notice to render.
+
+    Returns:
+        A string shaped like ``context compacted: ~9000 -> ~2400 tokens
+        (12 tool results elided, soft limit 8000)``.
+    """
+    return (
+        f"context compacted: ~{notice.tokens_before} -> ~{notice.tokens_after} tokens "
+        f"({notice.elided_messages} tool results elided, soft limit {notice.target_tokens})"
+    )
+
+
 @dataclass
 class AgentLoopConfig:
     """Configuration for agent execution.
@@ -68,8 +101,10 @@ class AgentLoopConfig:
     All resilience fields are defaulted so existing constructions remain valid:
     provider calls retry transient failures per ``retry_policy``, a
     ``cancel_event`` enables clean Ctrl+C cancellation, ``on_retry`` receives
-    structured retry notices for CLI rendering, and ``session_store`` persists
-    conversation state when a run is cancelled or fails fast.
+    structured retry notices for CLI rendering, ``session_store`` persists
+    conversation state when a run is cancelled or fails fast, and
+    ``on_compaction`` receives structured compaction notices when the loop
+    elides old tool results to stay under the model's context window (HH-03).
     """
 
     llm_provider: BaseLLMProvider
@@ -87,6 +122,7 @@ class AgentLoopConfig:
     on_retry: Callable[[RetryNotice], None] | None = None
     session_store: SessionStore | None = None
     session_name: str = "default"
+    on_compaction: Callable[[CompactionNotice], None] | None = None
 
 
 class Agent:
@@ -134,6 +170,15 @@ class Agent:
         are never injected for cancellation. Recovery prompts for other
         (non-provider) failures keep the historical single-prompt behavior.
 
+        Context management (HH-03): before every LLM call the estimated
+        context size is compared against the provider's declared
+        ``context_size``; above the soft limit the conversation is compacted
+        (old tool-result bodies elided, pairing preserved) so long tool-heavy
+        tasks continue instead of overflowing. Provider-reported usage is
+        captured into the run's ``UsageLedger`` after every call, and a
+        ``finish_reason == "length"`` response is treated as an
+        INVALID_RESPONSE-class provider failure.
+
         Args:
             user_message: User's input message
 
@@ -161,6 +206,9 @@ class Agent:
             if self.config.verbose:
                 self.console.print(f"[dim]Iteration {iteration + 1}/{self.config.max_iterations}[/dim]")
 
+            # Stay under the model's context window before spending a call (HH-03).
+            self._enforce_context_budget()
+
             # Get messages for LLM
             messages = self.context.get_messages_for_llm()
 
@@ -173,7 +221,7 @@ class Agent:
 
             # Call LLM
             try:
-                response = await self._call_llm(messages, tools)
+                response = await self._call_llm(messages, tools, run=run)
 
                 if self.config.verbose:
                     preview = response.content[:200] if response.content else "(empty)"
@@ -275,19 +323,27 @@ class Agent:
         """
         yield await self.process_message(user_message)
 
-    async def _call_llm(self, messages: list[Message], tools: list[dict[str, Any]] | None) -> LLMResponse:
+    async def _call_llm(
+        self, messages: list[Message], tools: list[dict[str, Any]] | None, *, run: TaskRun | None = None
+    ) -> LLMResponse:
         """Invoke the provider chat call with retry, backoff, and cancellation support.
 
         The sync provider call runs in a worker thread so it never blocks the
         event loop shared with the MCP server and dashboard. Raised exceptions
         and ``finish_reason == "error"`` responses are normalized through
         ``normalize_error`` so the retry mapping sees a stable
-        ``ProviderErrorKind``. Only the LLM call is retried — tools are never
-        re-executed by this path.
+        ``ProviderErrorKind``. A ``finish_reason == "length"`` response means
+        the model hit its output limit and the payload is truncated; it is
+        mapped to ``ProviderErrorKind.INVALID_RESPONSE`` so the loop's
+        recovery path handles it instead of returning a cut-off answer.
+        Only the LLM call is retried — tools are never re-executed by this
+        path. Provider-reported usage is captured into ``run.usage`` for
+        every call that returns a response (tokens only, never content).
 
         Args:
             messages: Conversation messages for the provider.
             tools: Optional tool schemas for the provider.
+            run: Optional active TaskRun whose usage ledger records the call.
 
         Returns:
             The successful LLM response.
@@ -307,9 +363,17 @@ class Agent:
                 response = await asyncio.to_thread(self.llm.chat, messages, tools=tools)
             except Exception as error:
                 raise self._normalize_provider_error(error) from error
+            if run is not None:
+                self._record_usage(run, response)
             if response.finish_reason == "error":
                 raise self._normalize_provider_error(
                     RuntimeError(response.content or "Provider returned an error response without details")
+                )
+            if response.finish_reason == "length":
+                raise ProviderError(
+                    ProviderErrorKind.INVALID_RESPONSE,
+                    f"{self.llm.__class__.__name__} returned a truncated response (finish_reason=length)",
+                    provider=self.llm.__class__.__name__,
                 )
             return response
 
@@ -337,6 +401,58 @@ class Agent:
             )
         finally:
             self._retries_used_last_call = retries_used
+
+    def _record_usage(self, run: TaskRun, response: LLMResponse) -> None:
+        """Capture provider-reported usage into the run ledger and the estimator.
+
+        Args:
+            run: The active TaskRun owning this run's UsageLedger.
+            response: The LLM response whose usage payload is recorded.
+        """
+        usage = response.usage or {}
+        if not usage:
+            return
+        run.usage.record(
+            provider=self.llm.__class__.__name__,
+            model=str(getattr(self.llm, "model", "") or "unknown"),
+            usage=usage,
+        )
+        self.context.note_reported_usage(usage)
+
+    def _enforce_context_budget(self) -> None:
+        """Compact the conversation when its estimated size crosses the soft limit.
+
+        The budget is ``context_size * context_soft_limit_ratio`` from the
+        provider capabilities and agent behavior config. Providers without a
+        usable ``context_size`` (non-positive or missing) skip the check. A
+        real compaction prints a one-line notice in verbose mode and is
+        reported through the ``on_compaction`` hook; no-op compactions are
+        silent and uncounted.
+        """
+        context_size = getattr(self.llm.get_capabilities(), "context_size", None)
+        if not isinstance(context_size, int) or isinstance(context_size, bool) or context_size <= 0:
+            return
+        behavior = self.config.agent_config.behavior
+        budget = int(context_size * behavior.context_soft_limit_ratio)
+        if budget <= 0 or self.context.estimate_context_tokens() <= budget:
+            return
+        changed = self.context.compact(
+            target_tokens=budget,
+            max_output_chars=self.config.agent_config.tools.max_output_chars,
+        )
+        if not changed:
+            return
+        stats = self.context.last_compaction or {}
+        notice = CompactionNotice(
+            tokens_before=int(stats.get("tokens_before", 0)),
+            tokens_after=int(stats.get("tokens_after", 0)),
+            elided_messages=int(stats.get("elided_messages", 0)),
+            target_tokens=budget,
+        )
+        if self.config.verbose:
+            self.console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")
+        if self.config.on_compaction is not None:
+            self.config.on_compaction(notice)
 
     def _normalize_provider_error(self, error: Exception) -> ProviderError:
         """Normalize an exception raised by the provider call.

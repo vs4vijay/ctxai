@@ -156,7 +156,14 @@ class AgentToolsConfig:
 
 @dataclass
 class AgentBehaviorConfig:
-    """Configuration for agent behavior."""
+    """Configuration for agent behavior.
+
+    ``context_soft_limit_ratio`` is the fraction of the provider's reported
+    ``context_size`` above which the loop compacts the conversation before the
+    next LLM call. It bounds the *context window* budget;
+    ``AgentLLMConfig.max_tokens`` remains the separate completion budget and
+    the two are never conflated.
+    """
 
     planning_enabled: bool = True
     require_user_approval: bool = True
@@ -165,6 +172,11 @@ class AgentBehaviorConfig:
     verbose: bool = False
     stream_responses: bool = True  # Stream LLM responses
     loop_break_threshold: int = 3  # Identical consecutive tool-result tuples before the loop breaks
+    context_soft_limit_ratio: float = 0.8  # Compact above this fraction of the provider context_size
+
+    def __post_init__(self) -> None:
+        if not 0 < self.context_soft_limit_ratio <= 1:
+            raise ValueError("context_soft_limit_ratio must be within (0, 1]")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -176,6 +188,7 @@ class AgentBehaviorConfig:
             "verbose": self.verbose,
             "stream_responses": self.stream_responses,
             "loop_break_threshold": self.loop_break_threshold,
+            "context_soft_limit_ratio": self.context_soft_limit_ratio,
         }
 
     @classmethod
@@ -189,6 +202,7 @@ class AgentBehaviorConfig:
             verbose=data.get("verbose", False),
             stream_responses=data.get("stream_responses", True),
             loop_break_threshold=data.get("loop_break_threshold", 3),
+            context_soft_limit_ratio=data.get("context_soft_limit_ratio", 0.8),
         )
 
 
