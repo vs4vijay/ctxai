@@ -27,7 +27,7 @@ Local-first coding agent + semantic code search (`ctxai`). Python src-layout pac
 - `tests/` — unit/integration; `tests/e2e/` — end-to-end + acceptance specs (VS-01..VS-09); `tests/mocks/` (`MockLLMProvider`, `MockEmbeddingProvider`); `tests/fixtures/` (sample code, retrieval benchmark).
 - `docs/` — current docs (MCP_SERVER, QUERY_DASHBOARD, GITHUB_COPILOT_AUTH, OAUTH_AUTHENTICATION, PROVIDER_COMPATIBILITY). `docs/IMPLEMENTATION_SUMMARY.md`, `MCP_IMPLEMENTATION_SUMMARY.md`, `MCP_REFACTORING.md` are historical.
 - `examples/`, `scripts/` (`setup_providers.py`) — usage demos/helper.
-- Root `*.md` are mostly historical/aspirational (CODING.md, plan*.md, IMPLEMENTATION*.md, COMPLETE_SUMMARY.md, PROOF.md, KNOWLEDGE.md, QUICKSTART.md, AI_AGENT.md). Trust source code and tests over those; `README.md`, `docs/`, `ROADMAP.md`, `plan.md` are the current references.
+- Root `*.md` are mostly historical/aspirational (CODING.md, IMPLEMENTATION*.md, COMPLETE_SUMMARY.md, PROOF.md, KNOWLEDGE.md, QUICKSTART.md, AI_AGENT.md). Trust source code and tests over those; `README.md`, `docs/`, `ROADMAP.md`, `plan.md` are the current references. `plan-unified.md` is the single source of truth for all remaining work (it supersedes `plan2.md` and `plan3.md`, which are kept only as history); `plan.md` records product direction and the validated VS-01..VS-09 slices.
 
 ## Development Commands
 

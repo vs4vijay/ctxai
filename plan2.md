@@ -1,5 +1,9 @@
 # ctxai Intelligence Advantage Plan
 
+> **Superseded (2026-09-03):** The slices in this plan (IG-01..03, RE-01..03) have been merged, with
+> full detail and a unified delivery order, into `plan-unified.md` — the single source of truth for
+> all remaining work. This file is kept as history; do not start work from here.
+
 Last reviewed: 2026-07-23
 
 This document defines implementation-ready requirements for two connected product capabilities:

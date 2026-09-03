@@ -2,6 +2,10 @@
 
 Last reviewed: 2026-07-23
 
+> **Note (2026-09-03):** All remaining (unimplemented) work is tracked in `plan-unified.md`, which
+> merges the open slices of `plan2.md` and `plan3.md` into one delivery sequence. This document
+> remains the record of product direction and the validated VS-01..VS-09 slices.
+
 This document is the product and engineering source of truth for ctxai. It organizes the work as vertical slices: each slice must deliver a complete user outcome across interface, domain logic, storage or integrations, safety, documentation, and tests.
 
 ## Product direction
