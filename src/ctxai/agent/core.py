@@ -4,6 +4,7 @@ Core agent implementation with tool calling and planning.
 
 import asyncio
 import hashlib
+import logging
 import random
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
@@ -18,6 +19,15 @@ from .context import ConversationContext
 from .llm.base import BaseLLMProvider, LLMResponse, Message, ProviderError, ProviderErrorKind, ToolCall
 from .prompts import get_system_prompt, get_tool_error_recovery_prompt
 from .resilience import RetryNotice, RetryPolicy, call_with_retry, format_retry_notice
+from .run_recorder import (
+    NullRunRecorder,
+    RunEventKind,
+    RunRecorder,
+    create_recorder,
+    new_run_id,
+    prune_runs,
+    runs_dir_for,
+)
 from .sessions import SessionRecord, SessionStore
 from .tools.registry import ToolRegistry
 from .workflow import (
@@ -28,6 +38,8 @@ from .workflow import (
     classify_provider_failure,
     discover_verification_commands,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 PLAN_TOOL_SCHEMA = {
     "type": "function",
@@ -102,9 +114,13 @@ class AgentLoopConfig:
     provider calls retry transient failures per ``retry_policy``, a
     ``cancel_event`` enables clean Ctrl+C cancellation, ``on_retry`` receives
     structured retry notices for CLI rendering, ``session_store`` persists
-    conversation state when a run is cancelled or fails fast, and
+    conversation state when a run is cancelled or fails fast,
     ``on_compaction`` receives structured compaction notices when the loop
-    elides old tool results to stay under the model's context window (HH-03).
+    elides old tool results to stay under the model's context window (HH-03),
+    and ``run_id`` pins the HH-04 run transcript identity: one-shot callers
+    pass the ``ToolExecutionContext.request_id``; when ``None`` (the default)
+    every run records under a fresh uuid4 hex so interactive chat runs never
+    collide.
     """
 
     llm_provider: BaseLLMProvider
@@ -123,6 +139,7 @@ class AgentLoopConfig:
     session_store: SessionStore | None = None
     session_name: str = "default"
     on_compaction: Callable[[CompactionNotice], None] | None = None
+    run_id: str | None = None
 
 
 class Agent:
@@ -143,6 +160,7 @@ class Agent:
         self.context = ConversationContext()
         self.console = Console(legacy_windows=False)
         self.last_run: TaskRun | None = None
+        self._recorder: RunRecorder | NullRunRecorder | None = None
         self._retries_used_last_call = 0
 
         # Initialize system message
@@ -179,6 +197,14 @@ class Agent:
         ``finish_reason == "length"`` response is treated as an
         INVALID_RESPONSE-class provider failure.
 
+        Run transcripts (HH-04): every run records a redacted JSON Lines
+        transcript under ``.ctxai/runs/<run_id>.jsonl`` through the shared
+        ``RunRecorder`` — run start, user message, LLM calls with usage,
+        tool calls/results, approvals, state transitions, checks,
+        compactions, cancellation, and completion. Recording failures are
+        diagnostics and never affect the run; with
+        ``AgentBehaviorConfig.record_runs`` disabled nothing is written.
+
         Args:
             user_message: User's input message
 
@@ -189,6 +215,7 @@ class Agent:
         self.context.add_user_message(user_message)
         run = TaskRun(user_message, project_root=self.config.working_directory.resolve())
         self.last_run = run
+        self._start_recording(run, user_message)
 
         if self.config.verbose:
             self.console.print(f"[dim]Processing: {user_message}[/dim]")
@@ -199,120 +226,138 @@ class Agent:
 
         # Agent loop with tool calling
         iteration = 0
-        while iteration < self.config.max_iterations:
-            if self._cancel_requested():
-                return self._finish_cancelled(run)
-
-            if self.config.verbose:
-                self.console.print(f"[dim]Iteration {iteration + 1}/{self.config.max_iterations}[/dim]")
-
-            # Stay under the model's context window before spending a call (HH-03).
-            self._enforce_context_budget()
-
-            # Get messages for LLM
-            messages = self.context.get_messages_for_llm()
-
-            # Get tool schemas
-            tool_format = self._get_tool_format()
-            capabilities = self.llm.get_capabilities()
-            tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
-            if tools is not None and self.config.planning_enabled:
-                tools.append(self._plan_tool_schema(tool_format))
-
-            # Call LLM
-            try:
-                response = await self._call_llm(messages, tools, run=run)
-
-                if self.config.verbose:
-                    preview = response.content[:200] if response.content else "(empty)"
-                    self.console.print(f"[dim]LLM response: {preview}...[/dim]")
-                    self.console.print(f"[dim]Tool calls: {len(response.tool_calls)}[/dim]")
-
-                # Check if LLM wants to use tools
-                if response.has_tool_calls:
-                    # Add assistant message with tool calls
-                    self.context.add_assistant_message(response.content, tool_calls=response.tool_calls)
-
-                    # Execute tools
-                    tool_results = await self._execute_tools(response.tool_calls, run=run)
-
-                    # Add tool results to context
-                    current_results: list[str] = []
-                    for tool_call, result in zip(response.tool_calls, tool_results):
-                        result_text = self._format_tool_result(result)
-                        current_results.append(result_text)
-                        self.context.add_tool_result(
-                            tool_call_id=tool_call.id, tool_name=tool_call.name, result=result_text
-                        )
-
-                    # Loop detection: break when the same tool-result tuple hash
-                    # fills the window (threshold consecutive repeats).
-                    if current_results:
-                        result_hashes.append(self._tool_results_digest(current_results))
-                        if len(result_hashes) == result_hashes.maxlen and len(set(result_hashes)) == 1:
-                            if self.config.verbose:
-                                self.console.print("[yellow]! Detected tool loop, breaking[/yellow]")
-                            run.failure_kind = FailureKind.INCOMPLETE_WORKFLOW
-                            run.failure_message = (
-                                f"Detected {threshold} identical consecutive tool results; "
-                                "the agent loop made no progress"
-                            )
-                            return run.final_report(
-                                "I stopped because the same tool calls kept producing identical results "
-                                "without progress. Please rephrase the request or break it into smaller steps."
-                            )
-
-                    iteration += 1
-                    continue
-
-                else:
-                    # No tool calls - this is the final response
-                    self.context.add_assistant_message(response.content)
-
-                    # Truncate context if needed
-                    self.context.truncate_old_messages()
-
-                    return run.final_report(response.content)
-
-            except asyncio.CancelledError:
-                return self._finish_cancelled(run)
-
-            except ProviderError as error:
-                if error.kind is ProviderErrorKind.CANCELLED:
+        try:
+            while iteration < self.config.max_iterations:
+                if self._cancel_requested():
                     return self._finish_cancelled(run)
-                if error.kind is ProviderErrorKind.INVALID_RESPONSE and invalid_response_recoveries < 1:
-                    invalid_response_recoveries += 1
+
+                if self.config.verbose:
+                    self.console.print(f"[dim]Iteration {iteration + 1}/{self.config.max_iterations}[/dim]")
+
+                # Stay under the model's context window before spending a call (HH-03).
+                self._enforce_context_budget()
+
+                # Get messages for LLM
+                messages = self.context.get_messages_for_llm()
+
+                # Get tool schemas
+                tool_format = self._get_tool_format()
+                capabilities = self.llm.get_capabilities()
+                tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
+                if tools is not None and self.config.planning_enabled:
+                    tools.append(self._plan_tool_schema(tool_format))
+
+                # Call LLM
+                try:
+                    response = await self._call_llm(messages, tools, run=run)
+
                     if self.config.verbose:
-                        self.console.print(f"[yellow]Invalid provider response, attempting recovery: {error}[/yellow]")
-                    self.context.add_user_message(
-                        get_tool_error_recovery_prompt(tool_name="LLM", error=str(error), original_goal=user_message)
+                        preview = response.content[:200] if response.content else "(empty)"
+                        self.console.print(f"[dim]LLM response: {preview}...[/dim]")
+                        self.console.print(f"[dim]Tool calls: {len(response.tool_calls)}[/dim]")
+
+                    # Check if LLM wants to use tools
+                    if response.has_tool_calls:
+                        # Add assistant message with tool calls
+                        self.context.add_assistant_message(response.content, tool_calls=response.tool_calls)
+
+                        # Execute tools
+                        tool_results = await self._execute_tools(response.tool_calls, run=run)
+
+                        # Add tool results to context
+                        current_results: list[str] = []
+                        for tool_call, result in zip(response.tool_calls, tool_results):
+                            result_text = self._format_tool_result(result)
+                            current_results.append(result_text)
+                            self.context.add_tool_result(
+                                tool_call_id=tool_call.id, tool_name=tool_call.name, result=result_text
+                            )
+
+                        # Loop detection: break when the same tool-result tuple hash
+                        # fills the window (threshold consecutive repeats).
+                        if current_results:
+                            result_hashes.append(self._tool_results_digest(current_results))
+                            if len(result_hashes) == result_hashes.maxlen and len(set(result_hashes)) == 1:
+                                if self.config.verbose:
+                                    self.console.print("[yellow]! Detected tool loop, breaking[/yellow]")
+                                run.failure_kind = FailureKind.INCOMPLETE_WORKFLOW
+                                run.failure_message = (
+                                    f"Detected {threshold} identical consecutive tool results; "
+                                    "the agent loop made no progress"
+                                )
+                                return self._finalize(
+                                    run,
+                                    "I stopped because the same tool calls kept producing identical results "
+                                    "without progress. Please rephrase the request or break it into smaller steps.",
+                                )
+
+                        iteration += 1
+                        continue
+
+                    else:
+                        # No tool calls - this is the final response
+                        self.context.add_assistant_message(response.content)
+
+                        # Truncate context if needed
+                        self.context.truncate_old_messages()
+
+                        return self._finalize(run, response.content)
+
+                except asyncio.CancelledError:
+                    return self._finish_cancelled(run)
+
+                except ProviderError as error:
+                    if error.kind is ProviderErrorKind.CANCELLED:
+                        return self._finish_cancelled(run)
+                    if error.kind is ProviderErrorKind.INVALID_RESPONSE and invalid_response_recoveries < 1:
+                        invalid_response_recoveries += 1
+                        if self.config.verbose:
+                            self.console.print(
+                                f"[yellow]Invalid provider response, attempting recovery: {error}[/yellow]"
+                            )
+                        self.context.add_user_message(
+                            get_tool_error_recovery_prompt(
+                                tool_name="LLM", error=str(error), original_goal=user_message
+                            )
+                        )
+                        iteration += 1
+                        continue
+                    return self._fail_fast(run, error)
+
+                except Exception as e:
+                    error_msg = f"Error during agent loop: {str(e)}"
+                    if self.config.verbose:
+                        self.console.print(f"[red]{error_msg}[/red]")
+
+                    # Try to recover (reserved for non-provider failures such as bugs)
+                    recovery_prompt = get_tool_error_recovery_prompt(
+                        tool_name="LLM", error=str(e), original_goal=user_message
                     )
+                    self.context.add_user_message(recovery_prompt)
                     iteration += 1
                     continue
-                return self._fail_fast(run, error)
-
-            except Exception as e:
-                error_msg = f"Error during agent loop: {str(e)}"
-                if self.config.verbose:
-                    self.console.print(f"[red]{error_msg}[/red]")
-
-                # Try to recover (reserved for non-provider failures such as bugs)
-                recovery_prompt = get_tool_error_recovery_prompt(
-                    tool_name="LLM", error=str(e), original_goal=user_message
+        finally:
+            # Safety net (HH-04): a run that unwinds without finalizing —
+            # an unexpected BaseException such as KeyboardInterrupt — still
+            # leaves a closed, parseable transcript. Normal paths close the
+            # recorder in _finalize, which clears self._recorder first.
+            if self._recorder is not None:
+                self._record_event(
+                    RunEventKind.RUN_COMPLETED,
+                    {"status": "failed", "failure_message": "Run ended without a final report"},
                 )
-                self.context.add_user_message(recovery_prompt)
-                iteration += 1
-                continue
+                self._close_recorder()
 
         # Max iterations reached
         run.failure_kind = run.failure_kind or FailureKind.INCOMPLETE_WORKFLOW
         run.failure_message = run.failure_message or (
             f"Max iterations ({self.config.max_iterations}) reached without completing the task"
         )
-        return run.final_report(
+        return self._finalize(
+            run,
             f"Max iterations ({self.config.max_iterations}) reached. "
             "The task may be too complex or an error occurred. "
-            "Please try breaking it down into smaller steps."
+            "Please try breaking it down into smaller steps.",
         )
 
     async def stream_message(self, user_message: str) -> AsyncGenerator[str, None]:
@@ -322,6 +367,146 @@ class Agent:
         planning, approval, mutation, and verification policy cannot be bypassed by the UI.
         """
         yield await self.process_message(user_message)
+
+    # ------------------------------------------------------------------
+    # Run transcript recording (HH-04)
+    # ------------------------------------------------------------------
+
+    def _start_recording(self, run: TaskRun, user_message: str) -> None:
+        """Open the run transcript, prune retention, and record the run start.
+
+        Applies the ``run_retention`` cleanup (oldest transcripts first,
+        scoped to the resolved runs directory) before opening the new
+        transcript so the fresh run fits inside the retention window.
+
+        Args:
+            run: The TaskRun starting with this message.
+            user_message: The user message that started the run.
+        """
+        behavior = self.config.agent_config.behavior
+        run_id = self.config.run_id or new_run_id()
+        if behavior.record_runs:
+            try:
+                prune_runs(runs_dir_for(self.config.working_directory), keep=behavior.run_retention - 1)
+            except Exception as error:  # noqa: BLE001 - retention is a diagnostic, never fatal
+                LOGGER.warning("run transcript (%s): retention pruning failed: %s", run_id, error)
+        self._recorder = create_recorder(
+            self.config.working_directory,
+            run_id,
+            enabled=behavior.record_runs,
+            on_error=lambda message: LOGGER.warning("run transcript (%s): %s", run_id, message),
+        )
+        self._record_event(
+            RunEventKind.RUN_STARTED,
+            {
+                "goal": user_message,
+                "state": run.state.value,
+                "provider": self.llm.__class__.__name__,
+                "model": str(getattr(self.llm, "model", "") or "unknown"),
+                "planning_enabled": self.config.planning_enabled,
+                "require_user_approval": self.config.require_user_approval,
+                "max_iterations": self.config.max_iterations,
+                "working_directory": str(self.config.working_directory.resolve()),
+                "project_root": str(run.project_root),
+            },
+        )
+        self._record_event(RunEventKind.USER_MESSAGE, {"content": user_message})
+
+    def _record_event(
+        self,
+        kind: RunEventKind,
+        payload: dict[str, Any],
+        usage: dict[str, Any] | None = None,
+    ) -> None:
+        """Record one transcript event; failures are diagnostics, never errors.
+
+        Args:
+            kind: The transcript event kind.
+            payload: Event payload (redacted and path-normalized by the recorder).
+            usage: Optional ``UsageRecord`` dict carried on the event.
+        """
+        recorder = self._recorder
+        if recorder is None:
+            return
+        try:
+            recorder.record(kind, payload, usage)
+        except Exception as error:  # noqa: BLE001 - recording must never fail the run
+            LOGGER.warning("run transcript: recording %s event failed: %s", kind.value, error)
+
+    def _drain_run_events(self, run: TaskRun | None) -> None:
+        """Emit pending TaskRun evidence (transitions/approvals/checks) as events.
+
+        Args:
+            run: The active TaskRun, or ``None`` when no run is active.
+        """
+        if run is None:
+            return
+        for kind, payload in run.to_event_payloads():
+            self._record_event(kind, payload)
+
+    def _finalize(self, run: TaskRun, model_summary: str) -> str:
+        """Complete the run: final report, closing transcript events, close.
+
+        Records the final state transition, the ``run_completed`` event with
+        the run's evidence summary and usage ledger totals, then closes the
+        transcript (flush + fsync). All run exit paths route through here.
+
+        Args:
+            run: The active TaskRun.
+            model_summary: The model-facing summary for the final report.
+
+        Returns:
+            The status-bearing final report.
+        """
+        report = run.final_report(model_summary)
+        self._drain_run_events(run)
+        self._record_event(
+            RunEventKind.RUN_COMPLETED,
+            {
+                "status": "succeeded" if run.state is TaskState.SUMMARIZE else "failed",
+                "state": run.state.value,
+                "failure_kind": run.failure_kind.value if run.failure_kind else None,
+                "failure_message": run.failure_message,
+                "changed_files": [self._relative_to_root(path, run.project_root) for path in sorted(run.changed_files)],
+                "inspected_files": [
+                    self._relative_to_root(path, run.project_root) for path in sorted(run.inspected_files)
+                ],
+                "checks": [{"command": check.command, "success": check.success} for check in run.checks],
+                "plan_progress": run.plan.progress if run.plan is not None else None,
+                "diff_reviewed": run.diff_reviewed,
+                "usage": run.usage.totals(),
+            },
+        )
+        self._close_recorder()
+        return report
+
+    def _close_recorder(self) -> None:
+        """Close and detach the run transcript, if one is open."""
+        if self._recorder is None:
+            return
+        try:
+            self._recorder.close()
+        except Exception as error:  # noqa: BLE001 - close failures are diagnostics
+            LOGGER.warning("run transcript: close failed: %s", error)
+        finally:
+            self._recorder = None
+
+    @staticmethod
+    def _relative_to_root(path: Path, root: Path) -> str:
+        """Render a path relative to the project root when possible.
+
+        Args:
+            path: The path to render.
+            root: The project root.
+
+        Returns:
+            The repository-relative path, or the original string when the
+            path lies outside the root.
+        """
+        try:
+            return str(path.relative_to(root))
+        except ValueError:
+            return str(path)
 
     async def _call_llm(
         self, messages: list[Message], tools: list[dict[str, Any]] | None, *, run: TaskRun | None = None
@@ -365,6 +550,22 @@ class Agent:
                 raise self._normalize_provider_error(error) from error
             if run is not None:
                 self._record_usage(run, response)
+                # The llm_call event carries the same UsageRecord appended to
+                # the ledger, so per-run usage totals always equal the sum of
+                # transcript usage records (HH-04 acceptance criterion 4).
+                records = run.usage.records
+                last_record = records[-1] if records else None
+                self._record_event(
+                    RunEventKind.LLM_CALL,
+                    {
+                        "provider": self.llm.__class__.__name__,
+                        "model": str(getattr(self.llm, "model", "") or "unknown"),
+                        "call_index": len(records),
+                        "finish_reason": response.finish_reason,
+                        "retries_used": retries_used,
+                    },
+                    usage=last_record.to_dict() if last_record is not None else None,
+                )
             if response.finish_reason == "error":
                 raise self._normalize_provider_error(
                     RuntimeError(response.content or "Provider returned an error response without details")
@@ -453,6 +654,17 @@ class Agent:
             self.console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")
         if self.config.on_compaction is not None:
             self.config.on_compaction(notice)
+        self._record_event(
+            RunEventKind.COMPACTION,
+            {
+                "tokens_before": notice.tokens_before,
+                "tokens_after": notice.tokens_after,
+                "elided_messages": notice.elided_messages,
+                "target_tokens": notice.target_tokens,
+                "compaction_count": self.context.compaction_count,
+                "elided_message_count": self.context.elided_message_count,
+            },
+        )
 
     def _normalize_provider_error(self, error: Exception) -> ProviderError:
         """Normalize an exception raised by the provider call.
@@ -488,9 +700,10 @@ class Agent:
         """
         run.failure_kind = classify_provider_failure(ProviderErrorKind.CANCELLED)
         run.failure_message = "Run cancelled before completion"
+        self._record_event(RunEventKind.CANCELLATION, {"reason": "cancelled by user"})
         run.transition(TaskState.FAILED)
         self._save_session_snapshot()
-        return run.final_report("Cancelled by user")
+        return self._finalize(run, "Cancelled by user")
 
     def _fail_fast(self, run: TaskRun, error: ProviderError) -> str:
         """End the run on a non-retryable provider failure without a recovery prompt.
@@ -516,7 +729,7 @@ class Agent:
         run.failure_message = reason
         run.transition(TaskState.FAILED)
         self._save_session_snapshot()
-        return run.final_report(reason)
+        return self._finalize(run, reason)
 
     def _save_session_snapshot(self) -> None:
         """Persist the current conversation through the configured SessionStore, if any."""
@@ -548,8 +761,14 @@ class Agent:
         """
         Execute tool calls.
 
+        Every call and its result are recorded as ``tool_call``/``tool_result``
+        transcript events (HH-04); approval and state-transition events are
+        drained from the TaskRun at the same boundaries so the transcript
+        mirrors the workflow chronology. Recording never affects execution.
+
         Args:
             tool_calls: List of tool calls from LLM
+            run: Optional active TaskRun for workflow policy and evidence.
 
         Returns:
             List of execution results
@@ -561,6 +780,11 @@ class Agent:
                 self.console.print(f"[cyan]Executing: {tool_call.name}[/cyan]")
                 self.console.print(f"[dim]Parameters: {tool_call.parameters}[/dim]")
 
+            self._record_event(
+                RunEventKind.TOOL_CALL,
+                {"tool": tool_call.name, "call_id": tool_call.id, "parameters": tool_call.parameters},
+            )
+
             try:
                 if tool_call.name == "submit_plan":
                     result = (
@@ -569,6 +793,8 @@ class Agent:
                         else {"success": False, "error": "Planning is unavailable for this run"}
                     )
                     results.append(result)
+                    self._record_tool_result_event(tool_call, result)
+                    self._drain_run_events(run)
                     continue
                 denial = None
                 if run is not None:
@@ -578,10 +804,15 @@ class Agent:
                         require_approval=self.config.require_user_approval,
                         approval_callback=self.config.approval_callback,
                     )
+                    # Approval prompts and policy denials happen inside
+                    # before_tool; drain them before the result event.
+                    self._drain_run_events(run)
                 result = denial or await self.tools.execute_tool(tool_call.name, **tool_call.parameters)
                 results.append(result)
+                self._record_tool_result_event(tool_call, result)
                 if run is not None:
                     run.observe(tool_call, result)
+                    self._drain_run_events(run)
 
                 if self.config.verbose:
                     if result.get("success"):
@@ -593,11 +824,31 @@ class Agent:
             except Exception as e:
                 error_result = {"success": False, "result": None, "error": f"Tool execution exception: {str(e)}"}
                 results.append(error_result)
+                self._record_tool_result_event(tool_call, error_result)
 
                 if self.config.verbose:
                     self.console.print(f"[red][X] {tool_call.name} exception: {str(e)}[/red]")
 
         return results
+
+    def _record_tool_result_event(self, tool_call: ToolCall, result: dict) -> None:
+        """Record one ``tool_result`` transcript event for an executed tool.
+
+        Args:
+            tool_call: The tool call that produced the result.
+            result: The tool execution result dictionary.
+        """
+        self._record_event(
+            RunEventKind.TOOL_RESULT,
+            {
+                "tool": tool_call.name,
+                "call_id": tool_call.id,
+                "success": bool(result.get("success")),
+                "result": result.get("result"),
+                "error": result.get("error"),
+                "metadata": result.get("metadata"),
+            },
+        )
 
     def _print_result_diagnostics(self, result: dict) -> None:
         """Print output-truncation and replacement-count diagnostics for a tool result.

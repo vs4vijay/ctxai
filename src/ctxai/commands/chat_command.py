@@ -1003,6 +1003,13 @@ async def interactive_chat(
             console.print(f"[bold {NEON_CYAN}]---[/]")
             console.print(Markdown(full_response))
             console.print(f"[bold {NEON_CYAN}]---[/]")
+
+            # Append the per-run usage/cost line when the provider reported usage (HH-04).
+            from .runs_command import format_usage_cost_line
+
+            usage_line = format_usage_cost_line(agent.last_run)
+            if usage_line:
+                console.print(f"[dim]{usage_line}[/dim]")
             console.print()
 
             if agent_config.behavior.auto_save_context:

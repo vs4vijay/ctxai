@@ -31,7 +31,7 @@ The first five items above are specified as vertical slices in [plan2.md](plan2.
 
 ## Product hardening
 
-- [ ] Add a privacy and provider-cost ledger for context leaving the machine
+- [x] Add a privacy and provider-cost ledger for context leaving the machine (redacted local run transcripts with usage/cost, [docs/RUN_TRANSCRIPTS.md](docs/RUN_TRANSCRIPTS.md))
 - [ ] Export reusable evidence-linked context packs
 - [ ] Add a repository-wide `ctxai doctor` command
 - [ ] Validate clean installations and supported platforms continuously

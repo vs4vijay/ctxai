@@ -85,6 +85,122 @@ def indexes_delete(
 app.add_typer(indexes_app, name="indexes")
 
 
+runs_app = typer.Typer(help="Inspect and manage local agent run transcripts")
+
+
+@runs_app.command("list")
+def runs_list(
+    limit: int | None = typer.Option(None, "--limit", "-l", help="Maximum number of runs to show (newest first)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of a table"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """List past agent runs with status, token usage, and estimated cost."""
+    import json
+
+    from rich.console import Console
+    from rich.table import Table
+
+    from .commands.runs_command import list_runs
+
+    summaries = list_runs(project_path, limit=limit)
+    if as_json:
+        envelope = {"schema_version": 1, "runs": [summary.to_dict() for summary in summaries]}
+        typer.echo(json.dumps(envelope, indent=2))
+        return
+    table = Table("Run ID", "Started", "Status", "Events", "Tokens (prompt + completion)", "Calls", "Cost")
+    for summary in summaries:
+        table.add_row(
+            summary.run_id,
+            summary.started_at or "?",
+            summary.status,
+            str(summary.event_count),
+            f"{summary.prompt_tokens:,} + {summary.completion_tokens:,}",
+            str(summary.calls),
+            summary.cost_display,
+        )
+    Console().print(table)
+
+
+@runs_app.command("show")
+def runs_show(
+    run_id: str = typer.Argument(...),
+    as_json: bool = typer.Option(False, "--json", help="Emit the raw on-disk events as versioned JSON"),
+    kind: str | None = typer.Option(None, "--kind", "-k", help="Only show events of this kind (e.g. llm_call)"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Render one run's transcript events, optionally filtered by kind."""
+    import json
+
+    from rich.console import Console
+
+    from .agent.run_recorder import RUN_EVENT_KINDS
+    from .commands.runs_command import read_run_events
+
+    if kind is not None and kind not in RUN_EVENT_KINDS:
+        typer.echo(f"Error: unknown event kind '{kind}'. Valid kinds: {', '.join(sorted(RUN_EVENT_KINDS))}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        events = read_run_events(run_id, project_path)
+    except (FileNotFoundError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if kind is not None:
+        events = [event for event in events if event.kind == kind]
+    if as_json:
+        envelope = {
+            "schema_version": events[0].schema_version if events else 1,
+            "run_id": run_id,
+            "events": [event.to_dict() for event in events],
+        }
+        typer.echo(json.dumps(envelope, indent=2))
+        return
+    console = Console()
+    for event in events:
+        console.print(f"[bold]#{event.seq}[/bold] [cyan]{event.kind}[/cyan] [dim]{event.timestamp}[/dim]")
+        console.print_json(json.dumps(event.to_dict()["payload"], sort_keys=True))
+        if event.usage is not None:
+            console.print("[dim]usage:[/dim]")
+            console.print_json(json.dumps(event.usage, sort_keys=True))
+
+
+@runs_app.command("delete")
+def runs_delete(
+    run_id: str | None = typer.Argument(None, help="Run id to delete (omit with --all)"),
+    all_runs: bool = typer.Option(False, "--all", help="Delete every run transcript (asks for confirmation)"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Delete one run transcript, or all of them with --all."""
+    from .commands.runs_command import delete_all_runs, delete_run, resolve_runs_dir
+
+    if all_runs:
+        if run_id:
+            typer.echo("Error: specify either RUN_ID or --all, not both", err=True)
+            raise typer.Exit(code=1)
+        runs_dir = resolve_runs_dir(project_path)
+        count = len(list(runs_dir.glob("*.jsonl"))) if runs_dir.is_dir() else 0
+        if count == 0:
+            typer.echo(f"No run transcripts under {runs_dir}")
+            return
+        if not typer.confirm(f"Delete all {count} run transcript(s) under {runs_dir}?"):
+            raise typer.Abort()
+        deleted = delete_all_runs(project_path)
+        typer.echo(f"Deleted {deleted} run transcript(s)")
+        return
+
+    if not run_id:
+        typer.echo("Error: provide RUN_ID or --all", err=True)
+        raise typer.Exit(code=1)
+    try:
+        path = delete_run(run_id, project_path)
+    except (FileNotFoundError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Deleted run transcript {path}")
+
+
+app.add_typer(runs_app, name="runs")
+
+
 @app.callback()
 def main_callback(ctx: typer.Context):
     """
@@ -652,6 +768,10 @@ def code(
             approval_callback=(lambda call: typer.confirm(format_approval_prompt(call))),
             on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
             on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
+            # One-shot run: the process-wide ToolExecutionContext.request_id
+            # is the transcript run id (HH-04). Chat passes none — every
+            # message is a distinct run and gets a fresh id.
+            run_id=execution_context.request_id,
         )
         agent = Agent(loop_config)
 
@@ -664,6 +784,13 @@ def code(
 
         console.print("\n[bold green]Result:[/bold green]")
         console.print(Markdown(response))
+
+        # Append the per-run usage/cost line when the provider reported usage (HH-04).
+        from .commands.runs_command import format_usage_cost_line
+
+        usage_line = format_usage_cost_line(agent.last_run)
+        if usage_line:
+            console.print(f"[dim]{usage_line}[/dim]")
 
     asyncio.run(run_task())
 
