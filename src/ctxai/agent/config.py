@@ -84,66 +84,73 @@ class AgentLLMConfig:
 
 @dataclass
 class AgentToolsConfig:
-    """Configuration for agent tools."""
+    """Configuration for agent tools.
+
+    Command policy is consolidated: the exact-name allowlist enforced by
+    ``BashTool`` (``bash_allowed_commands``) plus
+    ``ToolExecutionContext.approve_command`` classification are the single
+    policy; there is no substring matcher. Environment exposure to subprocesses
+    is allowlisted (see ``ToolExecutionContext.command_environment``).
+    """
 
     enabled_tools: list[str] | None = None  # None = all tools enabled
-    bash_allowed_commands: list[str] | None = None  # Whitelist (None = use blacklist)
-    bash_blocked_commands: list[str] = field(
-        default_factory=lambda: [
-            "rm -rf /",
-            "dd if=",
-            "mkfs",
-            ":(){ :|:& };:",  # Fork bomb
-            "chmod -R 777",
-            "> /dev/sda",
-            "mv / /dev/null",
-        ]
-    )
+    bash_allowed_commands: list[str] | None = None  # Executable allowlist (None = classification only)
     bash_timeout: int = 30
     max_file_size_mb: int = 10
     allow_outside_project: bool = False  # Allow file ops outside project dir
+    max_output_chars: int = 20_000  # Cap for bash stdout/stderr and read_file content
+    env_passthrough: list[str] = field(default_factory=list)  # Opt-in os.environ names for subprocesses
 
     def is_tool_enabled(self, tool_name: str) -> bool:
-        """Check if a tool is enabled."""
+        """Check if a tool is enabled.
+
+        Args:
+            tool_name: Name of the tool.
+
+        Returns:
+            True when the tool is enabled.
+        """
         if self.enabled_tools is None:
             return True
         return tool_name in self.enabled_tools
 
-    def is_bash_command_allowed(self, command: str) -> bool:
-        """Check if a bash command is allowed."""
-        # If whitelist exists, command must be in it
-        if self.bash_allowed_commands is not None:
-            return any(cmd in command for cmd in self.bash_allowed_commands)
-
-        # Otherwise, check blacklist
-        command_lower = command.lower().strip()
-        for blocked in self.bash_blocked_commands:
-            if blocked.lower() in command_lower:
-                return False
-
-        return True
-
     def to_dict(self) -> dict:
-        """Convert to dictionary for serialization."""
+        """Convert to dictionary for serialization.
+
+        Returns:
+            Dictionary representation of the tool configuration.
+        """
         return {
             "enabled_tools": self.enabled_tools,
             "bash_allowed_commands": self.bash_allowed_commands,
-            "bash_blocked_commands": self.bash_blocked_commands,
             "bash_timeout": self.bash_timeout,
             "max_file_size_mb": self.max_file_size_mb,
             "allow_outside_project": self.allow_outside_project,
+            "max_output_chars": self.max_output_chars,
+            "env_passthrough": self.env_passthrough,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "AgentToolsConfig":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Unknown keys (for example the removed ``bash_blocked_commands``) are
+        ignored so older serialized configurations keep loading.
+
+        Args:
+            data: Dictionary produced by ``to_dict`` or an older version.
+
+        Returns:
+            An ``AgentToolsConfig`` instance.
+        """
         return cls(
             enabled_tools=data.get("enabled_tools"),
             bash_allowed_commands=data.get("bash_allowed_commands"),
-            bash_blocked_commands=data.get("bash_blocked_commands", cls().bash_blocked_commands),
             bash_timeout=data.get("bash_timeout", 30),
             max_file_size_mb=data.get("max_file_size_mb", 10),
             allow_outside_project=data.get("allow_outside_project", False),
+            max_output_chars=data.get("max_output_chars", 20_000),
+            env_passthrough=data.get("env_passthrough", []),
         )
 
 

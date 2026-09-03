@@ -26,6 +26,26 @@ class PolicyDenied(PermissionError):
     """Raised when a requested operation is outside the execution policy."""
 
 
+ALLOWED_ENVIRONMENT_KEYS: tuple[str, ...] = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "SHELL",
+    "TERM",
+    "USER",
+    "LOGNAME",
+)
+"""The only variables subprocesses inherit from ``os.environ`` (HH-01).
+
+``os.environ`` is never passed wholesale: every other name reaches a
+subprocess only through :attr:`ToolExecutionContext.env_passthrough` (opt-in,
+values still sourced from ``os.environ``) or :attr:`ToolExecutionContext.environment`
+(explicit values set by the caller).
+"""
+
+
 @dataclass(frozen=True)
 class AuditRecord:
     request_id: str
@@ -54,6 +74,7 @@ class ToolExecutionContext:
         }
     )
     environment: dict[str, str] = field(default_factory=dict)
+    env_passthrough: list[str] = field(default_factory=list)
     timeout: int = 30
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     approval_callback: ApprovalCallback | None = None
@@ -71,11 +92,17 @@ class ToolExecutionContext:
         *,
         allow_outside_project: bool = False,
         timeout: int = 30,
+        env_passthrough: list[str] | None = None,
     ) -> ToolExecutionContext:
         capabilities = {Capability.READ, Capability.WORKSPACE_WRITE, Capability.COMMAND}
         if allow_outside_project:
             capabilities.add(Capability.OUTSIDE_PROJECT)
-        return cls(Path(project_root), capabilities=capabilities, timeout=timeout)
+        return cls(
+            Path(project_root),
+            capabilities=capabilities,
+            timeout=timeout,
+            env_passthrough=list(env_passthrough or []),
+        )
 
     def require(self, capability: Capability, action: str, target: str) -> None:
         if capability in self.capabilities:
@@ -103,7 +130,23 @@ class ToolExecutionContext:
         return resolved
 
     def command_environment(self) -> dict[str, str]:
-        return {**os.environ, **self.environment}
+        """Build the subprocess environment from an explicit allowlist.
+
+        Only :data:`ALLOWED_ENVIRONMENT_KEYS` are copied from ``os.environ``
+        (secrets are never inherited wholesale), plus the opt-in names in
+        :attr:`env_passthrough` (values still sourced from ``os.environ`` when
+        present), plus :attr:`environment` which wins on conflicts.
+
+        Returns:
+            The environment mapping for subprocess execution.
+        """
+        env = {name: value for name in ALLOWED_ENVIRONMENT_KEYS if (value := os.environ.get(name)) is not None}
+        for name in self.env_passthrough:
+            value = os.environ.get(name)
+            if value is not None:
+                env[name] = value
+        env.update(self.environment)
+        return env
 
     def approve_command(self, command: str) -> list[str]:
         """Parse one simple command and classify risky or unsupported shell syntax."""

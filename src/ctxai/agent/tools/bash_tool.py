@@ -9,6 +9,7 @@ from typing import Any
 from ..config import AgentToolsConfig
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 from .execution import Capability, ToolExecutionContext, coerce_context
+from .output_limits import truncate_text
 
 
 class BashTool(BaseTool):
@@ -29,6 +30,10 @@ class BashTool(BaseTool):
             timeout=config.bash_timeout,
             allow_outside_project=config.allow_outside_project,
         )
+        # The config's opt-in passthrough names compose with whatever the
+        # shared context already allows; values still come from os.environ.
+        if config.env_passthrough:
+            self.context.env_passthrough = sorted(set(self.context.env_passthrough) | set(config.env_passthrough))
         self.timeout = config.bash_timeout
 
     def get_schema(self) -> ToolSchema:
@@ -71,8 +76,12 @@ class BashTool(BaseTool):
                 process.kill()
                 await process.communicate()
                 raise TimeoutError(f"Command timed out after {self.timeout} seconds")
-            output = stdout.decode(errors="replace")
-            error_output = stderr.decode(errors="replace")
+            raw_stdout = stdout.decode(errors="replace")
+            raw_stderr = stderr.decode(errors="replace")
+            stdout_text = truncate_text(raw_stdout, self.config.max_output_chars, label="stdout")
+            stderr_text = truncate_text(raw_stderr, self.config.max_output_chars, label="stderr")
+            stdout_truncated = len(raw_stdout) > self.config.max_output_chars
+            stderr_truncated = len(raw_stderr) > self.config.max_output_chars
             success = process.returncode == 0
             record = self.context.record(
                 tool=self.name,
@@ -80,17 +89,27 @@ class BashTool(BaseTool):
                 capability=Capability.COMMAND,
                 target=command,
                 success=success,
-                details={"cwd": str(cwd), "exit_code": process.returncode},
+                details={
+                    "cwd": str(cwd),
+                    "exit_code": process.returncode,
+                    "stdout_chars": len(raw_stdout),
+                    "stderr_chars": len(raw_stderr),
+                    "truncated": stdout_truncated or stderr_truncated,
+                },
             )
             return {
                 "success": success,
-                "result": output,
-                "error": None if success else error_output or f"Exit code {process.returncode}",
+                "result": stdout_text,
+                "error": None if success else stderr_text or f"Exit code {process.returncode}",
                 "metadata": {
                     "command": command,
                     "working_directory": str(cwd),
                     "exit_code": process.returncode,
-                    "stderr": error_output,
+                    "stderr": stderr_text,
+                    "stdout_truncated": stdout_truncated,
+                    "stderr_truncated": stderr_truncated,
+                    "original_stdout_chars": len(raw_stdout),
+                    "original_stderr_chars": len(raw_stderr),
                     "audit": record.__dict__,
                 },
             }

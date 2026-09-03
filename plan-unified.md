@@ -61,7 +61,7 @@ open repository
 | VS-07 Provider-independent execution | Consistent tool behavior across providers | Validated (2026-07-23) |
 | VS-08 Deliberate planning and approval | Evidence-backed plans approved at the right boundary | Validated (2026-07-23) |
 | VS-09 Web dashboard and index operations | Index health, search, and management in a browser | Validated (2026-07-23) |
-| HH-01 Hardened tool execution | No secret leaks, bounded output, deterministic edits | Planned |
+| HH-01 Hardened tool execution | No secret leaks, bounded output, deterministic edits | Validated (2026-09-04) |
 | HH-02 Resilient agent loop | Retries, fail-fast, clean cancellation | Planned |
 | HH-03 Context window management | Measured tokens, mid-loop compaction | Planned |
 | HH-04 Run transcripts and cost ledger | Redacted local run records with usage/cost | Planned |

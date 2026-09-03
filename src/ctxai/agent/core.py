@@ -259,6 +259,7 @@ class Agent:
                 if self.config.verbose:
                     if result.get("success"):
                         self.console.print(f"[green][OK] {tool_call.name} succeeded[/green]")
+                        self._print_result_diagnostics(result)
                     else:
                         self.console.print(f"[yellow]⚠ {tool_call.name} failed: {result.get('error')}[/yellow]")
 
@@ -270,6 +271,31 @@ class Agent:
                     self.console.print(f"[red][X] {tool_call.name} exception: {str(e)}[/red]")
 
         return results
+
+    def _print_result_diagnostics(self, result: dict) -> None:
+        """Print output-truncation and replacement-count diagnostics for a tool result.
+
+        Args:
+            result: Tool execution result including its metadata.
+        """
+        metadata = result.get("metadata") or {}
+        for stream in ("stdout", "stderr"):
+            if metadata.get(f"{stream}_truncated"):
+                self.console.print(
+                    f"[dim]Truncated {stream}: "
+                    f"{metadata.get(f'original_{stream}_chars')} chars, "
+                    f"limit {self.config.agent_config.tools.max_output_chars}[/dim]"
+                )
+        if metadata.get("truncated"):
+            self.console.print(
+                f"[dim]Truncated content: {metadata.get('original_chars')} chars, "
+                f"limit {self.config.agent_config.tools.max_output_chars}[/dim]"
+            )
+        if "replacements" in metadata:
+            self.console.print(
+                f"[dim]Edit applied: {metadata['replacements']} replacement(s) "
+                f"via {metadata.get('strategy', 'exact')} match[/dim]"
+            )
 
     @staticmethod
     def _plan_tool_schema(tool_format: str) -> dict:

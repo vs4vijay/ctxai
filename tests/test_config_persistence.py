@@ -61,9 +61,7 @@ def test_project_overrides_global(global_home, tmp_path):
     project_dir = tmp_path / "proj"
     (project_dir / ".ctxai").mkdir(parents=True)
     (project_dir / ".ctxai" / "config.toml").write_text(
-        'default_provider = "custom"\n'
-        "[providers.custom]\n"
-        'api_key = "sk-project"\n'
+        'default_provider = "custom"\n[providers.custom]\napi_key = "sk-project"\n'
     )
 
     config = ConfigManager(project_dir).load()
