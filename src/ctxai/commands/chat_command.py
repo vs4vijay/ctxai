@@ -22,6 +22,7 @@ from rich.prompt import Confirm
 
 from ..agent.config import AgentConfig, AgentLLMConfig
 from ..agent.core import Agent, AgentLoopConfig
+from ..agent.resilience import format_retry_notice
 from ..agent.sessions import SessionRecord, SessionStore
 from ..agent.theme import (
     NEON_CYAN,
@@ -870,6 +871,10 @@ async def interactive_chat(
     # Get available indexes (if any)
     available_indexes = discover_repository_indexes(working_directory)
 
+    # Durable session state is repository-scoped and never stores provider credentials.
+    session_store = SessionStore(working_directory)
+    current_session = "default"
+
     # Create agent
     loop_config = AgentLoopConfig(
         llm_provider=llm,
@@ -882,12 +887,12 @@ async def interactive_chat(
         max_iterations=max_iterations,
         verbose=verbose,
         approval_callback=(lambda call: Confirm.ask(format_approval_prompt(call), default=False)),
+        cancel_event=asyncio.Event(),
+        on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
+        session_store=session_store,
+        session_name=current_session,
     )
     agent = Agent(loop_config)
-
-    # Durable session state is repository-scoped and never stores provider credentials.
-    session_store = SessionStore(working_directory)
-    current_session = "default"
 
     # Track current provider/model for /model command
     current_provider = provider
@@ -988,6 +993,11 @@ async def interactive_chat(
         """Process messages from the queue."""
         while True:
             try:
+                # Stop promptly once cancellation has been requested so a run
+                # that swallowed asyncio cancellation still exits cleanly.
+                if loop_config.cancel_event is not None and loop_config.cancel_event.is_set():
+                    break
+
                 # Wait for next message
                 user_input = await message_queue.get()
 
@@ -1062,6 +1072,7 @@ async def interactive_chat(
                     elif command.startswith("/save"):
                         parts = user_input.split(maxsplit=1)
                         current_session = parts[1].strip() if len(parts) > 1 else current_session
+                        loop_config.session_name = current_session
                         path = session_store.save(
                             SessionRecord(
                                 name=current_session,
@@ -1080,6 +1091,7 @@ async def interactive_chat(
                         record = session_store.load(name)
                         agent.context = record.context
                         current_session = name
+                        loop_config.session_name = current_session
                         console.print_success(f"Session resumed: {name} ({agent.context.get_message_count()} messages)")
                         continue
 
@@ -1197,6 +1209,9 @@ async def interactive_chat(
 
             except KeyboardInterrupt:
                 _disable_cursor_blink()
+                # Let any in-flight run unwind cleanly: the agent loop checks
+                # this event between iterations and inside retry waits.
+                loop_config.cancel_event.set()
                 console.print(f"\n[bold {NEON_CYAN}]Bye![bold {NEON_CYAN}]")
                 break
 
@@ -1206,7 +1221,9 @@ async def interactive_chat(
                 break
 
     finally:
-        # Clean up
+        # Clean up: request cancellation so a run in flight finishes its
+        # current tool call, persists session state, and stops iterating.
+        loop_config.cancel_event.set()
         queue_task.cancel()
         try:
             await queue_task

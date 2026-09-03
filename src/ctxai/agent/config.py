@@ -164,6 +164,7 @@ class AgentBehaviorConfig:
     auto_save_context: bool = True
     verbose: bool = False
     stream_responses: bool = True  # Stream LLM responses
+    loop_break_threshold: int = 3  # Identical consecutive tool-result tuples before the loop breaks
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -174,6 +175,7 @@ class AgentBehaviorConfig:
             "auto_save_context": self.auto_save_context,
             "verbose": self.verbose,
             "stream_responses": self.stream_responses,
+            "loop_break_threshold": self.loop_break_threshold,
         }
 
     @classmethod
@@ -186,6 +188,7 @@ class AgentBehaviorConfig:
             auto_save_context=data.get("auto_save_context", True),
             verbose=data.get("verbose", False),
             stream_responses=data.get("stream_responses", True),
+            loop_break_threshold=data.get("loop_break_threshold", 3),
         )
 
 

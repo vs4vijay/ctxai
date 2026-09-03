@@ -253,12 +253,33 @@ class BaseLLMProvider(ABC):
         name = error.__class__.__name__.lower()
         message = str(error)
         lowered = message.lower()
-        if "auth" in name or "api key" in lowered or "unauthorized" in lowered:
+        if (
+            "auth" in name
+            or "api key" in lowered
+            or "unauthorized" in lowered
+            or "authentication" in lowered
+            or "forbidden" in lowered
+            or "401" in lowered
+            or "403" in lowered
+        ):
             kind = ProviderErrorKind.AUTHENTICATION
         elif "rate" in name or "429" in lowered:
             kind = ProviderErrorKind.RATE_LIMIT
         elif "timeout" in name or "timed out" in lowered:
             kind = ProviderErrorKind.TIMEOUT
+        elif (
+            "invalid" in name
+            or "json" in name
+            or "parse" in name
+            or "decode" in name
+            or "unexpected" in name
+            or "malformed" in lowered
+            or "invalid json" in lowered
+            or "invalid request" in lowered
+            or "parse error" in lowered
+            or "expecting value" in lowered
+        ):
+            kind = ProviderErrorKind.INVALID_RESPONSE
         else:
             kind = ProviderErrorKind.TRANSPORT
         return ProviderError(kind, message, provider=self.__class__.__name__)
