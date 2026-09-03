@@ -73,6 +73,7 @@ set PYTHONIOENCODING=utf-8
 - **Multi-Provider Support**: OpenRouter (100+ models), GitHub Copilot, Ollama (local), Anthropic, OpenAI
 - **OAuth Authentication**: Secure one-click login for OpenRouter and GitHub Copilot
 - **Verified Task Workflow**: Retrieved evidence, scoped planning, exact-action approval, diffs, focused checks, and stable reports
+- **Hardened Tool Execution**: Allowlisted subprocess environments (no secret inheritance), bounded tool output with explicit truncation markers, and uniqueness-checked edits that fail closed
 - **Rich Tool Support**: File operations, bash execution, git tools, code search
 - **Repository Context**: Automatic repository mapping for better code understanding
 - **Flexible Presets**: default, premium, budget, cheap, local, mixed configurations
@@ -540,6 +541,16 @@ The agent follows a modular, tool-based architecture:
 3. **Tool Registry**: Dynamic tool registration and execution with parameter validation
 4. **Context Management**: Tracks conversation history, file changes, and repository state
 5. **Verified Workflow**: Binds plans and approvals to observed tool calls, diffs, and checks
+
+### Tool Safety Guarantees
+
+Agent tools enforce a hardened execution policy (see [docs/TOOLS.md](docs/TOOLS.md) for the full
+environment policy, output limits, and edit semantics):
+
+- **Subprocess environment**: commands observe only an allowlist (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `SHELL`, `TERM`, `USER`, `LOGNAME`) plus explicit opt-ins (`tools.env_passthrough`); secrets from your shell environment are never inherited.
+- **Output limits**: command output and file reads are truncated at `tools.max_output_chars` (default 20,000 characters) with an explicit `...[truncated N of M chars]` marker; original sizes are recorded in the audit log.
+- **Edit uniqueness**: `edit_file` requires exactly one match unless you pass `replace_all`; zero- or multi-match edits fail without writing and name the match count. A whitespace-tolerant fallback applies the change to the original bytes when the pattern differs only in indentation or trailing whitespace. Approval-time previews are byte-identical to applied edits, including regex edits.
+- **Threat model**: command classification remains an in-process policy check; OS-level sandboxing lands with HH-08.
 
 ### Key Components
 

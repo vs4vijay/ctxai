@@ -2,28 +2,18 @@
 
 from __future__ import annotations
 
-import difflib
 import re
 from pathlib import Path
 from typing import Any
 
+from ..editing import apply_edit, edit_diff
 from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 from .execution import Capability, ToolExecutionContext, coerce_context
+from .output_limits import DEFAULT_MAX_OUTPUT_CHARS, truncate_text
 
 
 def _failure(exc: Exception) -> dict[str, Any]:
     return {"success": False, "result": None, "error": str(exc), "error_type": type(exc).__name__}
-
-
-def _diff(path: Path, before: str, after: str) -> str:
-    return "".join(
-        difflib.unified_diff(
-            before.splitlines(keepends=True),
-            after.splitlines(keepends=True),
-            fromfile=f"a/{path.name}",
-            tofile=f"b/{path.name}",
-        )
-    )
 
 
 class ContextualFileTool(BaseTool):
@@ -44,9 +34,11 @@ class ReadFileTool(ContextualFileTool):
         working_directory: str | Path | None = None,
         *,
         context: ToolExecutionContext | None = None,
+        max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     ):
         super().__init__(working_directory, context=context)
         self.max_file_size_mb = max_file_size_mb
+        self.max_output_chars = max_output_chars
 
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
@@ -89,15 +81,20 @@ class ReadFileTool(ContextualFileTool):
                 raise ValueError("end_line must not be before start_line")
             start = (start_line or 1) - 1
             selected = lines[start:end_line]
+            content = "\n".join(f"{i:4d} | {line}" for i, line in enumerate(selected, start=start + 1))
+            bounded = truncate_text(content, self.max_output_chars, label="read_file")
+            truncated = len(content) > self.max_output_chars
             return {
                 "success": True,
-                "result": "\n".join(f"{i:4d} | {line}" for i, line in enumerate(selected, start=start + 1)),
+                "result": bounded,
                 "error": None,
                 "metadata": {
                     "file_path": str(resolved),
                     "total_lines": len(lines),
                     "returned_lines": len(selected),
                     "size_bytes": size,
+                    "truncated": truncated,
+                    "original_chars": len(content),
                 },
             }
         except Exception as exc:
@@ -146,7 +143,7 @@ class WriteFileTool(ContextualFileTool):
             before = resolved.read_text(encoding="utf-8", errors="replace") if existed else ""
             resolved.parent.mkdir(parents=True, exist_ok=True)
             resolved.write_text(content, encoding="utf-8")
-            difference = _diff(resolved, before, content)
+            difference = edit_diff(resolved.name, before, content)
             record = self.context.record(
                 tool=self.name,
                 action="write",
@@ -183,7 +180,8 @@ class EditFileTool(ContextualFileTool):
     def get_schema(self) -> ToolSchema:
         return ToolSchema(
             self.name,
-            "Replace text in a repository file and return a unified diff.",
+            "Replace text in a repository file and return a unified diff. "
+            "The pattern must match exactly once unless replace_all is set.",
             [
                 ToolParameter(
                     "file_path",
@@ -201,6 +199,13 @@ class EditFileTool(ContextualFileTool):
                     required=False,
                     default=False,
                 ),
+                ToolParameter(
+                    "replace_all",
+                    ToolParameterType.BOOLEAN,
+                    "Replace every occurrence instead of requiring a unique match",
+                    required=False,
+                    default=False,
+                ),
             ],
         )
 
@@ -211,6 +216,7 @@ class EditFileTool(ContextualFileTool):
         file_path: str | None = None,
         path: str | None = None,
         use_regex: bool = False,
+        replace_all: bool = False,
     ) -> dict[str, Any]:
         value = file_path or path
         if not value:
@@ -221,29 +227,35 @@ class EditFileTool(ContextualFileTool):
             if not resolved.is_file():
                 raise ValueError(f"Not a file: {value}")
             before = resolved.read_text(encoding="utf-8")
-            if use_regex:
-                after, count = re.subn(old_text, new_text, before)
-            else:
-                count = before.count(old_text)
-                after = before.replace(old_text, new_text)
-            if count == 0:
-                raise ValueError("Pattern not found in file")
+            # Fail closed before any write: zero matches and multi-matches
+            # (without replace_all) raise EditError naming the match count.
+            outcome = apply_edit(before, old_text, new_text, use_regex=use_regex, replace_all=replace_all)
+            after = outcome.after
             resolved.write_text(after, encoding="utf-8")
-            difference = _diff(resolved, before, after)
+            difference = edit_diff(value, before, after)
             record = self.context.record(
                 tool=self.name,
                 action="edit",
                 capability=Capability.WORKSPACE_WRITE,
                 target=str(resolved),
                 success=True,
-                details={"replacements": count, "diff": difference},
+                details={
+                    "replacements": outcome.count,
+                    "strategy": outcome.strategy,
+                    "diff": difference,
+                },
             )
             return {
                 "success": True,
-                "result": f"Replaced {count} occurrence(s) in {resolved}",
+                "result": f"Replaced {outcome.count} occurrence(s) in {resolved}",
                 "error": None,
                 "diff": difference,
-                "metadata": {"file_path": str(resolved), "replacements": count, "audit": record.__dict__},
+                "metadata": {
+                    "file_path": str(resolved),
+                    "replacements": outcome.count,
+                    "strategy": outcome.strategy,
+                    "audit": record.__dict__,
+                },
             }
         except Exception as exc:
             self.context.record(

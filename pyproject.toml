@@ -85,8 +85,10 @@ select = ["E", "F", "I", "UP"]
 [tool.mypy]
 python_version = "3.10"
 files = [
+    "src/ctxai/agent/editing.py",
     "src/ctxai/agent/llm/contract.py",
     "src/ctxai/agent/tools/execution.py",
+    "src/ctxai/agent/tools/output_limits.py",
     "src/ctxai/agent/workflow.py",
     "src/ctxai/index_manifest.py",
     "src/ctxai/repository_context.py",

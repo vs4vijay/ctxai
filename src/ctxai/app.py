@@ -622,8 +622,9 @@ def code(
             Path.cwd(),
             allow_outside_project=agent_config.tools.allow_outside_project,
             timeout=agent_config.tools.bash_timeout,
+            env_passthrough=agent_config.tools.env_passthrough,
         )
-        tools.register(ReadFileTool(context=execution_context))
+        tools.register(ReadFileTool(context=execution_context, max_output_chars=agent_config.tools.max_output_chars))
         tools.register(WriteFileTool(context=execution_context))
         tools.register(EditFileTool(context=execution_context))
         tools.register(ListFilesTool(context=execution_context))

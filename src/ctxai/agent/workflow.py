@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import difflib
 import os
 import re
 from collections.abc import Callable
@@ -11,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .editing import EditError, edit_diff, simulate_edit
 from .llm.base import ToolCall
 
 
@@ -209,22 +209,14 @@ class TaskRun:
             target = Path(str(target_value)).expanduser()
             if not target.is_absolute():
                 target = self.project_root / target
-            before = target.read_text() if target.is_file() else ""
-            if call.name == "write_file":
-                after = str(parameters.get("content", ""))
-            else:
-                after = before.replace(
-                    str(parameters.get("old_text", "")),
-                    str(parameters.get("new_text", "")),
-                )
-            parameters["proposed_diff"] = "".join(
-                difflib.unified_diff(
-                    before.splitlines(keepends=True),
-                    after.splitlines(keepends=True),
-                    fromfile=f"a/{target_value}",
-                    tofile=f"b/{target_value}",
-                )
-            )
+            before = target.read_text(encoding="utf-8") if target.is_file() else ""
+            try:
+                after, _count = simulate_edit(call.name, parameters, before)
+            except EditError:
+                # An ambiguous edit cannot be previewed; it is denied at
+                # execution with a count-bearing error, so nothing is written.
+                after = before
+            parameters["proposed_diff"] = edit_diff(str(target_value), before, after)
         parameters["approval_target"] = target_value or parameters.get("command") or call.name
         return ToolCall(id=call.id, name=call.name, parameters=parameters)
 

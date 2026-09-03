@@ -131,3 +131,42 @@ jobs:
         with:
           name: bandit-report
           path: bandit-report.json
+
+  dependency-audit:
+    name: Dependency Audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Export locked requirements
+        run: |
+          uv export --format requirements-txt --no-hashes --all-extras --no-emit-project \
+            -o requirements-audit.txt
+
+      # pip-audit runs from an ephemeral tool environment (uvx) so it never
+      # enters the project venv. It exits non-zero when a known-vulnerable
+      # pinned dependency is found, failing the gate.
+      - name: Run pip-audit vulnerability scan
+        run: |
+          uvx pip-audit --progress-spinner off --no-deps \
+            -f json -o pip-audit-report.json \
+            -r requirements-audit.txt
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.json
