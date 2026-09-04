@@ -240,6 +240,22 @@ ctxai chat --provider ollama --model codellama:13b
 
 Architect/editor mode is intentionally disabled pending benchmark evidence. Complex tasks use the validated single-agent structured planning and approval workflow.
 
+**Planning control (`--plan`):** choose when the agent must submit an evidence-backed plan before
+mutations — `auto` (default; keyword classification), `force` (always plan, even for simple tasks),
+or `off` (never plan; tools stay approval-gated):
+
+```bash
+ctxai chat --plan force        # every chat task goes through submit_plan
+ctxai code --plan off "Fix the typo in README.md"
+```
+
+Inside chat, `/plan` shows the current mode and `/plan auto|force|off` overrides it for the next
+tasks. Approval prompts offer `[y] once / [a] always this session / [n] no`; a session approval is
+bound to the exact tool + file (or command executable) and expires with the session. Approvals bind
+to the exact diff shown: if the file changes before execution, the agent re-prompts with a fresh
+diff instead of executing a stale approval (see
+[docs/AGENT_LOOP.md](docs/AGENT_LOOP.md), "Approvals, session memory, and plan modes").
+
 **One-Shot Tasks:**
 
 ```bash
