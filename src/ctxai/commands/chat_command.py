@@ -963,8 +963,45 @@ async def interactive_chat(
     )
 
     async def process_message(user_input: str):
-        """Process a single message through the agent."""
+        """Process a single message through the agent, rendering live events (HH-05)."""
         nonlocal tools, current_provider, current_model, llm, loop_config
+
+        from rich.live import Live
+        from rich.text import Text
+
+        from ..agent.events import AgentEventKind
+
+        def render_stream_event(event, live):
+            """Render one AgentEvent inside the streaming Live display.
+
+            Token deltas update the transient preview; tool starts/results and
+            approval brackets print as status lines above it; status lines
+            (retries, compaction, fallback diagnostics) print in yellow.
+
+            Args:
+                event: The AgentEvent to render.
+                live: The active Rich Live display.
+            """
+            if event.kind is AgentEventKind.TOKEN:
+                streamed_chunks.append(event.text)
+                live.update(Text("".join(streamed_chunks)[-1200:], style="dim"))
+            elif event.kind is AgentEventKind.TOOL_CALL_STARTED:
+                streamed_chunks.clear()
+                live.update(Text("", style="dim"))
+                console.print(f"[{NEON_GOLD}]→ {event.text}[/{NEON_GOLD}]")
+            elif event.kind is AgentEventKind.TOOL_RESULT:
+                if event.data.get("success"):
+                    console.print(f"[dim]  ✓ {event.text}[/dim]")
+                else:
+                    console.print(f"[dim]  ✗ {event.text}: {event.data.get('error') or 'failed'}[/dim]")
+            elif event.kind is AgentEventKind.APPROVAL_REQUIRED:
+                console.print(f"[{NEON_GOLD}]? {event.text}[/{NEON_GOLD}]")
+            elif event.kind is AgentEventKind.APPROVAL_DECIDED:
+                console.print(f"[dim]  {'approved' if event.data.get('approved') else 'denied'}[/dim]")
+            elif event.kind is AgentEventKind.STATUS:
+                streamed_chunks.clear()
+                live.update(Text("", style="dim"))
+                console.print(f"[yellow]{event.text}[/yellow]")
 
         try:
             # Print thinking indicator
@@ -972,37 +1009,32 @@ async def interactive_chat(
 
             console.print("[dim]● Thinking...[/dim]")
 
-            # Create a Live display for thinking (if streaming is supported)
-            from rich.live import Live
-            from rich.text import Text
-
-            thinking_lines = []
-
-            def update_thinking(line: str):
-                thinking_lines.append(line)
-                return Text.from_markup(f"[dim]{chr(10).join(thinking_lines[-5:])}[/dim]")
-
-            # Try streaming response for better UX
+            # Stream live events (HH-05): token deltas render through Rich
+            # Live, tool activity and approval prompts render as inline
+            # status lines, and the final report is captured from the stream.
+            streamed_chunks: list[str] = []
+            full_response = ""
             try:
-                full_response = ""
-                with Live(console=console.console, transient=True, refresh_per_second=4) as live:
-                    async for chunk in agent.stream_message(user_input):
-                        full_response += chunk
-                        live.update(Text.from_markup(f"[dim]{chunk}[/dim]"))
-
-                # Clear thinking indicator
-                console.print("\r" + " " * 50 + "\r", end="")
+                with Live(console=console.console, transient=True, refresh_per_second=12) as live:
+                    async for event in agent.stream_message(user_input):
+                        if event.kind is AgentEventKind.FINAL_REPORT:
+                            full_response = event.text
+                            continue
+                        render_stream_event(event, live)
 
             except Exception:
                 # Fallback to regular processing
-                console.print("\r" + " " * 50 + "\r", end="")
                 full_response = await agent.process_message(user_input)
 
-            # Print response
+            # Print the final report as a panel
             console.print()
-            console.print(f"[bold {NEON_CYAN}]---[/]")
-            console.print(Markdown(full_response))
-            console.print(f"[bold {NEON_CYAN}]---[/]")
+            console.print_panel(
+                Markdown(full_response),
+                title=f"[bold {NEON_CYAN}]Response[bold {NEON_CYAN}]",
+                border_style="primary",
+                title_align="left",
+                padding=(1, 2),
+            )
 
             # Append the per-run usage/cost line when the provider reported usage (HH-04).
             from .runs_command import format_usage_cost_line

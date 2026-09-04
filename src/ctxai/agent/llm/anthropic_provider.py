@@ -13,6 +13,7 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 from ..config import AgentLLMConfig
+from ..events import StreamEvent
 from .base import BaseLLMProvider, LLMResponse, Message, MessageRole, ToolCall
 
 
@@ -141,6 +142,72 @@ class AnthropicProvider(BaseLLMProvider):
             yield f"\n[Anthropic API error: {str(e)}]"
         except Exception as e:
             yield f"\n[Error: {str(e)}]"
+
+    def stream_chat_events(
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs
+    ) -> Generator[StreamEvent, None, LLMResponse]:
+        """
+        Stream response events from Claude, returning the complete response.
+
+        Text deltas are emitted as ``("text", chunk)`` StreamEvents as the
+        model generates them (via the Messages streaming API). The final
+        accumulated message — including any tool-use blocks, the finish
+        reason, and usage — is parsed with the same parser as :meth:`chat`
+        and returned, so the agent loop's approval workflow behaves
+        identically on the streaming and buffered paths. Failures are mapped
+        to an error-shaped ``LLMResponse`` (``finish_reason == "error"``),
+        mirroring :meth:`chat`.
+
+        Args:
+            messages: List of conversation messages
+            tools: Optional list of tool definitions in Anthropic format
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamEvent tuples (``("text", str)`` deltas)
+
+        Returns:
+            The complete LLMResponse (tool calls, finish_reason, usage)
+        """
+        try:
+            # Extract system message
+            system_message, conversation_messages = self._extract_system_message(messages)
+
+            # Format messages
+            formatted_messages = self._format_messages_for_anthropic(conversation_messages)
+
+            # Prepare request parameters
+            request_params = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "messages": formatted_messages,
+            }
+
+            if system_message:
+                request_params["system"] = system_message
+
+            if tools:
+                request_params["tools"] = tools
+
+            # Stream events; the final message carries tool calls and usage.
+            with self.client.messages.stream(**request_params) as stream:
+                for text in stream.text_stream:
+                    if text:
+                        yield ("text", text)
+                final_message = stream.get_final_message()
+
+            return self._parse_response(final_message)
+        except AnthropicError as e:
+            return LLMResponse(
+                content=f"Anthropic API error: {str(e)}",
+                finish_reason="error",
+            )
+        except Exception as e:
+            return LLMResponse(
+                content=f"Error: {str(e)}",
+                finish_reason="error",
+            )
 
     def _format_messages_for_anthropic(self, messages: list[Message]) -> list[dict[str, Any]]:
         """

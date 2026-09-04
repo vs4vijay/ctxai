@@ -17,13 +17,17 @@ class ProviderSpec:
 
 
 PROVIDER_SPECS: tuple[ProviderSpec, ...] = (
-    ProviderSpec("anthropic", "Anthropic Messages", False, ProviderCapabilities(), "API/static"),
-    ProviderSpec("openai", "OpenAI Chat Completions", False, ProviderCapabilities(), "API/static"),
-    ProviderSpec("openrouter", "OpenAI-compatible", False, ProviderCapabilities(), "API/cached"),
-    ProviderSpec("github-copilot", "Copilot Chat", False, ProviderCapabilities(), "API/cached"),
-    ProviderSpec("ollama", "Ollama Chat", True, ProviderCapabilities(), "dynamic/local"),
-    ProviderSpec("custom", "OpenAI-compatible", False, ProviderCapabilities(), "endpoint-defined"),
-    ProviderSpec("nvidia", "OpenAI-compatible", False, ProviderCapabilities(), "endpoint-defined"),
+    # `streaming` means event streaming (stream_chat_events) with tool-call
+    # support (HH-05). Providers without it run the documented buffered
+    # fallback in the agent loop; the anthropic/openai/openrouter transports
+    # implement real token-delta streaming.
+    ProviderSpec("anthropic", "Anthropic Messages", False, ProviderCapabilities(streaming=True), "API/static"),
+    ProviderSpec("openai", "OpenAI Chat Completions", False, ProviderCapabilities(streaming=True), "API/static"),
+    ProviderSpec("openrouter", "OpenAI-compatible", False, ProviderCapabilities(streaming=True), "API/cached"),
+    ProviderSpec("github-copilot", "Copilot Chat", False, ProviderCapabilities(streaming=False), "API/cached"),
+    ProviderSpec("ollama", "Ollama Chat", True, ProviderCapabilities(streaming=False), "dynamic/local"),
+    ProviderSpec("custom", "OpenAI-compatible", False, ProviderCapabilities(streaming=False), "endpoint-defined"),
+    ProviderSpec("nvidia", "OpenAI-compatible", False, ProviderCapabilities(streaming=False), "endpoint-defined"),
 )
 
 

@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from ..events import StreamEvent
+
 
 class MessageRole(str, Enum):
     """Message roles in conversation."""
@@ -204,11 +206,54 @@ class BaseLLMProvider(ABC):
         """
         pass
 
+    def stream_chat_events(
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs
+    ) -> Generator[StreamEvent, None, LLMResponse]:
+        """
+        Stream a provider response as events, returning the complete response.
+
+        The default implementation is graceful degradation (HH-05): it performs
+        one buffered :meth:`chat` call, emits a single ``("text", full_content)``
+        event, and returns the :class:`LLMResponse`. Providers with real
+        streaming override this method to emit incremental ``("text", delta)``
+        events (and may emit ``("tool_call_delta", fragment)`` /
+        ``("usage", counts)`` events for richer consumers) while still
+        returning the complete response — accumulated tool calls, finish
+        reason, and usage on the returned object are authoritative, so the
+        agent loop and its approval workflow behave identically on both paths.
+
+        Args:
+            messages: List of conversation messages
+            tools: Optional list of tool definitions
+            **kwargs: Additional provider-specific arguments
+
+        Yields:
+            StreamEvent tuples (``("text", str)``, ``("tool_call_delta", dict)``,
+            or ``("usage", dict)``)
+
+        Returns:
+            The complete LLMResponse (tool calls, finish_reason, usage)
+
+        Raises:
+            Exception: If the API call fails
+        """
+        response = self.chat(messages, tools=tools, **kwargs)
+        if response.content:
+            yield ("text", response.content)
+        return response
+
     def get_capabilities(self) -> ProviderCapabilities:
-        """Return normalized capabilities used by chat and agent orchestration."""
+        """Return normalized capabilities used by chat and agent orchestration.
+
+        ``streaming`` means the provider implements :meth:`stream_chat_events`
+        (token-delta event streaming with tool support). Providers that only
+        implement the older text-only ``stream_chat`` — or nothing at all —
+        report ``streaming=False`` and the agent loop uses the buffered
+        ``chat()`` fallback for them.
+        """
         return ProviderCapabilities(
             tools=self.supports_function_calling(),
-            streaming=self.__class__.stream_chat is not BaseLLMProvider.stream_chat,
+            streaming=self.__class__.stream_chat_events is not BaseLLMProvider.stream_chat_events,
         )
 
     def validate_request(

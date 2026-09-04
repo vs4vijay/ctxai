@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import random
+import threading
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from rich.console import Console
 
 from .config import AgentConfig
 from .context import ConversationContext
+from .events import AgentEvent, AgentEventKind
 from .llm.base import BaseLLMProvider, LLMResponse, Message, ProviderError, ProviderErrorKind, ToolCall
 from .prompts import get_system_prompt, get_tool_error_recovery_prompt
 from .resilience import RetryNotice, RetryPolicy, call_with_retry, format_retry_notice
@@ -37,9 +39,41 @@ from .workflow import (
     TaskState,
     classify_provider_failure,
     discover_verification_commands,
+    format_approval_prompt,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _discard_event(event: AgentEvent) -> None:
+    """Consume an AgentEvent without rendering it (the buffered-path sink).
+
+    Args:
+        event: The emitted event (ignored).
+    """
+    return None
+
+
+def _final_report_event(run: TaskRun, report: str) -> AgentEvent:
+    """Build the terminal event of a run from its final TaskRun state.
+
+    Args:
+        run: The completed TaskRun.
+        report: The status-bearing final report text.
+
+    Returns:
+        A ``final_report`` AgentEvent carrying the run outcome.
+    """
+    return AgentEvent(
+        kind=AgentEventKind.FINAL_REPORT,
+        text=report,
+        data={
+            "status": "succeeded" if run.state is TaskState.SUMMARIZE else "failed",
+            "failure_kind": run.failure_kind.value if run.failure_kind else None,
+            "failure_message": run.failure_message,
+        },
+    )
+
 
 PLAN_TOOL_SCHEMA = {
     "type": "function",
@@ -205,8 +239,126 @@ class Agent:
         diagnostics and never affect the run; with
         ``AgentBehaviorConfig.record_runs`` disabled nothing is written.
 
+        Streaming (HH-05): this method and :meth:`stream_message` share one
+        core (:meth:`_run_loop`). This buffered surface consumes the core's
+        event stream and discards it, returning only the final report, so
+        MCP and one-shot surfaces keep their exact signature and behavior.
+
         Args:
             user_message: User's input message
+
+        Returns:
+            Agent's response (always a status-bearing final report)
+        """
+        return await self._run_loop(user_message, _discard_event)
+
+    async def stream_message(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
+        """Run the shared agent core and yield live ``AgentEvent``s (HH-05).
+
+        The stream ends with exactly one ``final_report`` event whose text is
+        identical to what :meth:`process_message` returns for the same
+        conversation. Tool-capable turns share the same workflow as
+        non-streaming turns, so planning, approval, mutation, and verification
+        policy cannot be bypassed by the UI: ``tool_call_started`` events
+        precede execution, ``approval_required``/``approval_decided`` events
+        bracket the approval callback (which pauses the stream until the
+        decision is made), and ``tool_result`` events follow execution.
+        ``token`` deltas are transient UI state and are never persisted to the
+        run transcript. Cancellation (cancel event or ``asyncio``
+        cancellation) produces the HH-02 outcome: a ``final_report`` event
+        with ``Status: failed`` and the run marked
+        ``infrastructure_failure``.
+
+        Args:
+            user_message: User's input message
+
+        Yields:
+            AgentEvent objects in emission order, ending with ``final_report``
+        """
+        events: asyncio.Queue = asyncio.Queue()
+
+        async def _produce() -> None:
+            """Run the shared core, sinking events into the queue.
+
+            A sentinel (``None``) is enqueued when the core finishes so the
+            consumer always terminates, even if the core raises unexpectedly.
+            """
+            try:
+                await self._run_loop(user_message, events.put_nowait)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - the stream must always terminate
+                LOGGER.exception("agent loop failed during streaming: %s", error)
+                events.put_nowait(
+                    AgentEvent(
+                        kind=AgentEventKind.STATUS,
+                        text=f"Agent loop failed: {error}",
+                        data={"error": repr(error)},
+                    )
+                )
+            finally:
+                events.put_nowait(None)
+
+        producer = asyncio.create_task(_produce())
+        try:
+            while True:
+                event = await events.get()
+                if event is None:
+                    break
+                yield event
+        finally:
+            if not producer.done():
+                producer.cancel()
+            try:
+                await producer
+            except asyncio.CancelledError:
+                pass
+
+    async def _run_loop(self, user_message: str, emit: Callable[[AgentEvent], None]) -> str:
+        """Shared agent core for :meth:`process_message` and :meth:`stream_message`.
+
+        Resilience semantics (HH-02): transient provider failures
+        (RATE_LIMIT/TIMEOUT/TRANSPORT) are retried with bounded exponential
+        backoff; AUTHENTICATION and UNSUPPORTED fail fast without burning
+        iterations; INVALID_RESPONSE receives exactly one recovery prompt.
+        Cancellation — via the loop's cancel event or ``asyncio``
+        cancellation — marks the run failed with ``infrastructure_failure``,
+        persists the session, and returns the final report; recovery prompts
+        are never injected for cancellation. Recovery prompts for other
+        (non-provider) failures keep the historical single-prompt behavior.
+
+        Context management (HH-03): before every LLM call the estimated
+        context size is compared against the provider's declared
+        ``context_size``; above the soft limit the conversation is compacted
+        (old tool-result bodies elided, pairing preserved) so long tool-heavy
+        tasks continue instead of overflowing. Provider-reported usage is
+        captured into the run's ``UsageLedger`` after every call, and a
+        ``finish_reason == "length"`` response is treated as an
+        INVALID_RESPONSE-class provider failure.
+
+        Run transcripts (HH-04): every run records a redacted JSON Lines
+        transcript under ``.ctxai/runs/<run_id>.jsonl`` through the shared
+        ``RunRecorder`` — run start, user message, LLM calls with usage,
+        tool calls/results, approvals, state transitions, checks,
+        compactions, cancellation, and completion. Recording failures are
+        diagnostics and never affect the run; with
+        ``AgentBehaviorConfig.record_runs`` disabled nothing is written.
+
+        Streaming (HH-05): every observable step is reported through the
+        synchronous ``emit`` sink as an :class:`AgentEvent` — token deltas
+        while the provider streams, usage per LLM call, retry and compaction
+        status lines, tool/approval events around execution, and exactly one
+        ``final_report`` event on every exit path. The sink is invoked from
+        the event loop thread; when the provider streams, deltas are bridged
+        off the provider worker thread. ``AgentBehaviorConfig.stream_responses``
+        disabled — or a provider whose ``capabilities.streaming`` is False —
+        selects the buffered ``chat()`` path, which emits one whole-content
+        token event; the buffered selection carries a documented diagnostic
+        status event.
+
+        Args:
+            user_message: User's input message
+            emit: Synchronous sink receiving AgentEvents in emission order.
 
         Returns:
             Agent's response (always a status-bearing final report)
@@ -217,8 +369,41 @@ class Agent:
         self.last_run = run
         self._start_recording(run, user_message)
 
+        def finish(completed_run: TaskRun, model_summary: str) -> str:
+            """Finalize the run and emit its terminal ``final_report`` event.
+
+            Args:
+                completed_run: The TaskRun completing with this exit.
+                model_summary: The model-facing summary for the final report.
+
+            Returns:
+                The status-bearing final report.
+            """
+            report = self._finalize(completed_run, model_summary)
+            emit(_final_report_event(completed_run, report))
+            return report
+
         if self.config.verbose:
             self.console.print(f"[dim]Processing: {user_message}[/dim]")
+
+        # Streaming selection (HH-05): honor AgentBehaviorConfig.stream_responses
+        # and the provider's declared event-streaming capability. A disabled
+        # provider emits one documented diagnostic; a disabled configuration is
+        # silent (the user opted out).
+        behavior = self.config.agent_config.behavior
+        provider_streaming = bool(getattr(self.llm.get_capabilities(), "streaming", False))
+        stream_enabled = bool(behavior.stream_responses and provider_streaming)
+        if behavior.stream_responses and not provider_streaming:
+            emit(
+                AgentEvent(
+                    kind=AgentEventKind.STATUS,
+                    text=(
+                        f"{self.llm.__class__.__name__} does not support token streaming; "
+                        "responses arrive buffered (see docs/AGENT_LOOP.md)"
+                    ),
+                    data={"provider": self.llm.__class__.__name__, "streaming": False},
+                )
+            )
 
         threshold = max(1, self.config.agent_config.behavior.loop_break_threshold)
         result_hashes: deque[str] = deque(maxlen=threshold)
@@ -229,13 +414,13 @@ class Agent:
         try:
             while iteration < self.config.max_iterations:
                 if self._cancel_requested():
-                    return self._finish_cancelled(run)
+                    return self._finish_cancelled(run, emit)
 
                 if self.config.verbose:
                     self.console.print(f"[dim]Iteration {iteration + 1}/{self.config.max_iterations}[/dim]")
 
                 # Stay under the model's context window before spending a call (HH-03).
-                self._enforce_context_budget()
+                self._enforce_context_budget(emit=emit)
 
                 # Get messages for LLM
                 messages = self.context.get_messages_for_llm()
@@ -249,7 +434,7 @@ class Agent:
 
                 # Call LLM
                 try:
-                    response = await self._call_llm(messages, tools, run=run)
+                    response = await self._call_llm(messages, tools, run=run, emit=emit, stream=stream_enabled)
 
                     if self.config.verbose:
                         preview = response.content[:200] if response.content else "(empty)"
@@ -262,7 +447,7 @@ class Agent:
                         self.context.add_assistant_message(response.content, tool_calls=response.tool_calls)
 
                         # Execute tools
-                        tool_results = await self._execute_tools(response.tool_calls, run=run)
+                        tool_results = await self._execute_tools(response.tool_calls, run=run, emit=emit)
 
                         # Add tool results to context
                         current_results: list[str] = []
@@ -285,7 +470,7 @@ class Agent:
                                     f"Detected {threshold} identical consecutive tool results; "
                                     "the agent loop made no progress"
                                 )
-                                return self._finalize(
+                                return finish(
                                     run,
                                     "I stopped because the same tool calls kept producing identical results "
                                     "without progress. Please rephrase the request or break it into smaller steps.",
@@ -301,14 +486,14 @@ class Agent:
                         # Truncate context if needed
                         self.context.truncate_old_messages()
 
-                        return self._finalize(run, response.content)
+                        return finish(run, response.content)
 
                 except asyncio.CancelledError:
-                    return self._finish_cancelled(run)
+                    return self._finish_cancelled(run, emit)
 
                 except ProviderError as error:
                     if error.kind is ProviderErrorKind.CANCELLED:
-                        return self._finish_cancelled(run)
+                        return self._finish_cancelled(run, emit)
                     if error.kind is ProviderErrorKind.INVALID_RESPONSE and invalid_response_recoveries < 1:
                         invalid_response_recoveries += 1
                         if self.config.verbose:
@@ -322,7 +507,7 @@ class Agent:
                         )
                         iteration += 1
                         continue
-                    return self._fail_fast(run, error)
+                    return self._fail_fast(run, error, emit)
 
                 except Exception as e:
                     error_msg = f"Error during agent loop: {str(e)}"
@@ -353,20 +538,12 @@ class Agent:
         run.failure_message = run.failure_message or (
             f"Max iterations ({self.config.max_iterations}) reached without completing the task"
         )
-        return self._finalize(
+        return finish(
             run,
             f"Max iterations ({self.config.max_iterations}) reached. "
             "The task may be too complex or an error occurred. "
             "Please try breaking it down into smaller steps.",
         )
-
-    async def stream_message(self, user_message: str) -> AsyncGenerator[str, None]:
-        """Run the verified agent loop and yield its evidence-backed final report.
-
-        Tool-capable turns intentionally share the same workflow as non-streaming turns so
-        planning, approval, mutation, and verification policy cannot be bypassed by the UI.
-        """
-        yield await self.process_message(user_message)
 
     # ------------------------------------------------------------------
     # Run transcript recording (HH-04)
@@ -509,7 +686,13 @@ class Agent:
             return str(path)
 
     async def _call_llm(
-        self, messages: list[Message], tools: list[dict[str, Any]] | None, *, run: TaskRun | None = None
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None,
+        *,
+        run: TaskRun | None = None,
+        emit: Callable[[AgentEvent], None] | None = None,
+        stream: bool = False,
     ) -> LLMResponse:
         """Invoke the provider chat call with retry, backoff, and cancellation support.
 
@@ -525,10 +708,21 @@ class Agent:
         path. Provider-reported usage is captured into ``run.usage`` for
         every call that returns a response (tokens only, never content).
 
+        Streaming (HH-05): when ``stream`` is set, each retry attempt drains
+        ``stream_chat_events`` on a worker thread and forwards ``("text", ...)``
+        deltas to ``emit`` as ``token`` events while the call is in flight;
+        provider-level ``usage`` StreamEvents are informational and ignored
+        (the usage event is derived once from the returned LLMResponse).
+        Retried attempts re-emit deltas for their partial text. ``emit`` also
+        receives one ``usage`` event per successful call and one ``status``
+        event per retry wait, on both the streaming and buffered paths.
+
         Args:
             messages: Conversation messages for the provider.
             tools: Optional tool schemas for the provider.
             run: Optional active TaskRun whose usage ledger records the call.
+            emit: Optional sink receiving AgentEvents as the call progresses.
+            stream: When True, request the provider's event-streaming path.
 
         Returns:
             The successful LLM response.
@@ -545,7 +739,10 @@ class Agent:
         async def _attempt() -> LLMResponse:
             try:
                 self.llm.validate_request(messages, tools, cancel_event=cancel_event)
-                response = await asyncio.to_thread(self.llm.chat, messages, tools=tools)
+                if stream and emit is not None:
+                    response = await self._drain_stream_events(messages, tools, emit)
+                else:
+                    response = await asyncio.to_thread(self.llm.chat, messages, tools=tools)
             except Exception as error:
                 raise self._normalize_provider_error(error) from error
             if run is not None:
@@ -566,6 +763,13 @@ class Agent:
                     },
                     usage=last_record.to_dict() if last_record is not None else None,
                 )
+            if emit is not None and not stream and response.content:
+                # Buffered path (graceful degradation): emit the whole content
+                # as a single token event so streaming consumers render text
+                # identically on both paths.
+                emit(AgentEvent(kind=AgentEventKind.TOKEN, text=response.content))
+            if emit is not None and response.usage:
+                emit(AgentEvent(kind=AgentEventKind.USAGE, data=dict(response.usage)))
             if response.finish_reason == "error":
                 raise self._normalize_provider_error(
                     RuntimeError(response.content or "Provider returned an error response without details")
@@ -589,6 +793,19 @@ class Agent:
                 self.console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")
             if self.config.on_retry is not None:
                 self.config.on_retry(notice)
+            if emit is not None:
+                emit(
+                    AgentEvent(
+                        kind=AgentEventKind.STATUS,
+                        text=format_retry_notice(notice),
+                        data={
+                            "attempt": notice.attempt,
+                            "max_retries": notice.max_retries,
+                            "delay_s": notice.delay_s,
+                            "kind": notice.kind,
+                        },
+                    )
+                )
 
         try:
             return await call_with_retry(
@@ -602,6 +819,87 @@ class Agent:
             )
         finally:
             self._retries_used_last_call = retries_used
+
+    async def _drain_stream_events(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None,
+        emit: Callable[[AgentEvent], None],
+    ) -> LLMResponse:
+        """Consume the provider's ``stream_chat_events`` from a worker thread.
+
+        The provider generator runs on a daemon thread (the streaming analogue
+        of the buffered ``asyncio.to_thread(chat)`` path) and its StreamEvents
+        are bridged onto the event loop through a thread-safe queue, so token
+        deltas reach ``emit`` — and therefore the UI — while the call is still
+        in flight. ``text`` deltas map to ``token`` events; ``usage`` and
+        ``tool_call_delta`` StreamEvents are informational and ignored here —
+        the returned LLMResponse is the authoritative source for usage and
+        complete tool calls. The cancel event is checked before every delta,
+        so cancelling mid-stream raises the HH-02 cancellation outcome instead
+        of draining to completion. If the consumer stops (cancellation of the
+        surrounding task), the daemon thread finishes in the background.
+
+        Args:
+            messages: Conversation messages for the provider.
+            tools: Optional tool schemas for the provider.
+            emit: Sink receiving token events as deltas arrive.
+
+        Returns:
+            The complete LLMResponse returned by the provider generator.
+
+        Raises:
+            Exception: Any error raised by the provider stream, for the retry
+                wrapper to normalize.
+        """
+        loop = asyncio.get_running_loop()
+        stream_events: asyncio.Queue = asyncio.Queue()
+
+        def _put(item: Any) -> None:
+            """Bridge one item onto the event loop; a closed loop ends the stream.
+
+            Args:
+                item: A StreamEvent tuple, the final LLMResponse, or an error.
+            """
+            try:
+                loop.call_soon_threadsafe(stream_events.put_nowait, item)
+            except RuntimeError:
+                pass  # the loop shut down underneath the stream; the daemon thread exits
+
+        def _produce() -> None:
+            """Drain the provider generator, forwarding events and the return value."""
+            try:
+                generator = self.llm.stream_chat_events(messages, tools=tools)
+                while True:
+                    try:
+                        item = next(generator)
+                    except StopIteration as stop:
+                        _put(stop.value)
+                        return
+                    _put(item)
+            except BaseException as error:  # noqa: BLE001 - forwarded for normalization
+                _put(error)
+
+        threading.Thread(target=_produce, name="ctxai-llm-stream", daemon=True).start()
+
+        while True:
+            if self._cancel_requested():
+                raise ProviderError(
+                    ProviderErrorKind.CANCELLED,
+                    "Provider stream cancelled",
+                    provider=self.llm.__class__.__name__,
+                )
+            item = await stream_events.get()
+            if isinstance(item, LLMResponse):
+                return item
+            if isinstance(item, BaseException):
+                raise item
+            kind, payload = item
+            if kind == "text":
+                if payload:
+                    emit(AgentEvent(kind=AgentEventKind.TOKEN, text=str(payload)))
+            # "usage" and "tool_call_delta" are informational for richer
+            # consumers; the loop waits for the authoritative LLMResponse.
 
     def _record_usage(self, run: TaskRun, response: LLMResponse) -> None:
         """Capture provider-reported usage into the run ledger and the estimator.
@@ -620,15 +918,19 @@ class Agent:
         )
         self.context.note_reported_usage(usage)
 
-    def _enforce_context_budget(self) -> None:
+    def _enforce_context_budget(self, emit: Callable[[AgentEvent], None] | None = None) -> None:
         """Compact the conversation when its estimated size crosses the soft limit.
 
         The budget is ``context_size * context_soft_limit_ratio`` from the
         provider capabilities and agent behavior config. Providers without a
         usable ``context_size`` (non-positive or missing) skip the check. A
-        real compaction prints a one-line notice in verbose mode and is
-        reported through the ``on_compaction`` hook; no-op compactions are
-        silent and uncounted.
+        real compaction prints a one-line notice in verbose mode, is reported
+        through the ``on_compaction`` hook and — when an event sink is
+        provided (HH-05) — as a ``status`` event, so streaming surfaces see
+        mid-run compactions; no-op compactions are silent and uncounted.
+
+        Args:
+            emit: Optional sink receiving the compaction status event.
         """
         context_size = getattr(self.llm.get_capabilities(), "context_size", None)
         if not isinstance(context_size, int) or isinstance(context_size, bool) or context_size <= 0:
@@ -654,6 +956,20 @@ class Agent:
             self.console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")
         if self.config.on_compaction is not None:
             self.config.on_compaction(notice)
+        if emit is not None:
+            emit(
+                AgentEvent(
+                    kind=AgentEventKind.STATUS,
+                    text=format_compaction_notice(notice),
+                    data={
+                        "kind": "compaction",
+                        "tokens_before": notice.tokens_before,
+                        "tokens_after": notice.tokens_after,
+                        "elided_messages": notice.elided_messages,
+                        "target_tokens": notice.target_tokens,
+                    },
+                )
+            )
         self._record_event(
             RunEventKind.COMPACTION,
             {
@@ -687,13 +1003,14 @@ class Agent:
         """
         return self.config.cancel_event is not None and self.config.cancel_event.is_set()
 
-    def _finish_cancelled(self, run: TaskRun) -> str:
+    def _finish_cancelled(self, run: TaskRun, emit: Callable[[AgentEvent], None] | None = None) -> str:
         """Complete a cancelled run cleanly: failed TaskRun, saved session, final report.
 
         No recovery prompt is injected on the cancellation path.
 
         Args:
             run: The active TaskRun.
+            emit: Optional sink receiving the terminal ``final_report`` event.
 
         Returns:
             The status-bearing final report for the cancelled run.
@@ -703,14 +1020,18 @@ class Agent:
         self._record_event(RunEventKind.CANCELLATION, {"reason": "cancelled by user"})
         run.transition(TaskState.FAILED)
         self._save_session_snapshot()
-        return self._finalize(run, "Cancelled by user")
+        report = self._finalize(run, "Cancelled by user")
+        if emit is not None:
+            emit(_final_report_event(run, report))
+        return report
 
-    def _fail_fast(self, run: TaskRun, error: ProviderError) -> str:
+    def _fail_fast(self, run: TaskRun, error: ProviderError, emit: Callable[[AgentEvent], None] | None = None) -> str:
         """End the run on a non-retryable provider failure without a recovery prompt.
 
         Args:
             run: The active TaskRun.
             error: The normalized provider error that ended the run.
+            emit: Optional sink receiving the terminal ``final_report`` event.
 
         Returns:
             The status-bearing final report with a provider-qualified reason.
@@ -729,7 +1050,10 @@ class Agent:
         run.failure_message = reason
         run.transition(TaskState.FAILED)
         self._save_session_snapshot()
-        return self._finalize(run, reason)
+        report = self._finalize(run, reason)
+        if emit is not None:
+            emit(_final_report_event(run, report))
+        return report
 
     def _save_session_snapshot(self) -> None:
         """Persist the current conversation through the configured SessionStore, if any."""
@@ -757,7 +1081,60 @@ class Agent:
         """
         return hashlib.sha256("\n\x1e".join(results).encode("utf-8")).hexdigest()
 
-    async def _execute_tools(self, tool_calls: list[ToolCall], *, run: TaskRun | None = None) -> list[dict]:
+    def _approval_callback_for(self, emit: Callable[[AgentEvent], None]) -> ApprovalCallback:
+        """Wrap the configured approval callback with streaming events (HH-05).
+
+        The wrapper emits ``approval_required`` before invoking the callback
+        and ``approval_decided`` with the outcome afterwards. The callback
+        itself stays the configured synchronous callable, so the stream
+        pauses naturally while it blocks on the decision and no tool executes
+        before the decision is made. When no callback is configured the
+        wrapper still emits the bracket and denies, matching the historical
+        behavior of ``TaskRun.before_tool`` for a missing callback.
+
+        Args:
+            emit: Sink receiving the approval event bracket.
+
+        Returns:
+            The wrapped approval callback.
+        """
+        inner = self.config.approval_callback
+
+        def wrapped(call: ToolCall) -> bool:
+            """Emit the approval bracket around the configured decision.
+
+            Args:
+                call: The approval-shaped tool call presented to the human.
+
+            Returns:
+                The human's decision (False when no callback is configured).
+            """
+            emit(
+                AgentEvent(
+                    kind=AgentEventKind.APPROVAL_REQUIRED,
+                    text=format_approval_prompt(call),
+                    data={"tool": call.name, "call_id": call.id},
+                )
+            )
+            approved = inner is not None and bool(inner(call))
+            emit(
+                AgentEvent(
+                    kind=AgentEventKind.APPROVAL_DECIDED,
+                    text="approved" if approved else "denied",
+                    data={"tool": call.name, "call_id": call.id, "approved": approved},
+                )
+            )
+            return approved
+
+        return wrapped
+
+    async def _execute_tools(
+        self,
+        tool_calls: list[ToolCall],
+        *,
+        run: TaskRun | None = None,
+        emit: Callable[[AgentEvent], None] | None = None,
+    ) -> list[dict]:
         """
         Execute tool calls.
 
@@ -765,10 +1142,15 @@ class Agent:
         transcript events (HH-04); approval and state-transition events are
         drained from the TaskRun at the same boundaries so the transcript
         mirrors the workflow chronology. Recording never affects execution.
+        When an event sink is provided (HH-05), each call also emits
+        ``tool_call_started`` before execution and ``tool_result`` after it,
+        and mutation/verification calls emit the ``approval_required`` /
+        ``approval_decided`` bracket around the (unchanged) approval callback.
 
         Args:
             tool_calls: List of tool calls from LLM
             run: Optional active TaskRun for workflow policy and evidence.
+            emit: Optional sink receiving tool and approval events.
 
         Returns:
             List of execution results
@@ -784,6 +1166,14 @@ class Agent:
                 RunEventKind.TOOL_CALL,
                 {"tool": tool_call.name, "call_id": tool_call.id, "parameters": tool_call.parameters},
             )
+            if emit is not None:
+                emit(
+                    AgentEvent(
+                        kind=AgentEventKind.TOOL_CALL_STARTED,
+                        text=tool_call.name,
+                        data={"tool": tool_call.name, "call_id": tool_call.id, "parameters": tool_call.parameters},
+                    )
+                )
 
             try:
                 if tool_call.name == "submit_plan":
@@ -802,7 +1192,9 @@ class Agent:
                         tool_call,
                         planning_enabled=self.config.planning_enabled,
                         require_approval=self.config.require_user_approval,
-                        approval_callback=self.config.approval_callback,
+                        approval_callback=(
+                            self._approval_callback_for(emit) if emit is not None else self.config.approval_callback
+                        ),
                     )
                     # Approval prompts and policy denials happen inside
                     # before_tool; drain them before the result event.
@@ -810,6 +1202,19 @@ class Agent:
                 result = denial or await self.tools.execute_tool(tool_call.name, **tool_call.parameters)
                 results.append(result)
                 self._record_tool_result_event(tool_call, result)
+                if emit is not None:
+                    emit(
+                        AgentEvent(
+                            kind=AgentEventKind.TOOL_RESULT,
+                            text=tool_call.name,
+                            data={
+                                "tool": tool_call.name,
+                                "call_id": tool_call.id,
+                                "success": bool(result.get("success")),
+                                "error": result.get("error"),
+                            },
+                        )
+                    )
                 if run is not None:
                     run.observe(tool_call, result)
                     self._drain_run_events(run)
@@ -825,6 +1230,19 @@ class Agent:
                 error_result = {"success": False, "result": None, "error": f"Tool execution exception: {str(e)}"}
                 results.append(error_result)
                 self._record_tool_result_event(tool_call, error_result)
+                if emit is not None:
+                    emit(
+                        AgentEvent(
+                            kind=AgentEventKind.TOOL_RESULT,
+                            text=tool_call.name,
+                            data={
+                                "tool": tool_call.name,
+                                "call_id": tool_call.id,
+                                "success": False,
+                                "error": error_result["error"],
+                            },
+                        )
+                    )
 
                 if self.config.verbose:
                     self.console.print(f"[red][X] {tool_call.name} exception: {str(e)}[/red]")

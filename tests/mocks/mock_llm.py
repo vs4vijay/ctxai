@@ -5,6 +5,7 @@ This mock provider returns predefined responses instead of making real API calls
 enabling fast, deterministic testing without costs.
 """
 
+import re
 from collections.abc import Generator
 from dataclasses import replace
 from typing import Any
@@ -15,8 +16,21 @@ from ctxai.agent.llm.base import (
     LLMResponse,
     Message,
     ProviderCapabilities,
+    StreamEvent,
     ToolCall,
 )
+
+
+def _token_chunks(content: str) -> list[str]:
+    """Split content into whitespace-preserving token deltas.
+
+    Args:
+        content: The full response content.
+
+    Returns:
+        Ordered chunks whose concatenation is exactly ``content``.
+    """
+    return [match.group(0) for match in re.finditer(r"\S+\s*|\s+", content)]
 
 
 class MockLLMProvider(BaseLLMProvider):
@@ -25,8 +39,9 @@ class MockLLMProvider(BaseLLMProvider):
 
     Useful for testing agent workflows without actual API calls.
     Supports configuring exact sequences of responses including tool calls,
-    per-response usage payloads, and an injected context_size for
-    context-budget (HH-03) tests.
+    per-response usage payloads, an injected context_size for
+    context-budget (HH-03) tests, and a streaming mode (HH-05) that emits
+    scripted token deltas via ``stream_chat_events``.
     """
 
     def __init__(
@@ -34,6 +49,7 @@ class MockLLMProvider(BaseLLMProvider):
         config: AgentLLMConfig = None,
         responses: list[dict[str, Any]] = None,
         context_size: int | None = None,
+        supports_streaming: bool = False,
     ):
         """
         Initialize mock LLM provider.
@@ -47,6 +63,10 @@ class MockLLMProvider(BaseLLMProvider):
                 - usage: Usage dict (prompt_tokens/completion_tokens/total_tokens)
             context_size: Optional context size reported by get_capabilities()
                 (defaults to the ProviderCapabilities default when None)
+            supports_streaming: When True the provider reports
+                ``capabilities.streaming = True`` and ``stream_chat_events``
+                streams the scripted content as token deltas; when False (the
+                default) it degrades to the buffered base-class fallback.
         """
         # Create dummy config if none provided
         if config is None:
@@ -59,6 +79,7 @@ class MockLLMProvider(BaseLLMProvider):
         self.call_count = 0
         self.call_history = []  # Track all calls for assertions
         self.context_size = context_size
+        self.supports_streaming = supports_streaming
 
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
@@ -66,14 +87,17 @@ class MockLLMProvider(BaseLLMProvider):
 
     def get_capabilities(self) -> ProviderCapabilities:
         """
-        Report capabilities, honoring an injected context_size.
+        Report capabilities, honoring an injected context_size and streaming mode.
 
         Returns:
-            ProviderCapabilities with the injected context_size when set.
+            ProviderCapabilities with the injected context_size when set, and
+            ``streaming`` reflecting ``supports_streaming``.
         """
         capabilities = super().get_capabilities()
         if self.context_size is not None:
-            return replace(capabilities, context_size=self.context_size)
+            capabilities = replace(capabilities, context_size=self.context_size)
+        if not self.supports_streaming:
+            capabilities = replace(capabilities, streaming=False)
         return capabilities
 
     def chat(self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs) -> LLMResponse:
@@ -157,6 +181,40 @@ class MockLLMProvider(BaseLLMProvider):
 
         # Yield content character by character to simulate streaming
         yield from response.content
+
+    def stream_chat_events(
+        self, messages: list[Message], tools: list[dict[str, Any]] | None = None, **kwargs
+    ) -> Generator[StreamEvent, None, LLMResponse]:
+        """
+        Stream the scripted response as token deltas and return the response.
+
+        With ``supports_streaming`` enabled, the configured content is emitted
+        as whitespace-preserving word deltas (scripted token streaming) and the
+        complete LLMResponse is returned. With streaming disabled, this
+        delegates to the base-class buffered fallback (one ``("text", ...)``
+        event). Both paths route through :meth:`chat`, so call counting,
+        call history, and scripted subclass overrides behave identically on
+        the streaming and buffered paths.
+
+        Args:
+            messages: List of conversation messages
+            tools: Optional list of tool definitions
+            **kwargs: Additional arguments (ignored)
+
+        Yields:
+            StreamEvent tuples (``("text", str)`` deltas)
+
+        Returns:
+            The complete LLMResponse for the call
+        """
+        if not self.supports_streaming:
+            response = yield from super().stream_chat_events(messages, tools=tools, **kwargs)
+            return response
+
+        response = self.chat(messages, tools=tools, **kwargs)
+        for chunk in _token_chunks(response.content):
+            yield ("text", chunk)
+        return response
 
     def supports_function_calling(self) -> bool:
         """
