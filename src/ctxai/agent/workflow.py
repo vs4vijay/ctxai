@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -61,6 +62,30 @@ def classify_provider_failure(kind: ProviderErrorKind) -> FailureKind:
 
 
 ApprovalCallback = Callable[[ToolCall], bool]
+
+PLAN_MODES: tuple[str, ...] = ("auto", "force", "off")
+"""Explicit planning override values: keyword classification, always plan, never plan."""
+
+MAX_APPROVAL_REPROMPTS = 3
+"""Stale-approval re-prompts allowed before the call fails with APPROVAL_DENIAL."""
+
+
+def validate_plan_mode(value: str) -> str:
+    """Validate a plan-mode override value.
+
+    Args:
+        value: One of ``auto`` (keyword classification), ``force`` (always plan),
+            or ``off`` (never plan).
+
+    Returns:
+        The validated value.
+
+    Raises:
+        ValueError: When the value is not a known plan mode.
+    """
+    if value not in PLAN_MODES:
+        raise ValueError(f"plan_mode must be one of {', '.join(PLAN_MODES)}")
+    return value
 
 
 def format_approval_prompt(call: ToolCall) -> str:
@@ -264,6 +289,9 @@ class TaskRun:
     # approved write_file/edit_file call.
     run_id: str | None = None
     checkpoint_manager: CheckpointManager | None = None
+    # HH-07: explicit planning override channel ("auto" keeps keyword
+    # classification; "force" always requires submit_plan; "off" never does).
+    plan_mode: str = "auto"
 
     MUTATION_TOOLS = frozenset({"write_file", "edit_file"})
     INSPECTION_TOOLS = frozenset({"read_file", "semantic_search", "grep", "glob", "list_files"})
@@ -271,8 +299,9 @@ class TaskRun:
     VERIFY_TOOLS = frozenset({"bash"})
 
     def __post_init__(self) -> None:
+        self.plan_mode = validate_plan_mode(self.plan_mode)
         self.project_root = Path(os.path.realpath(self.project_root))
-        self.plan_required = self.requires_plan(self.goal)
+        self.plan_required = self.resolve_plan_required(self.goal, self.plan_mode)
         # Drain cursors for to_event_payloads(): how many entries of each
         # evidence list have already been emitted as transcript events.
         self._emitted_transitions = 1  # transitions[0] is the initial state carried by run_started
@@ -299,6 +328,31 @@ class TaskRun:
             "dependency upgrade",
         )
         return any(signal in normalized for signal in signals)
+
+    @staticmethod
+    def resolve_plan_required(goal: str, plan_mode: str = "auto") -> bool:
+        """Classify whether a goal must go through submit_plan under a plan mode.
+
+        The explicit override channel (HH-07) wins over keyword classification:
+        ``force`` requires a plan for every task, ``off`` never does (tools stay
+        policy-gated), and ``auto`` keeps :meth:`requires_plan`.
+
+        Args:
+            goal: The user's task goal.
+            plan_mode: ``auto``, ``force``, or ``off``.
+
+        Returns:
+            Whether mutations/verification require an approved plan.
+
+        Raises:
+            ValueError: When plan_mode is not a known plan mode.
+        """
+        validate_plan_mode(plan_mode)
+        if plan_mode == "force":
+            return True
+        if plan_mode == "off":
+            return False
+        return TaskRun.requires_plan(goal)
 
     def submit_plan(self, *, goal: str, reasoning: str, actions: list[dict[str, Any]]) -> dict[str, Any]:
         """Validate and store a task-specific plan grounded in inspected evidence."""
@@ -368,9 +422,83 @@ class TaskRun:
                 # An ambiguous edit cannot be previewed; it is denied at
                 # execution with a count-bearing error, so nothing is written.
                 after = before
-            parameters["proposed_diff"] = edit_diff(str(target_value), before, after)
+            proposed_diff = edit_diff(str(target_value), before, after)
+            parameters["proposed_diff"] = proposed_diff
+            # HH-07 approval binding: hash the exact diff shown and the exact
+            # pre-approval bytes so the loop can detect a stale approval (the
+            # file changed between the prompt and execution) and re-prompt
+            # instead of executing an outdated diff. ``None`` records that the
+            # file did not exist at approval time (create semantics).
+            parameters["proposed_diff_sha256"] = hashlib.sha256(proposed_diff.encode("utf-8")).hexdigest()
+            parameters["pre_approval_content_sha256"] = self._content_hash(target)
         parameters["approval_target"] = target_value or parameters.get("command") or call.name
         return ToolCall(id=call.id, name=call.name, parameters=parameters)
+
+    @staticmethod
+    def _content_hash(target: Path) -> str | None:
+        """SHA-256 of a file's bytes, or None when absent or unreadable.
+
+        Args:
+            target: The file to hash.
+
+        Returns:
+            The hex digest, or None when the file does not exist (or its bytes
+            cannot be read), which the binding check treats as "expected absent".
+        """
+        try:
+            if not target.is_file():
+                return None
+            return hashlib.sha256(target.read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    def _canonical_mutation_target(self, call: ToolCall) -> Path | None:
+        """Canonical absolute target path of a mutation call, or None.
+
+        Args:
+            call: The tool call holding ``path``/``file_path`` parameters.
+
+        Returns:
+            The realpath'd target path, or None when the call carries no path.
+        """
+        target_value = call.parameters.get("path") or call.parameters.get("file_path")
+        if not target_value:
+            return None
+        target = Path(str(target_value)).expanduser()
+        if not target.is_absolute():
+            target = self.project_root / target
+        return self.canonical(target)
+
+    def _stale_approval_reason(self, call: ToolCall, approval_call: ToolCall) -> str | None:
+        """Return why an approval is stale (binding mismatch), or None when fresh.
+
+        Mutation approvals bind to the exact pre-approval bytes: the target must
+        still hash to the value captured when the diff was shown. A file that
+        appeared after an approval for a not-yet-existing file is equally stale.
+        Commands carry no content binding.
+
+        Args:
+            call: The original tool call.
+            approval_call: The approval-shaped call holding the binding hashes.
+
+        Returns:
+            A human-readable staleness reason, or None when the binding holds.
+        """
+        if call.name not in self.MUTATION_TOOLS:
+            return None
+        target = self._canonical_mutation_target(call)
+        if target is None:
+            return None
+        expected = approval_call.parameters.get("pre_approval_content_sha256")
+        if expected is None:
+            if target.exists():
+                return f"{target} appeared after the diff was shown"
+            return None
+        if not target.is_file():
+            return f"{target} was removed after the diff was shown"
+        if self._content_hash(target) != expected:
+            return f"{target} changed after the diff was shown"
+        return None
 
     @staticmethod
     def canonical(path: Path) -> Path:
@@ -421,6 +549,10 @@ class TaskRun:
                         "tool": approval.get("tool"),
                         "parameters": approval.get("parameters") or {},
                         "approved": bool(approval.get("approved")),
+                        # HH-07: the decision scope behind the boolean —
+                        # "once", "session", or "deny" (None on surfaces that
+                        # resolve decisions without the loop's resolver).
+                        "decision": approval.get("decision"),
                     },
                 )
             )
@@ -485,10 +617,7 @@ class TaskRun:
                     f"Workflow denied: {call.name} is not an exact action in the approved plan",
                 )
         target_value = call.parameters.get("path") or call.parameters.get("file_path")
-        target = Path(str(target_value)).expanduser() if target_value else None
-        if target is not None and not target.is_absolute():
-            target = self.project_root / target
-        target = self.canonical(target) if target is not None else None
+        target = self._canonical_mutation_target(call)
         must_inspect = call.name == "edit_file" or bool(target and target.exists())
         if must_inspect and target not in self.inspected_files:
             return self._deny(
@@ -497,20 +626,38 @@ class TaskRun:
             )
         if require_approval:
             self.transition(TaskState.APPROVE)
-            approval_call = self._approval_call(call)
-            approved = approval_callback is not None and approval_callback(approval_call)
-            self.approvals.append(
-                {
-                    "tool": call.name,
-                    "parameters": approval_call.parameters,
-                    "approved": approved,
-                }
-            )
-            if not approved:
-                return self._deny(
-                    FailureKind.APPROVAL_DENIAL,
-                    f"Approval denied for {call.name}: {approval_call.parameters['approval_target']}",
+            # HH-07: each round builds a fresh approval call (fresh diff and
+            # fresh binding hashes), records the decision, and — for mutations
+            # — verifies the file still matches the approved pre-approval
+            # bytes. A stale approval re-prompts (the human sees a fresh diff)
+            # and never executes; after MAX_APPROVAL_REPROMPTS stale rounds the
+            # call fails with APPROVAL_DENIAL instead of looping forever.
+            stale_reprompts = 0
+            while True:
+                approval_call = self._approval_call(call)
+                approved = approval_callback is not None and approval_callback(approval_call)
+                self.approvals.append(
+                    {
+                        "tool": call.name,
+                        "parameters": approval_call.parameters,
+                        "approved": approved,
+                    }
                 )
+                if not approved:
+                    return self._deny(
+                        FailureKind.APPROVAL_DENIAL,
+                        f"Approval denied for {call.name}: {approval_call.parameters['approval_target']}",
+                    )
+                stale_reason = self._stale_approval_reason(call, approval_call)
+                if stale_reason is None:
+                    break
+                stale_reprompts += 1
+                if stale_reprompts > MAX_APPROVAL_REPROMPTS:
+                    return self._deny(
+                        FailureKind.APPROVAL_DENIAL,
+                        f"Approval for {call.name} went stale {stale_reprompts} times "
+                        f"({stale_reason}); the approved diff no longer matches the file",
+                    )
         # HH-06: capture the pre-mutation state before the approved mutation
         # runs (first touch per run). Failures are diagnostics — checkpointing
         # never blocks the mutation.

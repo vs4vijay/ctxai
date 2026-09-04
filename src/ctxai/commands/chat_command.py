@@ -19,10 +19,13 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.prompt import Confirm
+from rich.syntax import Syntax
 
+from ..agent.approvals import APPROVAL_MEMORY_KEY, ApprovalDecision
 from ..agent.checkpoints import CheckpointManager
 from ..agent.config import AgentConfig, AgentLLMConfig
 from ..agent.core import Agent, AgentLoopConfig, format_compaction_notice
+from ..agent.llm.base import ToolCall
 from ..agent.resilience import format_retry_notice
 from ..agent.sessions import SessionRecord, SessionStore
 from ..agent.theme import (
@@ -47,7 +50,7 @@ from ..agent.tools.file_ops import (
 )
 from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
 from ..agent.tools.registry import ToolRegistry
-from ..agent.workflow import format_approval_prompt
+from ..agent.workflow import validate_plan_mode
 from ..repository_context import discover_repository_indexes
 
 # Force UTF-8 encoding on Windows for Unicode support
@@ -234,6 +237,7 @@ class ChatCommandCompleter(Completer):
             "/clear": "Clear conversation history",
             "/provider": "Choose or add a provider (global config)",
             "/model": "Change provider/model",
+            "/plan": "Set planning mode: /plan auto|force|off",
             "/exit": "Exit the chat",
             "/quit": "Exit the chat",
             "/bye": "Exit the chat",
@@ -262,8 +266,56 @@ class ChatCommandCompleter(Completer):
 
 
 # ============================================================================
-# HELPER FUNCTIONS
+# APPROVAL PROMPT (HH-07)
 # ============================================================================
+
+
+PLAN_MODE_HINTS = {
+    "auto": "keyword classification decides when submit_plan is required",
+    "force": "every task goes through submit_plan before mutations/verification",
+    "off": "never plan; tools remain approval- and policy-gated",
+}
+
+
+def prompt_approval_decision(console: NeonConsole, call: ToolCall) -> ApprovalDecision:
+    """Render an approval prompt with the proposed diff and collect a decision.
+
+    The proposed diff is rendered with syntax highlighting when present, and
+    the prompt offers ``[y] once / [a] always this session / [n] no``. A
+    session grant is recorded by the agent loop into the session approval
+    memory — this callback only renders and asks. Non-interactive stdin, EOF,
+    and interrupts deny (fail closed).
+
+    Args:
+        console: The chat console.
+        call: The approval-shaped tool call (``TaskRun._approval_call`` output).
+
+    Returns:
+        The human's ApprovalDecision.
+    """
+    target = call.parameters.get("approval_target") or call.name
+    console.print(f"\n[bold {NEON_GOLD}]? Approve {call.name}: {target}?[/bold {NEON_GOLD}]")
+    proposed_diff = call.parameters.get("proposed_diff")
+    if proposed_diff:
+        console.print(Syntax(str(proposed_diff), "diff", theme="ansi_dark", word_wrap=True))
+    if sys.stdin is None or not sys.stdin.isatty():
+        console.print("[dim]Non-interactive terminal; denying (fail closed).[/dim]")
+        return ApprovalDecision.DENY
+    try:
+        answer = (
+            console.console.input("[bold]?[/bold] [cyan][y] once / [a] always this session / [n] no[/cyan] ")
+            .strip()
+            .lower()
+        )
+    except (EOFError, KeyboardInterrupt):
+        console.print("[dim]Denied (no answer).[/dim]")
+        return ApprovalDecision.DENY
+    if answer in {"y", "yes"}:
+        return ApprovalDecision.APPROVE_ONCE
+    if answer in {"a", "always", "session"}:
+        return ApprovalDecision.APPROVE_SESSION
+    console.print("[dim]Denied.[/dim]")
+    return ApprovalDecision.DENY
 
 
 def print_banner(provider: str, model: str, verbose: bool = False):
@@ -293,6 +345,7 @@ def print_help():
 • [bold #FFD700]/model [provider/model][/bold #FFD700] - Change provider & model
 • [bold #FFD700]/stats[/bold #FFD700] - Show session statistics
 • [bold #FFD700]/context[/bold #FFD700] - Show context budget, measured usage, and compaction state
+• [bold #FFD700]/plan [auto|force|off][/bold #FFD700] - Show or set planning mode for the next tasks
 • [bold #FFD700]/exit[/bold #FFD700], [bold #FFD700]/quit[/bold #FFD700],
   [bold #FFD700]/bye[/bold #FFD700] - Exit the chat
 • [bold #FFD700]/tools[/bold #FFD700] - List available tools
@@ -755,6 +808,7 @@ async def interactive_chat(
     use_repomap: bool = False,
     verbose: bool = False,
     max_iterations: int = 10,
+    plan_mode: str = "auto",
 ):
     """
     Run interactive chat mode with concurrent message processing.
@@ -773,6 +827,7 @@ async def interactive_chat(
         use_repomap: Use repository mapping for context
         verbose: Enable verbose output
         max_iterations: Max iterations per request
+        plan_mode: Planning override for tasks (HH-07): auto, force, or off
     """
     from ..agent.llm.factory import LLMProviderFactory
     from ..config import ConfigManager
@@ -781,6 +836,12 @@ async def interactive_chat(
     compat_warning = _check_terminal_compatibility()
     if compat_warning:
         console.print_warning(compat_warning)
+        return
+
+    try:
+        plan_mode = validate_plan_mode(plan_mode)
+    except ValueError as error:
+        console.print_error(str(error))
         return
 
     # Load config (project layer)
@@ -920,7 +981,10 @@ async def interactive_chat(
         require_user_approval=agent_config.behavior.require_user_approval,
         max_iterations=max_iterations,
         verbose=verbose,
-        approval_callback=(lambda call: Confirm.ask(format_approval_prompt(call), default=False)),
+        # HH-07 decision ergonomics: the callback returns an ApprovalDecision
+        # (once / always-this-session / no); the loop records session grants
+        # into the session approval memory and adapts booleans elsewhere.
+        approval_callback=(lambda call: prompt_approval_decision(console, call)),
         cancel_event=asyncio.Event(),
         on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
         on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
@@ -933,6 +997,7 @@ async def interactive_chat(
             retention=agent_config.behavior.checkpoint_retention,
             max_bytes=agent_config.behavior.checkpoint_max_bytes,
         ),
+        plan_mode=plan_mode,
     )
     agent = Agent(loop_config)
 
@@ -1003,9 +1068,17 @@ async def interactive_chat(
                 else:
                     console.print(f"[dim]  ✗ {event.text}: {event.data.get('error') or 'failed'}[/dim]")
             elif event.kind is AgentEventKind.APPROVAL_REQUIRED:
-                console.print(f"[{NEON_GOLD}]? {event.text}[/{NEON_GOLD}]")
+                # The decision prompt itself (HH-07) renders the diff with
+                # syntax highlighting; here we print the compact question line.
+                target = event.data.get("target")
+                if target:
+                    console.print(f"[{NEON_GOLD}]? Approval required: {event.data.get('tool')}: {target}[/{NEON_GOLD}]")
+                else:
+                    console.print(f"[{NEON_GOLD}]? {event.text}[/{NEON_GOLD}]")
             elif event.kind is AgentEventKind.APPROVAL_DECIDED:
-                console.print(f"[dim]  {'approved' if event.data.get('approved') else 'denied'}[/dim]")
+                decision = event.data.get("decision")
+                scope = f" ({decision})" if decision else ""
+                console.print(f"[dim]  {'approved' if event.data.get('approved') else 'denied'}{scope}[/dim]")
             elif event.kind is AgentEventKind.STATUS:
                 streamed_chunks.clear()
                 live.update(Text("", style="dim"))
@@ -1122,6 +1195,8 @@ async def interactive_chat(
 
                     elif command == "/clear":
                         agent.clear_conversation()
+                        # Session-scope approvals die with the conversation.
+                        agent.context.metadata.pop(APPROVAL_MEMORY_KEY, None)
                         message_queue.clear()
                         session_store.clear(current_session)
                         console.print_success("Conversation cleared")
@@ -1139,6 +1214,27 @@ async def interactive_chat(
 
                     elif command == "/context":
                         show_context(agent)
+                        continue
+
+                    elif command == "/plan" or command.startswith("/plan "):
+                        parts = user_input.split(maxsplit=1)
+                        plan_arg = parts[1].strip().lower() if len(parts) > 1 else ""
+                        if not plan_arg:
+                            hint = PLAN_MODE_HINTS.get(loop_config.plan_mode, "")
+                            console.print(
+                                f"\n[bold {NEON_CYAN}]Plan Mode:[/bold {NEON_CYAN}] "
+                                f"[bold]{loop_config.plan_mode}[/bold] [dim]({hint})[/dim]"
+                            )
+                            console.print("[dim]Set with /plan auto|force|off[/dim]\n")
+                            continue
+                        try:
+                            loop_config.set_plan_mode(plan_arg)
+                        except ValueError:
+                            console.print_error("Plan mode must be one of: auto, force, off")
+                            continue
+                        console.print_success(
+                            f"Plan mode set to {plan_arg} ({PLAN_MODE_HINTS[plan_arg]}) for the next tasks"
+                        )
                         continue
 
                     elif command == "/tools":
@@ -1323,6 +1419,7 @@ def start_chat(
     use_repomap: bool = False,
     verbose: bool = False,
     max_iterations: int = 10,
+    plan_mode: str = "auto",
 ):
     """
     Start interactive chat session.
@@ -1338,6 +1435,7 @@ def start_chat(
         use_repomap: Use repository mapping
         verbose: Enable verbose output
         max_iterations: Max iterations per request
+        plan_mode: Planning override for tasks (HH-07): auto, force, or off
     """
     if working_directory is None:
         working_directory = Path.cwd()
@@ -1355,5 +1453,6 @@ def start_chat(
             use_repomap=use_repomap,
             verbose=verbose,
             max_iterations=max_iterations,
+            plan_mode=plan_mode,
         )
     )

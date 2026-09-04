@@ -220,10 +220,91 @@ Support matrix (generated from `PROVIDER_SPECS`): see
 
 
 
+## Approvals, session memory, and plan modes (HH-07)
+
+Every approval-required tool call (`write_file`, `edit_file`, `bash`) is resolved in one place: the
+loop's per-call approval invocation (`Agent._approval_invocation`) wraps `TaskRun.before_tool`'s
+single approval point, so nothing executes before a decision and no surface can double-prompt.
+
+### Decisions
+
+`ApprovalDecision` (`agent/approvals.py`, Part II contract) replaces the boolean callback protocol:
+
+- `APPROVE_ONCE` (`"once"`) — approve this exact action once.
+- `APPROVE_SESSION` (`"session"`) — approve this exact `(tool, target)` pair for the session.
+- `DENY` (`"deny"`) — the existing `APPROVAL_DENIAL` failure path.
+
+Legacy boolean callbacks keep working unchanged (`True` → once, `False` → deny) through
+`as_decision_callback`/`adapt_bool_callback`; raw decision-value strings coerce, and anything
+unrecognizable fails closed to `DENY`. MCP and the one-shot `code` command keep their current
+semantics (approve once via callback or deny).
+
+The interactive chat prompt renders the proposed diff with syntax highlighting and offers
+`[y] once / [a] always this session / [n] no`. Non-interactive stdin, EOF, and interrupts deny
+(fail closed).
+
+### Session-scope memory
+
+`APPROVE_SESSION` records the `(tool, target)` key into `ApprovalMemory` (`agent/approvals.py`),
+stored under the `approval_memory` key of `ConversationContext.metadata` — persisted with sessions
+through the existing `SessionStore` and redacted like all session data. Matching keys auto-approve
+without prompting, while the `approval_required`/`approval_decided` event bracket is still emitted
+with `decision: "session"` and `source: "session_memory"` so transcripts reflect what happened.
+
+- Key patterns: the canonical exact path (repository-relative) for mutations; the executable name
+  for commands (`bash`). A grant therefore covers exactly one tool plus one pattern — it never
+  becomes a global allow, and command policy, capability checks, and the stale-approval binding
+  keep applying to every execution.
+- Scope: entries live in the session only and never reach global configuration. They expire after
+  8 hours (a safety bound for resumed sessions), and `/clear` drops them immediately.
+- Nothing is ever auto-approved by memory on a **re-prompt** round: after staleness is detected the
+  human always sees the fresh diff.
+
+### Approval binding (stale-diff protection)
+
+`TaskRun._approval_call` attaches `proposed_diff_sha256` (sha256 of the exact diff shown) and
+`pre_approval_content_sha256` (sha256 of the target's bytes at approval time; `None` for
+not-yet-existing files, omitted for commands). Before an approved mutation executes, the loop
+re-verifies the file hash:
+
+- match → execute;
+- mismatch (file changed, removed, or appeared after the diff was shown) → **re-prompt with a
+  fresh diff**; the stale approval never executes;
+- after at most 3 stale re-prompts the call fails with `APPROVAL_DENIAL` instead of looping.
+
+### Plan modes
+
+`AgentLoopConfig.plan_mode` (default `auto`) is the explicit override channel over keyword
+classification (`TaskRun.requires_plan`):
+
+| Mode    | Effect                                                                                   |
+|---------|------------------------------------------------------------------------------------------|
+| `auto`  | Keyword classification decides when `submit_plan` is required (unchanged default).        |
+| `force` | Every task must `submit_plan` before mutations/verification; enables planning even when `behavior.planning_enabled` is false. |
+| `off`   | Never require a plan; tools remain approval- and policy-gated.                           |
+
+Set it with `ctxai chat --plan auto|force|off`, the `/plan` chat command (persists for the session),
+or `ctxai code --plan auto|force|off` (one-shot).
+
+### Transcript
+
+Approval transcript events record the decision scope (`decision`: `once`/`session`/`deny`) next to
+the historical `approved` boolean; streaming `approval_decided` events carry `decision` and
+`source` (`callback` | `session_memory`).
+
+Tests: `tests/test_approvals.py` (decisions, adaptation, memory keying/expiry/round-trip,
+binding, plan-mode matrix) and `tests/e2e/test_hh07_approvals.py` (session suppression, denial
+report, stale re-prompt, `--plan force`/`off` routing).
+
+
+
 ## Where the pieces live
 
 - `src/ctxai/agent/resilience.py` — `RetryPolicy`, `RetryNotice`, `backoff_delay`, `call_with_retry`,
   `format_retry_notice`.
+- `src/ctxai/agent/approvals.py` — `ApprovalDecision`, `DecisionCallback`, boolean-callback
+  adaptation (`as_decision_callback`, `adapt_bool_callback`), `ApprovalMemory` (session-scoped
+  grants) and `approval_memory_target` key building (HH-07).
 - `src/ctxai/agent/events.py` — `AgentEvent`, `AgentEventKind`, `StreamEvent` (the loop's event
   vocabulary).
 - `src/ctxai/agent/core.py` — `_run_loop` (the shared core), `_call_llm` (retry + `asyncio.to_thread`,

@@ -353,6 +353,7 @@ def main_callback(ctx: typer.Context):
             use_repomap=False,
             verbose=False,
             max_iterations=10,
+            plan_mode="auto",
         )
 
 
@@ -717,6 +718,11 @@ def chat(
         "--max-iterations",
         help="Maximum iterations per request",
     ),
+    plan_mode: str = typer.Option(
+        "auto",
+        "--plan",
+        help="Planning mode for tasks: auto (keyword classification), force (always submit_plan), off (never plan)",
+    ),
     working_directory: Path = typer.Option(
         None,
         "--working-directory",
@@ -779,6 +785,7 @@ def chat(
     Commands within chat:
         /help    - Show available commands
         /clear   - Clear conversation history
+        /plan    - Show or set planning mode (auto|force|off) for the session
         /exit    - Exit chat mode
         /status  - Show agent status
         /tools   - List available tools
@@ -797,6 +804,7 @@ def chat(
         use_repomap=use_repomap,
         verbose=verbose,
         max_iterations=max_iterations,
+        plan_mode=plan_mode,
     )
 
 
@@ -818,6 +826,11 @@ def code(
         "-m",
         help="Maximum iterations",
     ),
+    plan_mode: str = typer.Option(
+        "auto",
+        "--plan",
+        help="Planning mode for the task: auto (keyword classification), force (always submit_plan), off (never plan)",
+    ),
 ):
     """
     Execute a one-shot coding task with the AI agent.
@@ -829,6 +842,7 @@ def code(
         ctxai code "Create a Python function to validate email addresses"
         ctxai code "Add error handling to the main.py file"
         ctxai code "Generate unit tests for the User class"
+        ctxai code --plan force "Update the VERSION constant"
     """
     import asyncio
 
@@ -885,31 +899,36 @@ def code(
 
         tools.register(SemanticSearchTool(project_path=Path.cwd()))
 
-        loop_config = AgentLoopConfig(
-            llm_provider=llm,
-            tool_registry=tools,
-            agent_config=agent_config,
-            working_directory=Path.cwd(),
-            available_indexes=discover_repository_indexes(Path.cwd()),
-            planning_enabled=agent_config.behavior.planning_enabled,
-            require_user_approval=agent_config.behavior.require_user_approval,
-            max_iterations=max_iterations,
-            verbose=verbose,
-            approval_callback=(lambda call: typer.confirm(format_approval_prompt(call))),
-            on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
-            on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
-            # One-shot run: the process-wide ToolExecutionContext.request_id
-            # is the transcript run id (HH-04). Chat passes none — every
-            # message is a distinct run and gets a fresh id.
-            run_id=execution_context.request_id,
-            # Local pre-mutation checkpoints (HH-06), bounded by the
-            # behavior retention/size config.
-            checkpoint_manager=CheckpointManager.for_project(
-                Path.cwd(),
-                retention=agent_config.behavior.checkpoint_retention,
-                max_bytes=agent_config.behavior.checkpoint_max_bytes,
-            ),
-        )
+        try:
+            loop_config = AgentLoopConfig(
+                llm_provider=llm,
+                tool_registry=tools,
+                agent_config=agent_config,
+                working_directory=Path.cwd(),
+                available_indexes=discover_repository_indexes(Path.cwd()),
+                planning_enabled=agent_config.behavior.planning_enabled,
+                require_user_approval=agent_config.behavior.require_user_approval,
+                max_iterations=max_iterations,
+                verbose=verbose,
+                approval_callback=(lambda call: typer.confirm(format_approval_prompt(call))),
+                on_retry=(lambda notice: console.print(f"[yellow]{format_retry_notice(notice)}[/yellow]")),
+                on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
+                # One-shot run: the process-wide ToolExecutionContext.request_id
+                # is the transcript run id (HH-04). Chat passes none — every
+                # message is a distinct run and gets a fresh id.
+                run_id=execution_context.request_id,
+                # Local pre-mutation checkpoints (HH-06), bounded by the
+                # behavior retention/size config.
+                checkpoint_manager=CheckpointManager.for_project(
+                    Path.cwd(),
+                    retention=agent_config.behavior.checkpoint_retention,
+                    max_bytes=agent_config.behavior.checkpoint_max_bytes,
+                ),
+                plan_mode=plan_mode,
+            )
+        except ValueError as error:
+            console.print(f"[red]{error}[/red]")
+            return
         agent = Agent(loop_config)
 
         console.print(f"\n🤖 [cyan]Task:[/cyan] {task}\n")

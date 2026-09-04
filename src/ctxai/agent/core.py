@@ -15,6 +15,13 @@ from typing import Any
 
 from rich.console import Console
 
+from .approvals import (
+    APPROVAL_MEMORY_KEY,
+    ApprovalDecision,
+    ApprovalMemory,
+    approval_memory_target,
+    as_decision_callback,
+)
 from .checkpoints import CheckpointManager
 from .config import AgentConfig
 from .context import ConversationContext
@@ -41,6 +48,7 @@ from .workflow import (
     classify_provider_failure,
     discover_verification_commands,
     format_approval_prompt,
+    validate_plan_mode,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -160,6 +168,17 @@ class AgentLoopConfig:
     retention, finalizes the checkpoint at run end, and ``TaskRun.before_tool``
     captures each mutated file's pre-mutation bytes before the first
     mutation; ``None`` (the default) disables checkpointing for the surface.
+    ``plan_mode`` (HH-07) overrides keyword classification per task: ``auto``
+    (the default) keeps :meth:`TaskRun.requires_plan`, ``force`` requires
+    ``submit_plan`` before mutations/verification even for tasks the keyword
+    classifier would not flag (and enables planning when
+    ``agent_config.behavior.planning_enabled`` is false), ``off`` never
+    requires a plan while tools remain approval- and policy-gated. The
+    ``approval_callback`` accepts both legacy boolean callbacks (``True`` ->
+    approve once, ``False`` -> deny) and HH-07 ``ApprovalDecision``-returning
+    callbacks; session-scope grants are recorded into the conversation's
+    ``ApprovalMemory`` and auto-approve matching (tool, target) pairs for the
+    rest of the session.
     """
 
     llm_provider: BaseLLMProvider
@@ -180,6 +199,30 @@ class AgentLoopConfig:
     on_compaction: Callable[[CompactionNotice], None] | None = None
     run_id: str | None = None
     checkpoint_manager: CheckpointManager | None = None
+    plan_mode: str = "auto"
+
+    def __post_init__(self) -> None:
+        """Validate constructed configuration values.
+
+        Raises:
+            ValueError: When ``plan_mode`` is not a known plan mode.
+        """
+        self.plan_mode = validate_plan_mode(self.plan_mode)
+
+    def set_plan_mode(self, value: str) -> None:
+        """Validate and switch the planning override at runtime.
+
+        Used by interactive surfaces (the ``/plan`` chat command) to change the
+        mode between tasks without rebuilding the loop configuration.
+
+        Args:
+            value: One of ``auto``, ``force``, or ``off``.
+
+        Raises:
+            ValueError: When the value is not a known plan mode (the current
+                mode is left unchanged).
+        """
+        self.plan_mode = validate_plan_mode(value)
 
 
 class Agent:
@@ -209,10 +252,23 @@ class Agent:
             working_directory=config.working_directory,
             available_indexes=config.available_indexes,
             tool_descriptions=tool_descriptions,
-            planning_enabled=config.planning_enabled,
+            planning_enabled=self._planning_active(),
             verification_commands=discover_verification_commands(config.working_directory),
         )
         self.context.add_system_message(system_prompt)
+
+    def _planning_active(self) -> bool:
+        """Whether planning (``submit_plan``) applies to runs (HH-07).
+
+        ``plan_mode == "force"`` enables planning explicitly, even when
+        ``agent_config.behavior.planning_enabled`` is false; ``off`` and
+        ``auto`` follow the configured flag (``off`` additionally suppresses
+        ``plan_required`` on the TaskRun).
+
+        Returns:
+            True when planning is configured on or forced for this loop.
+        """
+        return bool(self.config.planning_enabled) or self.config.plan_mode == "force"
 
     async def process_message(self, user_message: str) -> str:
         """
@@ -358,6 +414,14 @@ class Agent:
         restore) and marked ``retained`` when the run succeeded. Checkpoint
         failures are diagnostics and never affect the run.
 
+        Approvals (HH-07): every approval-required call resolves in one place
+        — session-scope ``ApprovalMemory`` hits auto-approve (with the event
+        bracket still emitted), other approvals ask the configured callback
+        (booleans adapted), session grants are recorded into the conversation
+        metadata, and a mutation whose file changed between the shown diff and
+        execution re-prompts with a fresh diff (capped, then
+        ``approval_denial``).
+
         Streaming (HH-05): every observable step is reported through the
         synchronous ``emit`` sink as an :class:`AgentEvent` — token deltas
         while the provider streams, usage per LLM call, retry and compaction
@@ -388,10 +452,16 @@ class Agent:
             project_root=self.config.working_directory.resolve(),
             run_id=run_id,
             checkpoint_manager=self.config.checkpoint_manager,
+            plan_mode=self.config.plan_mode,
         )
         self.last_run = run
         self._start_recording(run, user_message, run_id)
         self._start_checkpointing(run_id)
+        # Session-scoped approval memory (HH-07): loaded from the conversation
+        # metadata at run start, mutated by the approval resolver, written back
+        # after each tool batch so session persistence picks it up.
+        approval_memory = self._load_approval_memory()
+        planning_active = self._planning_active()
 
         def finish(completed_run: TaskRun, model_summary: str) -> str:
             """Finalize the run and emit its terminal ``final_report`` event.
@@ -453,7 +523,7 @@ class Agent:
                 tool_format = self._get_tool_format()
                 capabilities = self.llm.get_capabilities()
                 tools = self.tools.get_all_schemas(format=tool_format) if capabilities.tools else None
-                if tools is not None and self.config.planning_enabled:
+                if tools is not None and planning_active:
                     tools.append(self._plan_tool_schema(tool_format))
 
                 # Call LLM
@@ -471,7 +541,9 @@ class Agent:
                         self.context.add_assistant_message(response.content, tool_calls=response.tool_calls)
 
                         # Execute tools
-                        tool_results = await self._execute_tools(response.tool_calls, run=run, emit=emit)
+                        tool_results = await self._execute_tools(
+                            response.tool_calls, run=run, emit=emit, approval_memory=approval_memory
+                        )
 
                         # Add tool results to context
                         current_results: list[str] = []
@@ -605,6 +677,7 @@ class Agent:
                 "provider": self.llm.__class__.__name__,
                 "model": str(getattr(self.llm, "model", "") or "unknown"),
                 "planning_enabled": self.config.planning_enabled,
+                "plan_mode": self.config.plan_mode,
                 "require_user_approval": self.config.require_user_approval,
                 "max_iterations": self.config.max_iterations,
                 "working_directory": str(self.config.working_directory.resolve()),
@@ -1143,52 +1216,145 @@ class Agent:
         """
         return hashlib.sha256("\n\x1e".join(results).encode("utf-8")).hexdigest()
 
-    def _approval_callback_for(self, emit: Callable[[AgentEvent], None]) -> ApprovalCallback:
-        """Wrap the configured approval callback with streaming events (HH-05).
+    def _approval_invocation(
+        self,
+        run: TaskRun | None,
+        memory: ApprovalMemory | None,
+        emit: Callable[[AgentEvent], None],
+    ) -> tuple[ApprovalCallback, list[str]]:
+        """Build the per-call approval callback that resolves HH-07 decisions.
 
-        The wrapper emits ``approval_required`` before invoking the callback
-        and ``approval_decided`` with the outcome afterwards. The callback
-        itself stays the configured synchronous callable, so the stream
-        pauses naturally while it blocks on the decision and no tool executes
-        before the decision is made. When no callback is configured the
-        wrapper still emits the bracket and denies, matching the historical
-        behavior of ``TaskRun.before_tool`` for a missing callback.
+        Resolution order per invocation: (1) a session-scope
+        :class:`ApprovalMemory` hit auto-approves without prompting — the
+        ``approval_required``/``approval_decided`` bracket is still emitted with
+        decision ``session`` and source ``session_memory`` so the transcript
+        reflects the actual decision and scope; (2) otherwise the configured
+        callback is asked (legacy boolean callbacks are adapted, ``True`` ->
+        once) and session-scope answers are recorded into the memory. Only the
+        first invocation of a tool call consults memory; stale-approval
+        re-prompts (later invocations of the same call from
+        ``TaskRun.before_tool``) always reach the human callback so a fresh diff
+        is actually shown.
 
         Args:
+            run: The active TaskRun (provides the project root for key building).
+            memory: The session approval memory, or None to disable session scope.
             emit: Sink receiving the approval event bracket.
 
         Returns:
-            The wrapped approval callback.
+            The boolean approval callback for ``TaskRun.before_tool`` and a
+            scope list with one entry per invocation (``once``/``session``/
+            ``deny``), aligned with the approvals before_tool appends.
         """
-        inner = self.config.approval_callback
+        inner = as_decision_callback(self.config.approval_callback)
+        project_root = run.project_root if run is not None else self.config.working_directory
+        scopes: list[str] = []
+        invocations = 0
 
-        def wrapped(call: ToolCall) -> bool:
-            """Emit the approval bracket around the configured decision.
+        def emit_required(call: ToolCall) -> None:
+            """Emit the ``approval_required`` bracket event.
 
             Args:
-                call: The approval-shaped tool call presented to the human.
-
-            Returns:
-                The human's decision (False when no callback is configured).
+                call: The approval-shaped tool call.
             """
             emit(
                 AgentEvent(
                     kind=AgentEventKind.APPROVAL_REQUIRED,
                     text=format_approval_prompt(call),
-                    data={"tool": call.name, "call_id": call.id},
+                    data={
+                        "tool": call.name,
+                        "call_id": call.id,
+                        "target": call.parameters.get("approval_target"),
+                    },
                 )
             )
-            approved = inner is not None and bool(inner(call))
+
+        def emit_decided(call: ToolCall, *, approved: bool, decision: str, source: str) -> None:
+            """Emit the ``approval_decided`` bracket event.
+
+            Args:
+                call: The approval-shaped tool call.
+                approved: Whether the action may execute.
+                decision: Decision scope: ``once``, ``session``, or ``deny``.
+                source: Where the decision came from: ``callback`` or ``session_memory``.
+            """
             emit(
                 AgentEvent(
                     kind=AgentEventKind.APPROVAL_DECIDED,
                     text="approved" if approved else "denied",
-                    data={"tool": call.name, "call_id": call.id, "approved": approved},
+                    data={
+                        "tool": call.name,
+                        "call_id": call.id,
+                        "approved": approved,
+                        "decision": decision,
+                        "source": source,
+                    },
                 )
             )
-            return approved
 
-        return wrapped
+        def resolve(call: ToolCall) -> bool:
+            """Resolve one approval request to a boolean for before_tool.
+
+            Args:
+                call: The approval-shaped tool call.
+
+            Returns:
+                True when the action may execute.
+            """
+            nonlocal invocations
+            invocations += 1
+            target = approval_memory_target(call, project_root)
+            if memory is not None and invocations == 1:
+                hit = memory.check(call.name, target)
+                if hit is ApprovalDecision.APPROVE_SESSION:
+                    scopes.append(hit.value)
+                    emit_required(call)
+                    emit_decided(call, approved=True, decision=hit.value, source="session_memory")
+                    return True
+            emit_required(call)
+            decision = inner(call) if inner is not None else ApprovalDecision.DENY
+            if decision is ApprovalDecision.APPROVE_SESSION and memory is not None:
+                memory.record(call.name, target, decision)
+            scopes.append(decision.value)
+            emit_decided(
+                call,
+                approved=decision is not ApprovalDecision.DENY,
+                decision=decision.value,
+                source="callback",
+            )
+            return decision is not ApprovalDecision.DENY
+
+        return resolve, scopes
+
+    def _load_approval_memory(self) -> ApprovalMemory:
+        """Load the session approval memory from the conversation metadata.
+
+        Corrupt entries start fresh: without memory nothing is auto-approved,
+        so restoration failures fail closed.
+
+        Returns:
+            The ApprovalMemory for this session.
+        """
+        data = self.context.metadata.get(APPROVAL_MEMORY_KEY)
+        if isinstance(data, dict) and data:
+            try:
+                return ApprovalMemory.from_dict(data)
+            except Exception as error:  # noqa: BLE001 - memory is an optimization, never a risk
+                LOGGER.warning("approval memory: could not restore (%s); starting fresh", error)
+        return ApprovalMemory()
+
+    def _sync_approval_memory(self, memory: ApprovalMemory | None) -> None:
+        """Persist the session approval memory back into the conversation metadata.
+
+        Only memories with recorded decisions are written, so sessions without
+        session-scope grants carry no approval-memory payload.
+
+        Args:
+            memory: The memory mutated during the run, or None.
+        """
+        if memory is None or not memory.decisions:
+            return
+        self.context.metadata[APPROVAL_MEMORY_KEY] = memory.to_dict()
 
     async def _execute_tools(
         self,
@@ -1196,6 +1362,7 @@ class Agent:
         *,
         run: TaskRun | None = None,
         emit: Callable[[AgentEvent], None] | None = None,
+        approval_memory: ApprovalMemory | None = None,
     ) -> list[dict]:
         """
         Execute tool calls.
@@ -1207,12 +1374,17 @@ class Agent:
         When an event sink is provided (HH-05), each call also emits
         ``tool_call_started`` before execution and ``tool_result`` after it,
         and mutation/verification calls emit the ``approval_required`` /
-        ``approval_decided`` bracket around the (unchanged) approval callback.
+        ``approval_decided`` bracket around the approval resolution (HH-07:
+        session memory -> configured callback, booleans adapted). The decision
+        scope is written onto the approvals the TaskRun records so transcripts
+        carry the actual decision (``once``/``session``/``deny``).
 
         Args:
             tool_calls: List of tool calls from LLM
             run: Optional active TaskRun for workflow policy and evidence.
             emit: Optional sink receiving tool and approval events.
+            approval_memory: Optional session approval memory backing HH-07
+                session-scope grants (loaded from the conversation metadata).
 
         Returns:
             List of execution results
@@ -1250,14 +1422,23 @@ class Agent:
                     continue
                 denial = None
                 if run is not None:
+                    approval_callback, approval_scopes = self._approval_invocation(
+                        run,
+                        approval_memory,
+                        emit if emit is not None else _discard_event,
+                    )
+                    entries_before = len(run.approvals)
                     denial = run.before_tool(
                         tool_call,
-                        planning_enabled=self.config.planning_enabled,
+                        planning_enabled=self._planning_active(),
                         require_approval=self.config.require_user_approval,
-                        approval_callback=(
-                            self._approval_callback_for(emit) if emit is not None else self.config.approval_callback
-                        ),
+                        approval_callback=approval_callback,
                     )
+                    # Align each approval recorded during this call with the
+                    # decision scope the resolver produced for it.
+                    for entry, scope in zip(run.approvals[entries_before:], approval_scopes):
+                        entry["decision"] = scope
+                    self._sync_approval_memory(approval_memory)
                     # Approval prompts and policy denials happen inside
                     # before_tool; drain them before the result event.
                     self._drain_run_events(run)
