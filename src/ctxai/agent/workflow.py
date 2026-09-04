@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -10,9 +11,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .checkpoints import CheckpointManager
 from .editing import EditError, edit_diff, simulate_edit
 from .llm.base import ProviderErrorKind, ToolCall
 from .run_recorder import RunEventKind
+
+LOGGER = logging.getLogger(__name__)
 
 
 class TaskState(str, Enum):
@@ -254,6 +258,12 @@ class TaskRun:
     plan: StructuredPlan | None = None
     approvals: list[dict[str, Any]] = field(default_factory=list)
     usage: UsageLedger = field(default_factory=UsageLedger)
+    # HH-06: transcript identity and the checkpoint manager the loop wires in.
+    # The manager is optional (None = checkpointing not wired for this surface);
+    # when present, before_tool captures pre-mutation bytes ahead of every
+    # approved write_file/edit_file call.
+    run_id: str | None = None
+    checkpoint_manager: CheckpointManager | None = None
 
     MUTATION_TOOLS = frozenset({"write_file", "edit_file"})
     INSPECTION_TOOLS = frozenset({"read_file", "semantic_search", "grep", "glob", "list_files"})
@@ -501,11 +511,39 @@ class TaskRun:
                     FailureKind.APPROVAL_DENIAL,
                     f"Approval denied for {call.name}: {approval_call.parameters['approval_target']}",
                 )
+        # HH-06: capture the pre-mutation state before the approved mutation
+        # runs (first touch per run). Failures are diagnostics — checkpointing
+        # never blocks the mutation.
+        if call.name in self.MUTATION_TOOLS:
+            self._capture_mutation(target)
         self.transition(TaskState.EXECUTE)
         action = self._planned_action(call)
         if action is not None:
             action.status = "in_progress"
         return None
+
+    def _capture_mutation(self, target: Path | None) -> None:
+        """Capture the pre-mutation bytes of a file about to be mutated (HH-06).
+
+        Called from the ``before_tool`` mutation path after policy and approval
+        passed and before the tool executes, so every captured mutation is
+        preceded by its checkpoint. Capture refusals (symlinks, paths escaping
+        the project root, size cap) and I/O errors are logged diagnostics that
+        never fail the tool call.
+
+        Args:
+            target: The canonical target path of the mutation, or ``None``.
+        """
+        manager = self.checkpoint_manager
+        if manager is None or target is None or not self.run_id:
+            return
+        try:
+            outcome = manager.capture(self.run_id, target)
+        except Exception as error:  # noqa: BLE001 - checkpointing never blocks a mutation
+            LOGGER.warning("checkpoints (%s): capture failed for %s: %s", self.run_id, target, error)
+            return
+        if outcome.status not in {"captured", "already"} and outcome.reason:
+            LOGGER.warning("checkpoints (%s): %s", self.run_id, outcome.reason)
 
     def observe(self, call: ToolCall, result: dict[str, Any]) -> None:
         success = bool(result.get("success"))

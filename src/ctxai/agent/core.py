@@ -15,6 +15,7 @@ from typing import Any
 
 from rich.console import Console
 
+from .checkpoints import CheckpointManager
 from .config import AgentConfig
 from .context import ConversationContext
 from .events import AgentEvent, AgentEventKind
@@ -154,7 +155,11 @@ class AgentLoopConfig:
     and ``run_id`` pins the HH-04 run transcript identity: one-shot callers
     pass the ``ToolExecutionContext.request_id``; when ``None`` (the default)
     every run records under a fresh uuid4 hex so interactive chat runs never
-    collide.
+    collide. ``checkpoint_manager`` (HH-06) wires local pre-mutation
+    checkpoints: when set, the loop registers the run at start, prunes
+    retention, finalizes the checkpoint at run end, and ``TaskRun.before_tool``
+    captures each mutated file's pre-mutation bytes before the first
+    mutation; ``None`` (the default) disables checkpointing for the surface.
     """
 
     llm_provider: BaseLLMProvider
@@ -174,6 +179,7 @@ class AgentLoopConfig:
     session_name: str = "default"
     on_compaction: Callable[[CompactionNotice], None] | None = None
     run_id: str | None = None
+    checkpoint_manager: CheckpointManager | None = None
 
 
 class Agent:
@@ -344,6 +350,14 @@ class Agent:
         diagnostics and never affect the run; with
         ``AgentBehaviorConfig.record_runs`` disabled nothing is written.
 
+        Checkpoints (HH-06): when a ``checkpoint_manager`` is wired, the run
+        opens a checkpoint under ``.ctxai/checkpoints/<run_id>/`` and every
+        approved ``write_file``/``edit_file`` captures the target's
+        pre-mutation bytes before the first mutation of that file; at run end
+        the checkpoint is finalized with post-run hashes (stale-detection for
+        restore) and marked ``retained`` when the run succeeded. Checkpoint
+        failures are diagnostics and never affect the run.
+
         Streaming (HH-05): every observable step is reported through the
         synchronous ``emit`` sink as an :class:`AgentEvent` — token deltas
         while the provider streams, usage per LLM call, retry and compaction
@@ -365,9 +379,19 @@ class Agent:
         """
         # Add user message to context
         self.context.add_user_message(user_message)
-        run = TaskRun(user_message, project_root=self.config.working_directory.resolve())
+        # One run id shared by the transcript (HH-04) and the checkpoint
+        # (HH-06): pinned by the caller for one-shot runs, fresh per run in
+        # interactive chat so runs never collide.
+        run_id = self.config.run_id or new_run_id()
+        run = TaskRun(
+            user_message,
+            project_root=self.config.working_directory.resolve(),
+            run_id=run_id,
+            checkpoint_manager=self.config.checkpoint_manager,
+        )
         self.last_run = run
-        self._start_recording(run, user_message)
+        self._start_recording(run, user_message, run_id)
+        self._start_checkpointing(run_id)
 
         def finish(completed_run: TaskRun, model_summary: str) -> str:
             """Finalize the run and emit its terminal ``final_report`` event.
@@ -549,7 +573,7 @@ class Agent:
     # Run transcript recording (HH-04)
     # ------------------------------------------------------------------
 
-    def _start_recording(self, run: TaskRun, user_message: str) -> None:
+    def _start_recording(self, run: TaskRun, user_message: str, run_id: str) -> None:
         """Open the run transcript, prune retention, and record the run start.
 
         Applies the ``run_retention`` cleanup (oldest transcripts first,
@@ -559,9 +583,9 @@ class Agent:
         Args:
             run: The TaskRun starting with this message.
             user_message: The user message that started the run.
+            run_id: The run identifier shared with the checkpoint (HH-06).
         """
         behavior = self.config.agent_config.behavior
-        run_id = self.config.run_id or new_run_id()
         if behavior.record_runs:
             try:
                 prune_runs(runs_dir_for(self.config.working_directory), keep=behavior.run_retention - 1)
@@ -588,6 +612,41 @@ class Agent:
             },
         )
         self._record_event(RunEventKind.USER_MESSAGE, {"content": user_message})
+
+    def _start_checkpointing(self, run_id: str) -> None:
+        """Open the run checkpoint and prune checkpoint retention (HH-06).
+
+        Applies the ``checkpoint_retention`` cleanup (oldest checkpoint
+        directories first, scoped to the resolved checkpoints directory)
+        before registering the fresh run. Failures are diagnostics: the run
+        proceeds without a checkpoint, and capture attempts would retry the
+        registration.
+
+        Args:
+            run_id: The run identifier the checkpoint belongs to.
+        """
+        manager = self.config.checkpoint_manager
+        if manager is None:
+            return
+        try:
+            manager.start_run(run_id)
+        except Exception as error:  # noqa: BLE001 - checkpointing is a diagnostic, never fatal
+            LOGGER.warning("checkpoints (%s): start failed: %s", run_id, error)
+
+    def _finalize_checkpoints(self, run: TaskRun, *, retained: bool) -> None:
+        """Record post-run hashes and close the run's checkpoint (HH-06).
+
+        Args:
+            run: The TaskRun completing with this exit.
+            retained: Whether the run succeeded (kept for audit).
+        """
+        manager = run.checkpoint_manager
+        if manager is None or not run.run_id:
+            return
+        try:
+            manager.finalize(run.run_id, retained=retained)
+        except Exception as error:  # noqa: BLE001 - checkpointing is a diagnostic, never fatal
+            LOGGER.warning("checkpoints (%s): finalize failed: %s", run.run_id, error)
 
     def _record_event(
         self,
@@ -622,11 +681,13 @@ class Agent:
             self._record_event(kind, payload)
 
     def _finalize(self, run: TaskRun, model_summary: str) -> str:
-        """Complete the run: final report, closing transcript events, close.
+        """Complete the run: final report, checkpoint, closing events, close.
 
-        Records the final state transition, the ``run_completed`` event with
-        the run's evidence summary and usage ledger totals, then closes the
-        transcript (flush + fsync). All run exit paths route through here.
+        Records the final state transition, finalizes the run's checkpoint
+        (HH-06: post-run hashes for stale detection, ``retained`` when the run
+        succeeded), records the ``run_completed`` event with the run's
+        evidence summary and usage ledger totals, then closes the transcript
+        (flush + fsync). All run exit paths route through here.
 
         Args:
             run: The active TaskRun.
@@ -637,6 +698,7 @@ class Agent:
         """
         report = run.final_report(model_summary)
         self._drain_run_events(run)
+        self._finalize_checkpoints(run, retained=run.state is TaskState.SUMMARIZE)
         self._record_event(
             RunEventKind.RUN_COMPLETED,
             {

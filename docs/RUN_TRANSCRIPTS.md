@@ -58,7 +58,7 @@ records in the run's `UsageLedger`, so per-run totals always equal the sum of tr
 | `check`            | A verification command ran against a mutated tree, with its outcome.       |
 | `compaction`       | The loop compacted the context (HH-03): token counts before/after, elided messages. |
 | `cancellation`     | The run was cancelled (HH-02 cancellation path).                           |
-| `rollback`         | Reserved for HH-06 (checkpoint/rollback); the recorder accepts the kind already. |
+| `rollback`         | A `ctxai checkpoints restore` applied to (or was refused for) this run's checkpoint (HH-06); appended with the sequence numbering continued. See [docs/CHECKPOINTS.md](CHECKPOINTS.md). |
 | `run_completed`    | The run finished: final status, failure kind, changed files, checks, plan progress, and usage totals. |
 
 Transcripts are append-only per run: writes are one complete JSON line per event (flushed

@@ -572,6 +572,16 @@ your project (see [docs/RUN_TRANSCRIPTS.md](docs/RUN_TRANSCRIPTS.md) for the ful
 - **Inspectable**: `ctxai runs list`, `ctxai runs show RUN_ID [--kind KIND] [--json]`, and `ctxai runs delete RUN_ID | --all` manage past runs; final reports append a `usage: … ; cost: …` line (unknown model costs say "unknown", never a fabricated zero).
 - **Bounded**: `behavior.record_runs` (default on) and `behavior.run_retention` (default 50, oldest pruned) control the ledger.
 
+### Checkpoints and Rollback
+
+Failed or cancelled verified runs are reversible with one command (see
+[docs/CHECKPOINTS.md](docs/CHECKPOINTS.md) for the full contract):
+
+- **Captured at the mutation boundary**: before an approved `write_file`/`edit_file` first mutates a file in a run, its pre-mutation bytes (or a `created` marker) are stored under `.ctxai/checkpoints/<run_id>/` — a pure shadow copy that works in git and non-git projects alike (ctxai never rewrites history or creates commits; git is only consulted to record HEAD for context).
+- **One-command restore**: `ctxai checkpoints restore CHECKPOINT_ID` shows the affected files, asks for confirmation, then returns every touched file byte-identically to its pre-run state — restoring modified files, removing created files, and recreating files the run captured and later deleted.
+- **Stale-worktree refusal**: restore compares each target against the post-run hash recorded at run end; a working tree that moved on is refused with per-file reasons unless `--force` is set. Path-escape and symlink targets are always refused.
+- **Local-only and bounded**: nothing is uploaded; `behavior.checkpoint_retention` (default 20 runs, oldest pruned) and `behavior.checkpoint_max_bytes` (default 50 MB per run) bound storage. Restores are recorded as `rollback` events on the run's transcript.
+
 ### Key Components
 
 **Search Components:**

@@ -165,6 +165,12 @@ class AgentBehaviorConfig:
     the two are never conflated. ``record_runs`` controls local run
     transcripts (HH-04): on by default (local-only, redacted, nothing
     uploaded) with the oldest transcripts pruned beyond ``run_retention``.
+    ``checkpoint_retention``/``checkpoint_max_bytes`` bound the local
+    pre-mutation checkpoints the loop captures before structured file
+    mutations (HH-06): at most ``checkpoint_retention`` checkpoint
+    directories per project (oldest pruned at run start) and at most
+    ``checkpoint_max_bytes`` captured bytes per run (beyond the cap captures
+    stop with a diagnostic and the checkpoint stays partial).
     """
 
     planning_enabled: bool = True
@@ -177,12 +183,18 @@ class AgentBehaviorConfig:
     context_soft_limit_ratio: float = 0.8  # Compact above this fraction of the provider context_size
     record_runs: bool = True  # Write redacted local run transcripts under .ctxai/runs (HH-04)
     run_retention: int = 50  # Maximum run transcripts kept per project (oldest pruned at run start)
+    checkpoint_retention: int = 20  # Maximum run checkpoints kept per project (oldest pruned at run start)
+    checkpoint_max_bytes: int = 52_428_800  # Per-run capture cap in bytes (50 MB); beyond it captures stop
 
     def __post_init__(self) -> None:
         if not 0 < self.context_soft_limit_ratio <= 1:
             raise ValueError("context_soft_limit_ratio must be within (0, 1]")
         if self.run_retention < 1:
             raise ValueError("run_retention must be at least 1")
+        if self.checkpoint_retention < 1:
+            raise ValueError("checkpoint_retention must be at least 1")
+        if self.checkpoint_max_bytes <= 0:
+            raise ValueError("checkpoint_max_bytes must be positive")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -197,6 +209,8 @@ class AgentBehaviorConfig:
             "context_soft_limit_ratio": self.context_soft_limit_ratio,
             "record_runs": self.record_runs,
             "run_retention": self.run_retention,
+            "checkpoint_retention": self.checkpoint_retention,
+            "checkpoint_max_bytes": self.checkpoint_max_bytes,
         }
 
     @classmethod
@@ -213,6 +227,8 @@ class AgentBehaviorConfig:
             context_soft_limit_ratio=data.get("context_soft_limit_ratio", 0.8),
             record_runs=data.get("record_runs", True),
             run_retention=data.get("run_retention", 50),
+            checkpoint_retention=data.get("checkpoint_retention", 20),
+            checkpoint_max_bytes=data.get("checkpoint_max_bytes", 52_428_800),
         )
 
 
