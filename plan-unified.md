@@ -68,7 +68,7 @@ open repository
 | HH-05 True streaming interaction | Live token and tool events in chat | Validated (2026-09-04) |
 | HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Validated (2026-09-04) |
 | HH-07 Approval ergonomics and planner control | once/session/deny approvals bound to exact diffs | Validated (2026-09-04) |
-| HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Planned |
+| HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Validated (2026-09-04) |
 | HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Planned |
 | RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Planned |
 | IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Planned |
@@ -677,7 +677,7 @@ another process; auto-approval heuristics.
 denies network and restricts writes by default — the in-process blocklist is no longer the only
 line of defense.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-04).
 
 **Scope**
 

@@ -566,7 +566,8 @@ environment policy, output limits, and edit semantics):
 - **Subprocess environment**: commands observe only an allowlist (`PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, `SHELL`, `TERM`, `USER`, `LOGNAME`) plus explicit opt-ins (`tools.env_passthrough`); secrets from your shell environment are never inherited.
 - **Output limits**: command output and file reads are truncated at `tools.max_output_chars` (default 20,000 characters) with an explicit `...[truncated N of M chars]` marker; original sizes are recorded in the audit log.
 - **Edit uniqueness**: `edit_file` requires exactly one match unless you pass `replace_all`; zero- or multi-match edits fail without writing and name the match count. A whitespace-tolerant fallback applies the change to the original bytes when the pattern differs only in indentation or trailing whitespace. Approval-time previews are byte-identical to applied edits, including regex edits.
-- **Threat model**: command classification remains an in-process policy check; OS-level sandboxing lands with HH-08.
+- **OS sandboxing (optional)**: set `tools.sandbox = auto|required` (or `ctxai config --set tools.sandbox --value auto`) to run every bash command under an OS-level deny-by-default sandbox — network denied and writes restricted to the project and temp dirs by default. macOS uses the built-in seatbelt (`sandbox-exec`), Linux uses bubblewrap (`bwrap`) when installed; `required` fails commands closed when no backend exists. See [docs/SANDBOXING.md](docs/SANDBOXING.md).
+- **Threat model**: command classification remains an in-process policy check; the optional OS sandbox is a second layer behind it, not a container.
 
 ### Loop Resilience Guarantees
 

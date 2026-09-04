@@ -110,10 +110,12 @@ Command policy is consolidated in exactly two places; there is no separate subst
 
 ### Threat-model note
 
-Command classification is an **in-process blocklist/allowlist**. It is not an OS-level sandbox: a
-determined or confused model may still ask an allowlisted executable to do harmful things inside the
-project boundary. Deny-by-default OS sandboxing (seatbelt/bubblewrap), including network denial, is
-tracked separately as HH-08 and is explicitly out of scope here.
+Command classification is an **in-process blocklist/allowlist**. It is not by itself an OS-level
+sandbox: a determined or confused model may still ask an allowlisted executable to do harmful
+things inside the project boundary. HH-08 adds the OS-level backstop — deny-by-default sandboxing
+(seatbelt/bubblewrap) with network denial, enabled via `tools.sandbox = auto|required` and
+documented in [SANDBOXING.md](SANDBOXING.md). With the default `tools.sandbox = "off"`, the
+in-process policy remains the only command boundary.
 
 ## Configuration reference
 
@@ -129,6 +131,8 @@ configurations are ignored):
 | `allow_outside_project` | `False` | Allow file operations outside the project root. |
 | `max_output_chars` | `20000` | Truncation bound for bash stdout/stderr and read_file content. |
 | `env_passthrough` | `[]` | Opt-in `os.environ` variable names forwarded to subprocesses. |
+| `sandbox` | `"off"` | OS sandbox mode for bash commands: `off`, `auto`, `required` (HH-08; see [SANDBOXING.md](SANDBOXING.md)). |
+| `sandbox_network` | `false` | Allow outbound network inside an enforcing sandbox. |
 
 Removed in HH-01: `is_bash_command_allowed()` and `bash_blocked_commands` (the substring matcher) —
 see "Command policy" above.

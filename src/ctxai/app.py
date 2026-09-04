@@ -876,7 +876,11 @@ def code(
             max_tokens=4096,
         )
         llm = AnthropicProvider(llm_config)
-        agent_config = AgentConfig()
+        # Agent tools configuration comes from the merged global + project
+        # config so `ctxai config --set tools.sandbox ...` applies here too (HH-08).
+        from .config import ConfigManager
+
+        agent_config = AgentConfig(tools=ConfigManager(Path.cwd()).load().tools)
 
         tools = ToolRegistry(verbose=verbose)
         execution_context = ToolExecutionContext.for_project(

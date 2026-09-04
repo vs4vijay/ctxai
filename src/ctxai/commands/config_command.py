@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from ..agent.config import SANDBOX_MODES
 from ..config import ConfigManager
 
 console = Console(legacy_windows=False)
@@ -81,6 +82,10 @@ def list_config(project_path: Path | None = None, global_config: bool = False):
     table.add_row("indexing.max_file_size_mb", str(config.indexing.max_file_size_mb))
     table.add_row("indexing.chunk_size", str(config.indexing.chunk_size))
     table.add_row("indexing.chunk_overlap", str(config.indexing.chunk_overlap))
+
+    # Agent tools settings (HH-08 sandbox)
+    table.add_row("tools.sandbox", config.tools.sandbox)
+    table.add_row("tools.sandbox_network", str(config.tools.sandbox_network))
 
     console.print(table)
 
@@ -282,9 +287,43 @@ def set_config(key: str, value: str, project_path: Path | None = None, global_co
                 config_manager.save(config)
                 console.print(f"[green][OK][/green] Set [yellow]{key}[/yellow] = [green]{value}[/green]\n")
 
+            elif section == "tools":
+                if not hasattr(config.tools, setting):
+                    console.print(f"[red][X][/red] Unknown tools setting: '{setting}'\n")
+                    console.print(
+                        "[yellow]Available settings:[/yellow] sandbox, sandbox_network, bash_timeout, "
+                        "max_output_chars, max_file_size_mb, allow_outside_project, env_passthrough, "
+                        "bash_allowed_commands, enabled_tools\n"
+                    )
+                    return
+
+                # Convert the string value to the field's type.
+                bool_fields = {"allow_outside_project", "sandbox_network"}
+                int_fields = {"bash_timeout", "max_output_chars", "max_file_size_mb"}
+                list_fields = {"enabled_tools", "bash_allowed_commands", "env_passthrough"}
+                if setting == "sandbox":
+                    if value not in SANDBOX_MODES:
+                        console.print(f"[red][X][/red] Invalid sandbox mode: '{value}'\n")
+                        console.print(f"[yellow]Valid modes:[/yellow] {', '.join(SANDBOX_MODES)}\n")
+                        return
+                elif setting in bool_fields:
+                    value = value.lower() in ("true", "yes", "1", "on")
+                elif setting in int_fields:
+                    value = int(value)
+                elif setting in list_fields:
+                    if value.lower() == "none":
+                        value = None if setting != "env_passthrough" else []
+                    else:
+                        value = [item.strip() for item in value.split(",") if item.strip()]
+
+                setattr(config.tools, setting, value)
+                config_manager.save(config)
+                display_value = str(value)
+                console.print(f"[green][OK][/green] Set [yellow]{key}[/yellow] = [green]{display_value}[/green]\n")
+
             else:
                 console.print(f"[red][X][/red] Unknown section: '{section}'\n")
-                console.print("[yellow]Available sections:[/yellow] embedding, indexing, providers\n")
+                console.print("[yellow]Available sections:[/yellow] embedding, indexing, tools, providers\n")
 
         else:
             console.print("[red][X][/red] Invalid key format.\n")

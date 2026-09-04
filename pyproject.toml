@@ -95,6 +95,7 @@ files = [
     "src/ctxai/agent/run_recorder.py",
     "src/ctxai/agent/tools/execution.py",
     "src/ctxai/agent/tools/output_limits.py",
+    "src/ctxai/agent/tools/sandbox.py",
     "src/ctxai/agent/workflow.py",
     "src/ctxai/index_manifest.py",
     "src/ctxai/repository_context.py",
