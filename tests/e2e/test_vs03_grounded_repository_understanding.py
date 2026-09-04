@@ -6,9 +6,9 @@ import pytest
 
 from ctxai.agent.tools.code_search import SemanticSearchTool
 from ctxai.chunking import CodeChunk
+from ctxai.evals.metrics import reciprocal_rank
 from ctxai.index_manifest import IndexManifest
 from ctxai.repository_context import ContextAssembler, HybridRetriever, discover_repository_indexes
-from ctxai.retrieval_eval import evaluate_retrieval
 from ctxai.vector_store import VectorStore
 
 
@@ -89,24 +89,10 @@ def test_hybrid_retrieval_beats_vector_only_and_assembler_deduplicates(tmp_path)
     vector_only = retriever.store.search([1.0, 0.0], n_results=7)
     hybrid = retriever.retrieve("authorize_payment policy", limit=7)
     expected = str((project / "payments.py").resolve())
-    vector_metrics = evaluate_retrieval(
-        [
-            {
-                "expected_locations": [expected],
-                "retrieved_locations": [item["metadata"]["file_path"] for item in vector_only],
-            }
-        ]
-    )
-    hybrid_metrics = evaluate_retrieval(
-        [
-            {
-                "expected_locations": [expected],
-                "retrieved_locations": [item.file_path for item in hybrid],
-            }
-        ]
-    )
+    vector_rr = reciprocal_rank({expected}, [item["metadata"]["file_path"] for item in vector_only])
+    hybrid_rr = reciprocal_rank({expected}, [item.file_path for item in hybrid])
 
-    assert hybrid_metrics.mrr > vector_metrics.mrr
+    assert hybrid_rr > vector_rr
     assembled = ContextAssembler(token_budget=100).assemble("repo-index", [hybrid[0], hybrid[0]])
     assert len(assembled.items) == 1
     assert assembled.estimated_tokens <= 100

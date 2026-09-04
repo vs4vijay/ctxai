@@ -38,6 +38,7 @@ class AssembledContext:
     items: list[ContextItem]
     text: str
     estimated_tokens: int
+    truncated: tuple[bool, ...] = ()
 
 
 def discover_repository_indexes(project_path: Path) -> list[str]:
@@ -156,6 +157,7 @@ class ContextAssembler:
     def assemble(self, index_name: str, items: list[ContextItem]) -> AssembledContext:
         selected: list[ContextItem] = []
         blocks: list[str] = []
+        truncated_flags: list[bool] = []
         seen: set[tuple[str, int, int]] = set()
         used = 0
         for item in items:
@@ -174,6 +176,7 @@ class ContextAssembler:
                 break
             blocks.append(block)
             selected.append(item)
+            truncated_flags.append(len(content) < len(item.content))
             seen.add(identity)
             used += cost
-        return AssembledContext(index_name, selected, "\n\n".join(blocks), used)
+        return AssembledContext(index_name, selected, "\n\n".join(blocks), used, tuple(truncated_flags))

@@ -98,8 +98,12 @@ files = [
     "src/ctxai/agent/tools/sandbox.py",
     "src/ctxai/agent/workflow.py",
     "src/ctxai/index_manifest.py",
+    "src/ctxai/evals/artifacts.py",
+    "src/ctxai/evals/benchmark.py",
+    "src/ctxai/evals/common.py",
+    "src/ctxai/evals/metrics.py",
+    "src/ctxai/evals/retrieval_runner.py",
     "src/ctxai/repository_context.py",
-    "src/ctxai/retrieval_eval.py",
 ]
 check_untyped_defs = true
 ignore_missing_imports = true

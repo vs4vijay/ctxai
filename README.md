@@ -194,6 +194,10 @@ ctxai --help
 - `indexes` - List, inspect, diagnose, and delete persistent indexes
 - `dashboard` - Start the web dashboard for browsing and querying
 
+**Evaluation:**
+- `eval retrieval` - Run the versioned retrieval quality benchmark against a local index (Recall@K, MRR, nDCG@10, latency, context-efficiency) with baseline regression gates (see [docs/RETRIEVAL_BENCHMARK.md](docs/RETRIEVAL_BENCHMARK.md))
+- `eval retrieval validate` - Validate a benchmark document without running retrieval
+
 **Configuration:**
 - `config` - Manage ctxai configuration settings
 - `server` - Start the MCP server for AI agents
