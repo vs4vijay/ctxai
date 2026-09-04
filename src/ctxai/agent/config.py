@@ -5,6 +5,14 @@ Agent configuration classes.
 import os
 from dataclasses import dataclass, field
 
+SANDBOX_MODES: tuple[str, ...] = ("off", "auto", "required")
+"""Valid values for ``AgentToolsConfig.sandbox`` (HH-08).
+
+``off`` (default) preserves pre-HH-08 behavior; ``auto`` uses an OS sandbox
+backend when one is available; ``required`` fails commands closed when no
+backend exists.
+"""
+
 
 @dataclass
 class AgentLLMConfig:
@@ -100,6 +108,12 @@ class AgentToolsConfig:
     allow_outside_project: bool = False  # Allow file ops outside project dir
     max_output_chars: int = 20_000  # Cap for bash stdout/stderr and read_file content
     env_passthrough: list[str] = field(default_factory=list)  # Opt-in os.environ names for subprocesses
+    sandbox: str = "off"  # OS sandbox mode (HH-08): off, auto, or required
+    sandbox_network: bool = False  # Allow outbound network inside the sandbox (deny by default)
+
+    def __post_init__(self) -> None:
+        if self.sandbox not in SANDBOX_MODES:
+            raise ValueError(f"sandbox must be one of: {', '.join(SANDBOX_MODES)}")
 
     def is_tool_enabled(self, tool_name: str) -> bool:
         """Check if a tool is enabled.
@@ -128,6 +142,8 @@ class AgentToolsConfig:
             "allow_outside_project": self.allow_outside_project,
             "max_output_chars": self.max_output_chars,
             "env_passthrough": self.env_passthrough,
+            "sandbox": self.sandbox,
+            "sandbox_network": self.sandbox_network,
         }
 
     @classmethod
@@ -151,6 +167,8 @@ class AgentToolsConfig:
             allow_outside_project=data.get("allow_outside_project", False),
             max_output_chars=data.get("max_output_chars", 20_000),
             env_passthrough=data.get("env_passthrough", []),
+            sandbox=data.get("sandbox", "off"),
+            sandbox_network=data.get("sandbox_network", False),
         )
 
 

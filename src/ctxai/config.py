@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import tomlkit
 
+from .agent.config import AgentToolsConfig
 from .utils import get_global_ctxai_home, get_project_ctxai_home
 
 if TYPE_CHECKING:
@@ -152,6 +153,7 @@ class Config:
     # Other configurations
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexConfig = field(default_factory=IndexConfig)
+    tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
     version: str = "2.0"
 
     # Index metadata
@@ -196,6 +198,7 @@ class Config:
             },
             embedding=EmbeddingConfig(),
             indexing=IndexConfig(),
+            tools=AgentToolsConfig(),
         )
 
     def get_provider_config(self, provider_name: str) -> ProviderConfig:
@@ -281,6 +284,7 @@ class Config:
             "providers": {k: v.to_dict() for k, v in self.providers.items()},
             "embedding": asdict(self.embedding),
             "indexing": asdict(self.indexing),
+            "tools": self.tools.to_dict(),
             "index_name": self.index_name,
             "index_status": self.index_status,
             "index_files_count": self.index_files_count,
@@ -303,6 +307,7 @@ class Config:
             providers=providers,
             embedding=EmbeddingConfig(**data.get("embedding", {})),
             indexing=IndexConfig(**data.get("indexing", {})),
+            tools=AgentToolsConfig.from_dict(data.get("tools", {})),
             index_name=data.get("index_name"),
             index_status=data.get("index_status"),
             index_files_count=data.get("index_files_count"),

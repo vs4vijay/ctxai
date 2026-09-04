@@ -78,6 +78,14 @@ class ToolExecutionContext:
     timeout: int = 30
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     approval_callback: ApprovalCallback | None = None
+    approved_capabilities: set[Capability] = field(default_factory=set)
+    """Capabilities granted through ``approval_callback`` for the current command.
+
+    Cleared at the start of every :meth:`approve_command` call, so an
+    approval-based grant applies to exactly the command the human approved
+    (HH-08 reads this set to decide whether the OS sandbox may allow
+    network for the wrapped command).
+    """
     audit_log: list[AuditRecord] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -108,6 +116,7 @@ class ToolExecutionContext:
         if capability in self.capabilities:
             return
         if self.approval_callback and self.approval_callback(capability, action, target):
+            self.approved_capabilities.add(capability)
             return
         raise PolicyDenied(f"Capability denied: {capability.value} ({action}: {target})")
 
@@ -150,6 +159,7 @@ class ToolExecutionContext:
 
     def approve_command(self, command: str) -> list[str]:
         """Parse one simple command and classify risky or unsupported shell syntax."""
+        self.approved_capabilities.clear()
         self.require(Capability.COMMAND, "execute", command)
         try:
             argv = shlex.split(command, posix=os.name != "nt")

@@ -50,6 +50,7 @@ from ..agent.tools.file_ops import (
 )
 from ..agent.tools.git_tools import GitDiffTool, GitLogTool, GitStatusTool
 from ..agent.tools.registry import ToolRegistry
+from ..agent.tools.sandbox import describe_sandbox
 from ..agent.workflow import validate_plan_mode
 from ..repository_context import discover_repository_indexes
 
@@ -940,8 +941,10 @@ async def interactive_chat(
         if verbose:
             console.print_success(f"Model: {llm}")
 
-    # Create agent config
-    agent_config = AgentConfig()
+    # Create agent config; the tools layer comes from the merged global +
+    # project configuration so `ctxai config --set tools.sandbox ...` and
+    # config.toml [tools] tables take effect (HH-08).
+    agent_config = AgentConfig(tools=config.tools)
 
     # Register tools
     tools = ToolRegistry(verbose=verbose)
@@ -1007,6 +1010,15 @@ async def interactive_chat(
 
     # Print banner
     print_banner(provider_display, model_display, verbose=verbose)
+
+    # Sandbox badge (HH-08): a visible diagnostic when sandboxing is enabled.
+    # Mode "off" prints nothing — today's behavior, byte for byte.
+    sandbox_badge = describe_sandbox(agent_config.tools.sandbox, agent_config.tools.sandbox_network)
+    if sandbox_badge:
+        if sandbox_badge.startswith("sandbox unavailable"):
+            console.print_warning(sandbox_badge)
+        else:
+            console.print(f"[{NEON_GREEN}]{sandbox_badge}[/{NEON_GREEN}]")
 
     if verbose:
         console.print_dim(f"Ready • {len(tools)} tools • {working_directory}\n")
