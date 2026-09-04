@@ -95,7 +95,9 @@ async def test_multi_turn_model_switch_preserves_context_and_provider_capabiliti
     assert "first answer" in contents
     assert contents[-1] == "follow-up question"
     capabilities = second.get_capabilities()
-    assert capabilities == ProviderCapabilities(tools=True, streaming=True)
+    # HH-05: capabilities.stream is honest — the default mock does not
+    # implement stream_chat_events, so it reports streaming=False.
+    assert capabilities == ProviderCapabilities(tools=True, streaming=False)
 
 
 def test_session_schema_rejects_cross_repository_and_unsafe_names(tmp_path: Path) -> None:

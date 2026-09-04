@@ -524,10 +524,10 @@ async def test_persistent_length_finish_reason_fails_as_invalid_response(temp_di
 def test_mock_provider_injects_context_size(mock_llm_config):
     """MockLLMProvider can force a small context_size; the default is unchanged."""
     injected = MockLLMProvider(config=mock_llm_config, context_size=500)
-    assert injected.get_capabilities() == ProviderCapabilities(tools=True, streaming=True, context_size=500)
+    assert injected.get_capabilities() == ProviderCapabilities(tools=True, streaming=False, context_size=500)
 
     default = MockLLMProvider(config=mock_llm_config)
-    assert default.get_capabilities() == ProviderCapabilities(tools=True, streaming=True)
+    assert default.get_capabilities() == ProviderCapabilities(tools=True, streaming=False)
 
 
 def test_create_mock_response_scripts_usage_and_finish_reason():

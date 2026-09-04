@@ -183,14 +183,53 @@ same reason: it drops or keeps whole groups, so it can never orphan a tool resul
 
 
 
+## Streaming and the event protocol (HH-05)
+
+`process_message` and `stream_message` share one core, `Agent._run_loop`, which emits every
+occurrence of interest to a synchronous sink as an `AgentEvent` (`agent/events.py`). The buffered
+surface discards the events and returns only the final report, so MCP and one-shot behavior are
+unchanged; `stream_message` bridges the sink into an async generator and yields the events live.
+
+- Event kinds (closed vocabulary): `token | tool_call_started | tool_result | approval_required |
+  approval_decided | status | usage | final_report`. The stream always ends with exactly one
+  `final_report` whose text is identical to `process_message`'s return for the same conversation.
+- Provider level: `BaseLLMProvider.stream_chat_events(messages, tools)` yields `StreamEvent` tuples
+  (`("text", str) | ("tool_call_delta", dict) | ("usage", dict)`) and returns the complete
+  `LLMResponse`. The default implementation falls back to `chat()` and emits one `text` event —
+  graceful degradation documented here and reflected honestly in
+  `ProviderCapabilities.streaming` (True only when a provider implements `stream_chat_events`).
+  Real delta streaming is implemented for anthropic, openai, and openrouter; github-copilot, ollama,
+  custom, and nvidia use the buffered fallback.
+- `AgentBehaviorConfig.stream_responses: false` forces the buffered provider path (events are still
+  emitted, one `token` per call).
+- Approval-required tool calls emit `approval_required` (with the proposed diff), invoke the same
+  approval callback as the buffered path (the stream pauses until the decision is made), emit
+  `approval_decided`, and only then execute — the streaming UI cannot bypass planning/approval
+  policy.
+- Cancellation during streaming produces the HH-02 outcome (`Status: failed`,
+  `infrastructure_failure`); compaction mid-stream emits a `status` event; each LLM call's reported
+  usage emits a `usage` event.
+- Token deltas are transient UI state: HH-04 transcripts record the same events in streaming and
+  buffered mode (final texts, not deltas).
+- Chat renders the events via Rich `Live` (token deltas inline, tool activity as dim status lines,
+  the final report as a panel). Non-stream-capable providers fall back to buffered rendering with no
+  UX regression.
+
+Support matrix (generated from `PROVIDER_SPECS`): see
+[docs/PROVIDER_COMPATIBILITY.md](PROVIDER_COMPATIBILITY.md), column "streaming".
+
+
+
 ## Where the pieces live
 
 - `src/ctxai/agent/resilience.py` — `RetryPolicy`, `RetryNotice`, `backoff_delay`, `call_with_retry`,
   `format_retry_notice`.
-- `src/ctxai/agent/core.py` — `_call_llm` (retry + `asyncio.to_thread`, usage capture, the
-  `finish_reason == "length"` mapping), the `ProviderErrorKind` mapping, cancellation handling,
-  hash-window loop detection, session snapshot on cancellation, `_enforce_context_budget`,
-  `CompactionNotice` / `format_compaction_notice`.
+- `src/ctxai/agent/events.py` — `AgentEvent`, `AgentEventKind`, `StreamEvent` (the loop's event
+  vocabulary).
+- `src/ctxai/agent/core.py` — `_run_loop` (the shared core), `_call_llm` (retry + `asyncio.to_thread`,
+  usage capture, the `finish_reason == "length"` mapping, streaming drain), the `ProviderErrorKind`
+  mapping, cancellation handling, hash-window loop detection, session snapshot on cancellation,
+  `_enforce_context_budget`, `CompactionNotice` / `format_compaction_notice`.
 - `src/ctxai/agent/context.py` — `ConversationContext.compact` (group-aware elision), the measured
   estimator (`estimate_context_tokens` / `note_reported_usage`), group-aware `truncate_old_messages`,
   compaction counters.
@@ -198,9 +237,13 @@ same reason: it drops or keeps whole groups, so it can never orphan a tool resul
   `classify_provider_failure`, which maps provider error kinds into the shared `FailureKind` taxonomy
   (all map to `infrastructure_failure`).
 - `src/ctxai/agent/config.py` — `AgentBehaviorConfig.loop_break_threshold`,
-  `AgentBehaviorConfig.context_soft_limit_ratio`.
+  `AgentBehaviorConfig.context_soft_limit_ratio`, `AgentBehaviorConfig.stream_responses`.
 - Tests: `tests/test_resilience.py` (policy/backoff/cancellation), `tests/test_agent_resilience.py`
   (loop mapping, cancellation, loop detection, event-loop responsiveness),
   `tests/test_context_management.py` (compaction, pairing, estimator, ledger, soft-limit math),
+  `tests/test_agent_events.py` (event contract, fallback, mock streaming),
+  `tests/test_streaming_loop.py` (event sequences, approvals, cancellation, transcripts),
+  `tests/test_provider_streaming.py` (anthropic/openai/openrouter `stream_chat_events`),
   `tests/e2e/test_hh02_resilient_loop.py` (HH-02 acceptance end to end),
-  `tests/e2e/test_hh03_context_management.py` (HH-03 acceptance end to end).
+  `tests/e2e/test_hh03_context_management.py` (HH-03 acceptance end to end),
+  `tests/e2e/test_hh05_streaming.py` (HH-05 acceptance end to end).

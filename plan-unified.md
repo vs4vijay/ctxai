@@ -65,7 +65,7 @@ open repository
 | HH-02 Resilient agent loop | Retries, fail-fast, clean cancellation | Validated (2026-09-04) |
 | HH-03 Context window management | Measured tokens, mid-loop compaction | Validated (2026-09-04) |
 | HH-04 Run transcripts and cost ledger | Redacted local run records with usage/cost | Validated (2026-09-04) |
-| HH-05 True streaming interaction | Live token and tool events in chat | Planned |
+| HH-05 True streaming interaction | Live token and tool events in chat | Validated (2026-09-04) |
 | HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Planned |
 | HH-07 Approval ergonomics and planner control | once/session/deny approvals bound to exact diffs | Planned |
 | HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Planned |
@@ -503,7 +503,7 @@ storing embeddings or full LLM responses.
 approval prompts render live in the event stream, and the user is never staring at a silent spinner
 while a long tool loop runs.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-04).
 
 **Scope**
 

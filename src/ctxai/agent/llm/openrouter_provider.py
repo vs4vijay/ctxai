@@ -15,6 +15,7 @@ from collections.abc import Iterator
 import requests
 
 from ..config import AgentLLMConfig
+from ..events import StreamEvent
 from .base import BaseLLMProvider, LLMResponse, ToolCall
 
 
@@ -232,6 +233,150 @@ class OpenRouterProvider(BaseLLMProvider):
                             yield data["choices"][0]["delta"]["content"]
                     except json.JSONDecodeError:
                         continue
+
+    def stream_chat_events(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
+        """
+        Stream response events from OpenRouter, returning the complete response.
+
+        Text deltas are emitted as ``("text", chunk)`` StreamEvents as the
+        model generates them (SSE). Tool-call argument fragments are
+        accumulated into complete tool calls, and usage is taken from the
+        final chunk (requested via ``usage.include``); both are returned on
+        the LLMResponse, so the agent loop's approval workflow behaves
+        identically on the streaming and buffered paths. Failures propagate —
+        the agent loop normalizes provider exceptions into stable error kinds.
+
+        Args:
+            messages: List of messages (Message objects or dicts)
+            tools: Optional list of tool schemas in OpenAI format
+            **kwargs: Additional parameters
+
+        Yields:
+            StreamEvent tuples (``("text", str)`` deltas)
+
+        Returns:
+            The complete LLMResponse (tool calls, finish_reason, usage)
+        """
+        # Convert Message objects to dicts if needed
+        from .base import Message
+
+        if messages and isinstance(messages[0], Message):
+            messages = self._format_messages(messages)
+
+        # Prepare headers
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": self.site_url,
+            "X-Title": self.app_name,
+            "Content-Type": "application/json",
+        }
+
+        # Prepare request body
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+            "stream": True,
+            "usage": {"include": True},
+        }
+
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+
+        # Stream events
+        response = requests.post(
+            self.OPENROUTER_API_URL,
+            headers=headers,
+            json=body,
+            stream=True,
+            timeout=120,
+        )
+
+        # Handle errors
+        if response.status_code != 200:
+            error_msg = f"OpenRouter API error: {response.status_code} - {response.text}"
+            raise Exception(error_msg)
+
+        import json
+
+        content_parts: list[str] = []
+        # tool-call accumulation slot per streamed index
+        tool_slots: dict[int, dict] = {}
+        usage: dict[str, int] = {}
+        finish_reason = "stop"
+
+        for line in response.iter_lines():
+            if not line:
+                continue
+            line = line.decode("utf-8")
+            if not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str == "[DONE]":
+                break
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            raw_usage = data.get("usage") or {}
+            if raw_usage:
+                usage = {
+                    "prompt_tokens": int(raw_usage.get("prompt_tokens") or 0),
+                    "completion_tokens": int(raw_usage.get("completion_tokens") or 0),
+                    "total_tokens": int(raw_usage.get("total_tokens") or 0),
+                }
+
+            choices = data.get("choices") or []
+            if not choices:
+                continue
+            choice = choices[0]
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                yield ("text", delta["content"])
+                content_parts.append(delta["content"])
+            for tool_delta in delta.get("tool_calls") or []:
+                index = int(tool_delta.get("index") or 0)
+                slot = tool_slots.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                if tool_delta.get("id"):
+                    slot["id"] = tool_delta["id"]
+                function = tool_delta.get("function") or {}
+                if function.get("name"):
+                    slot["name"] = function["name"]
+                if function.get("arguments"):
+                    slot["arguments"] += function["arguments"]
+            if choice.get("finish_reason"):
+                raw_finish_reason = choice["finish_reason"]
+                finish_reason = "stop"
+                if raw_finish_reason == "tool_calls":
+                    finish_reason = "tool_calls"
+                elif raw_finish_reason == "length":
+                    finish_reason = "length"
+
+        tool_calls = []
+        for index in sorted(tool_slots):
+            slot = tool_slots[index]
+            tool_calls.append(
+                ToolCall(
+                    id=slot["id"],
+                    name=slot["name"],
+                    parameters=json.loads(slot["arguments"]) if slot["arguments"] else {},
+                )
+            )
+
+        return LLMResponse(
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
 
     def count_tokens(self, text: str) -> int:
         """

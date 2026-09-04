@@ -4,12 +4,14 @@ OpenAI LLM provider implementation.
 Supports GPT-4, GPT-4o, and other OpenAI models with tool calling.
 """
 
+import json
 import os
 from collections.abc import Iterator
 
 from openai import OpenAI
 
 from ..config import AgentLLMConfig
+from ..events import StreamEvent
 from .base import BaseLLMProvider, LLMResponse, ToolCall
 
 
@@ -167,6 +169,109 @@ class OpenAIProvider(BaseLLMProvider):
         for chunk in stream:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+
+    def stream_chat_events(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        **kwargs,
+    ) -> Iterator[StreamEvent]:
+        """
+        Stream response events from OpenAI, returning the complete response.
+
+        Text deltas are emitted as ``("text", chunk)`` StreamEvents as the
+        model generates them. Tool-call argument fragments are accumulated
+        into complete tool calls, and usage is taken from the final chunk
+        (requested via ``stream_options.include_usage``); both are returned on
+        the LLMResponse, so the agent loop's approval workflow behaves
+        identically on the streaming and buffered paths. Failures propagate —
+        the agent loop normalizes provider exceptions into stable error kinds.
+
+        Args:
+            messages: List of messages in OpenAI format
+            tools: Optional list of tool schemas in OpenAI format
+            **kwargs: Additional parameters
+
+        Yields:
+            StreamEvent tuples (``("text", str)`` deltas)
+
+        Returns:
+            The complete LLMResponse (tool calls, finish_reason, usage)
+        """
+        self.validate_request(messages, tools, stream=True)
+        messages = self.normalize_messages(messages)
+        # Prepare request
+        request_params = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+
+        if tools:
+            request_params["tools"] = tools
+            request_params["tool_choice"] = "auto"
+
+        # Stream events
+        stream = self.client.chat.completions.create(**request_params)
+
+        content_parts: list[str] = []
+        # tool-call accumulation slot per streamed index
+        tool_slots: dict[int, dict] = {}
+        usage: dict[str, int] = {}
+        finish_reason = "stop"
+
+        for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage_chunk = chunk.usage
+                usage = {
+                    "prompt_tokens": usage_chunk.prompt_tokens,
+                    "completion_tokens": usage_chunk.completion_tokens,
+                    "total_tokens": usage_chunk.total_tokens,
+                }
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta is not None and delta.content:
+                yield ("text", delta.content)
+                content_parts.append(delta.content)
+            for tool_delta in getattr(delta, "tool_calls", None) or []:
+                slot = tool_slots.setdefault(tool_delta.index, {"id": "", "name": "", "arguments": ""})
+                if tool_delta.id:
+                    slot["id"] = tool_delta.id
+                function = tool_delta.function
+                if function is not None:
+                    if function.name:
+                        slot["name"] = function.name
+                    if function.arguments:
+                        slot["arguments"] += function.arguments
+            if choice.finish_reason:
+                finish_reason = "stop"
+                if choice.finish_reason == "tool_calls":
+                    finish_reason = "tool_calls"
+                elif choice.finish_reason == "length":
+                    finish_reason = "length"
+
+        tool_calls = []
+        for index in sorted(tool_slots):
+            slot = tool_slots[index]
+            tool_calls.append(
+                ToolCall(
+                    id=slot["id"],
+                    name=slot["name"],
+                    parameters=json.loads(slot["arguments"]) if slot["arguments"] else {},
+                )
+            )
+
+        return LLMResponse(
+            content="".join(content_parts),
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
 
     def count_tokens(self, text: str) -> int:
         """
