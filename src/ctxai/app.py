@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import typer
+from typer.core import TyperGroup
 
 app = typer.Typer(
     name="ctxai",
@@ -328,6 +329,98 @@ def checkpoints_delete(
 
 
 app.add_typer(checkpoints_app, name="checkpoints")
+
+
+eval_app = typer.Typer(help="Run evaluation benchmarks against local indexes")
+
+
+class _RunOrCommandGroup(TyperGroup):
+    """Group that dispatches unknown first arguments to the implicit run command.
+
+    Lets ``ctxai eval retrieval BENCHMARK ...`` run the benchmark directly
+    while keeping ``ctxai eval retrieval validate BENCHMARK`` as a real
+    subcommand (a Click group cannot hold both a positional argument and
+    subcommands by itself).
+    """
+
+    def resolve_command(self, ctx, args):
+        first = args[0] if args else None
+        if first is not None and first not in self.commands:
+            implicit_run = self.get_command(ctx, "run")
+            if implicit_run is not None:
+                return "run", implicit_run, list(args)
+        return super().resolve_command(ctx, args)
+
+
+retrieval_eval_app = typer.Typer(cls=_RunOrCommandGroup, no_args_is_help=True, help="Retrieval quality benchmark")
+
+
+@retrieval_eval_app.command("run")
+def eval_retrieval_run(
+    benchmark: Path = typer.Argument(..., help="Path to the versioned benchmark JSON document"),
+    index: str = typer.Option(..., "--index", help="Name of the index to evaluate against"),
+    output: Path | None = typer.Option(
+        None, "--output", help="Artifact output path (defaults to .ctxai/evaluations/retrieval/)"
+    ),
+    baseline: Path | None = typer.Option(None, "--baseline", help="Prior evaluation artifact to compare against"),
+    fail_on_regression: bool = typer.Option(
+        False, "--fail-on-regression", help="Exit non-zero when any gate regresses beyond tolerance"
+    ),
+    repeat: int = typer.Option(1, "--repeat", min=1, max=10, help="Executions per case (first repeat warms up)"),
+    as_json: bool = typer.Option(False, "--json", help="Print the exact on-disk artifact JSON"),
+    project_path: Path | None = typer.Option(
+        None,
+        "--project-path",
+        "-p",
+        help="Project path for configuration and indexes (uses current directory if not provided)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """Run the retrieval benchmark against a local index and report quality gates."""
+    from .commands.eval_command import run_retrieval_eval
+
+    exit_code = run_retrieval_eval(
+        benchmark_path=benchmark,
+        index_name=index,
+        project_path=project_path,
+        output=output,
+        baseline=baseline,
+        fail_on_regression=fail_on_regression,
+        repeat=repeat,
+        as_json=as_json,
+    )
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+@retrieval_eval_app.command("validate")
+def eval_retrieval_validate(
+    benchmark: Path = typer.Argument(..., help="Path to the versioned benchmark JSON document"),
+    project_path: Path | None = typer.Option(
+        None,
+        "--project-path",
+        "-p",
+        help="Optional project root to also verify expected evidence files and line ranges",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print a versioned JSON validation envelope"),
+):
+    """Validate a benchmark without running retrieval (schema, IDs, paths, splits)."""
+    from .commands.eval_command import validate_retrieval_benchmark
+
+    exit_code = validate_retrieval_benchmark(benchmark_path=benchmark, project_path=project_path, as_json=as_json)
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+eval_app.add_typer(retrieval_eval_app, name="retrieval")
+app.add_typer(eval_app, name="eval")
 
 
 @app.callback()

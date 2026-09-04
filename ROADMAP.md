@@ -21,7 +21,7 @@ This roadmap summarizes validated capabilities and upcoming product work. [plan.
 
 - [ ] Build a persistent symbol and relationship graph for definitions, imports, calls, inheritance, tests, and references
 - [ ] Expand semantic retrieval with graph relationships while preserving bounded, inspectable evidence
-- [ ] Add an executable retrieval-evaluation CLI with Recall@K, MRR, latency, and context-efficiency metrics
+- [x] Add an executable retrieval-evaluation CLI with Recall@K, MRR, latency, and context-efficiency metrics (`ctxai eval retrieval`, RE-01)
 - [ ] Add privacy-preserving retrieval traces and dashboard observability
 - [ ] Enforce retrieval-quality regression gates in CI
 - [ ] Add change-impact analysis using callers, references, tests, and documentation relationships

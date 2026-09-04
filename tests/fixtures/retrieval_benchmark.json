@@ -1,22 +1,187 @@
-[
-  {"query":"agent iteration loop","expected_locations":["src/ctxai/agent/core.py"],"retrieved_locations":["src/ctxai/agent/core.py","src/ctxai/agent/context.py"]},
-  {"query":"conversation truncation","expected_locations":["src/ctxai/agent/context.py"],"retrieved_locations":["src/ctxai/agent/core.py","src/ctxai/agent/context.py"]},
-  {"query":"anthropic tool calls","expected_locations":["src/ctxai/agent/llm/anthropic_provider.py"],"retrieved_locations":["src/ctxai/agent/llm/anthropic_provider.py"]},
-  {"query":"provider factory","expected_locations":["src/ctxai/agent/llm/factory.py"],"retrieved_locations":["src/ctxai/agent/llm/base.py","src/ctxai/agent/llm/factory.py"]},
-  {"query":"bash command safety","expected_locations":["src/ctxai/agent/tools/bash_tool.py"],"retrieved_locations":["src/ctxai/agent/tools/bash_tool.py"]},
-  {"query":"read file tool","expected_locations":["src/ctxai/agent/tools/file_ops.py"],"retrieved_locations":["src/ctxai/agent/tools/file_ops.py"]},
-  {"query":"semantic code search","expected_locations":["src/ctxai/agent/tools/code_search.py"],"retrieved_locations":["src/ctxai/agent/tools/code_search.py"]},
-  {"query":"tool schema registry","expected_locations":["src/ctxai/agent/tools/registry.py"],"retrieved_locations":["src/ctxai/agent/tools/base.py","src/ctxai/agent/tools/registry.py"]},
-  {"query":"tree sitter chunks","expected_locations":["src/ctxai/chunking.py"],"retrieved_locations":["src/ctxai/chunking.py"]},
-  {"query":"embedding providers","expected_locations":["src/ctxai/embeddings.py"],"retrieved_locations":["src/ctxai/embeddings.py"]},
-  {"query":"gitignore traversal","expected_locations":["src/ctxai/traversal.py"],"retrieved_locations":["src/ctxai/traversal.py"]},
-  {"query":"project size limits","expected_locations":["src/ctxai/size_validator.py"],"retrieved_locations":["src/ctxai/config.py","src/ctxai/size_validator.py"]},
-  {"query":"persistent vector search","expected_locations":["src/ctxai/vector_store.py"],"retrieved_locations":["src/ctxai/vector_store.py"]},
-  {"query":"index cli workflow","expected_locations":["src/ctxai/commands/index_command.py"],"retrieved_locations":["src/ctxai/commands/index_command.py"]},
-  {"query":"query output formatting","expected_locations":["src/ctxai/commands/query_command.py"],"retrieved_locations":["src/ctxai/commands/query_command.py"]},
-  {"query":"mcp query tool","expected_locations":["src/ctxai/commands/server_command.py"],"retrieved_locations":["src/ctxai/server.py","src/ctxai/commands/server_command.py"]},
-  {"query":"dashboard index statistics","expected_locations":["src/ctxai/commands/dashboard_command.py"],"retrieved_locations":["src/ctxai/commands/dashboard_command.py"]},
-  {"query":"toml configuration","expected_locations":["src/ctxai/config.py"],"retrieved_locations":["src/ctxai/config.py"]},
-  {"query":"repository map","expected_locations":["src/ctxai/agent/repomap.py"],"retrieved_locations":["src/ctxai/agent/prompts.py","src/ctxai/agent/repomap.py"]},
-  {"query":"structured planning","expected_locations":["src/ctxai/agent/planning.py"],"retrieved_locations":["src/ctxai/agent/planning.py"]}
-]
+{
+  "schema_version": 1,
+  "name": "ctxai-retrieval-core",
+  "description": "Core retrieval benchmark for ctxai itself: 20 natural-language questions answered by the hybrid retrieval pipeline. Expected evidence is repository-relative; retrieved results are produced at runtime, never embedded here. Splits: train/dev cases are for authoring and iteration discipline, test cases are held out (never tune on the test split).",
+  "cases": [
+    {
+      "id": "q01-agent-iteration-loop",
+      "query": "agent iteration loop",
+      "tags": ["agent", "loop"],
+      "cohort": "agent",
+      "split": "train",
+      "expected": {"files": ["src/ctxai/agent/core.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/core.py": 3}
+    },
+    {
+      "id": "q02-conversation-truncation",
+      "query": "conversation truncation",
+      "tags": ["agent", "context"],
+      "cohort": "agent",
+      "split": "train",
+      "expected": {"files": ["src/ctxai/agent/context.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/context.py": 3}
+    },
+    {
+      "id": "q03-anthropic-tool-calls",
+      "query": "anthropic tool calls",
+      "tags": ["agent", "llm", "anthropic"],
+      "cohort": "agent",
+      "split": "train",
+      "expected": {"files": ["src/ctxai/agent/llm/anthropic_provider.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/llm/anthropic_provider.py": 3}
+    },
+    {
+      "id": "q04-provider-factory",
+      "query": "provider factory",
+      "tags": ["agent", "llm"],
+      "cohort": "agent",
+      "split": "train",
+      "expected": {"files": ["src/ctxai/agent/llm/factory.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/llm/factory.py": 3, "src/ctxai/agent/llm/base.py": 2}
+    },
+    {
+      "id": "q05-bash-command-safety",
+      "query": "bash command safety",
+      "tags": ["agent", "tools", "safety"],
+      "cohort": "agent",
+      "split": "dev",
+      "expected": {"files": ["src/ctxai/agent/tools/bash_tool.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/tools/bash_tool.py": 3}
+    },
+    {
+      "id": "q06-read-file-tool",
+      "query": "read file tool",
+      "tags": ["agent", "tools"],
+      "cohort": "agent",
+      "split": "dev",
+      "expected": {"files": ["src/ctxai/agent/tools/file_ops.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/tools/file_ops.py": 3}
+    },
+    {
+      "id": "q07-semantic-code-search",
+      "query": "semantic code search",
+      "tags": ["agent", "tools", "retrieval"],
+      "cohort": "agent",
+      "split": "dev",
+      "expected": {"files": ["src/ctxai/agent/tools/code_search.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/tools/code_search.py": 3}
+    },
+    {
+      "id": "q08-tool-schema-registry",
+      "query": "tool schema registry",
+      "tags": ["agent", "tools"],
+      "cohort": "agent",
+      "split": "dev",
+      "expected": {"files": ["src/ctxai/agent/tools/registry.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/tools/registry.py": 3, "src/ctxai/agent/tools/base.py": 2}
+    },
+    {
+      "id": "q09-tree-sitter-chunks",
+      "query": "tree sitter chunks",
+      "tags": ["indexing", "chunking"],
+      "cohort": "pipeline",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/chunking.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/chunking.py": 3}
+    },
+    {
+      "id": "q10-embedding-providers",
+      "query": "embedding providers",
+      "tags": ["indexing", "embeddings"],
+      "cohort": "pipeline",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/embeddings.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/embeddings.py": 3}
+    },
+    {
+      "id": "q11-gitignore-traversal",
+      "query": "gitignore traversal",
+      "tags": ["indexing", "traversal"],
+      "cohort": "pipeline",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/traversal.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/traversal.py": 3}
+    },
+    {
+      "id": "q12-project-size-limits",
+      "query": "project size limits",
+      "tags": ["indexing", "limits"],
+      "cohort": "pipeline",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/size_validator.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/size_validator.py": 3}
+    },
+    {
+      "id": "q13-persistent-vector-search",
+      "query": "persistent vector search",
+      "tags": ["indexing", "vector-store"],
+      "cohort": "pipeline",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/vector_store.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/vector_store.py": 3}
+    },
+    {
+      "id": "q14-index-cli-workflow",
+      "query": "index cli workflow",
+      "tags": ["cli", "indexing"],
+      "cohort": "interface",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/commands/index_command.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/commands/index_command.py": 3}
+    },
+    {
+      "id": "q15-query-output-formatting",
+      "query": "query output formatting",
+      "tags": ["cli", "query"],
+      "cohort": "interface",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/commands/query_command.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/commands/query_command.py": 3}
+    },
+    {
+      "id": "q16-mcp-query-tool",
+      "query": "mcp query tool",
+      "tags": ["mcp", "server"],
+      "cohort": "interface",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/commands/server_command.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/commands/server_command.py": 3}
+    },
+    {
+      "id": "q17-dashboard-index-statistics",
+      "query": "dashboard index statistics",
+      "tags": ["dashboard", "web"],
+      "cohort": "interface",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/commands/dashboard_command.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/commands/dashboard_command.py": 3}
+    },
+    {
+      "id": "q18-toml-configuration",
+      "query": "toml configuration",
+      "tags": ["config", "toml"],
+      "cohort": "pipeline",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/config.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/config.py": 3}
+    },
+    {
+      "id": "q19-repository-map",
+      "query": "repository map",
+      "tags": ["agent", "repomap"],
+      "cohort": "agent",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/agent/repomap.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/repomap.py": 3}
+    },
+    {
+      "id": "q20-structured-planning",
+      "query": "structured planning",
+      "tags": ["agent", "planning"],
+      "cohort": "agent",
+      "split": "test",
+      "expected": {"files": ["src/ctxai/agent/planning.py"], "symbols": [], "line_ranges": {}},
+      "relevance": {"src/ctxai/agent/planning.py": 3}
+    }
+  ]
+}

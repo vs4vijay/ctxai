@@ -1,6 +1,6 @@
 # ctxai Unified Plan
 
-Last reviewed: 2026-09-03
+Last reviewed: 2026-09-04
 
 This document is the single source of truth for all remaining ctxai work. It merges the open slices
 of `plan2.md` (intelligence phase) and `plan3.md` (harness-hardening phase) into one rationally
@@ -70,7 +70,7 @@ open repository
 | HH-07 Approval ergonomics and planner control | once/session/deny approvals bound to exact diffs | Validated (2026-09-04) |
 | HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Validated (2026-09-04) |
 | HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Planned |
-| RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Planned |
+| RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Validated (2026-09-04) |
 | IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Planned |
 | IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Planned |
 | IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Planned |
@@ -84,10 +84,10 @@ tree-sitter and stores `node_type` and symbol `name` in chunk metadata (`chunkin
 `IndexManifest` is the atomic, schema-versioned source of truth for index identity; `VectorStore`
 persists per-index ChromaDB; `HybridRetriever` fuses semantic, lexical, and symbol rankings while
 `ContextAssembler` emits bounded `file:start-end` evidence; `IndexOperations` is the shared service
-layer for CLI/dashboard; `retrieval_eval.py` computes recall@5 and MRR from **pre-populated**
-`retrieved_locations` in `tests/fixtures/retrieval_benchmark.json` (20 questions — a test fixture,
-not yet a product benchmark); sessions persist atomically with secret redaction
-(`agent/sessions.py`).
+layer for CLI/dashboard; the `evals/` package (RE-01) provides the versioned retrieval benchmark
+(`tests/fixtures/retrieval_benchmark.json`, 20 questions) executed at runtime through
+`ctxai eval retrieval` with recall@k/MRR/nDCG/latency/token metrics and baseline gates; sessions
+persist atomically with secret redaction (`agent/sessions.py`).
 
 Known defects and gaps the harness slices fix (verified in source, 2026-09-03):
 
@@ -730,7 +730,7 @@ tools (they are already path-contained); remote execution.
 reproducible quality, latency, and context-efficiency results, with a non-zero exit code when
 declared gates regress.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-04).
 
 **Scope**
 
