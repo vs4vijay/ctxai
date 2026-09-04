@@ -201,6 +201,135 @@ def runs_delete(
 app.add_typer(runs_app, name="runs")
 
 
+checkpoints_app = typer.Typer(help="Inspect and manage run checkpoints for rollback")
+
+
+@checkpoints_app.command("list")
+def checkpoints_list(
+    run: str | None = typer.Option(None, "--run", help="Only show the checkpoint of this run id"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of a table"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """List captured run checkpoints with status, file count, and size."""
+    import json
+
+    from rich.console import Console
+    from rich.table import Table
+
+    from .commands.checkpoints_command import list_checkpoints
+
+    try:
+        checkpoints = list_checkpoints(project_path, run_id=run)
+    except (FileNotFoundError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if as_json:
+        envelope = {"schema_version": 1, "checkpoints": [checkpoint.to_dict() for checkpoint in checkpoints]}
+        typer.echo(json.dumps(envelope, indent=2))
+        return
+    table = Table("Checkpoint", "Created", "Status", "Files", "Bytes")
+    for checkpoint in checkpoints:
+        status = "retained" if checkpoint.retained else checkpoint.status
+        table.add_row(
+            checkpoint.checkpoint_id,
+            checkpoint.created_at or "?",
+            status,
+            str(len(checkpoint.files)),
+            f"{checkpoint.bytes_captured:,}",
+        )
+    Console().print(table)
+
+
+@checkpoints_app.command("restore")
+def checkpoints_restore(
+    checkpoint_id: str = typer.Argument(..., help="Checkpoint id (equals the run id)"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Restore even when the working tree moved on since the run (per-file stale refusals)",
+    ),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Restore the working tree to a checkpoint's pre-run state (asks for confirmation)."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from .commands.checkpoints_command import get_checkpoint, restore_checkpoint
+
+    console = Console()
+    try:
+        checkpoint = get_checkpoint(checkpoint_id, project_path)
+    except (FileNotFoundError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if not checkpoint.files:
+        typer.echo(f"Checkpoint '{checkpoint_id}' has no captured files; nothing to restore")
+        return
+    table = Table("File", "Captured as")
+    for entry in checkpoint.files:
+        table.add_row(entry.path, entry.kind.value)
+    console.print(table)
+    if not typer.confirm(f"Restore {len(checkpoint.files)} file(s) to their pre-run state?"):
+        raise typer.Abort()
+    try:
+        result = restore_checkpoint(checkpoint_id, project_path, force=force)
+    except (FileNotFoundError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    if not result.applied:
+        console.print("[red]Restore refused: the working tree moved on since the run.[/red]")
+        for item in result.refused:
+            console.print(f"[red]- {item.path}: {item.detail}[/red]")
+        console.print("Use --force to restore anyway.")
+        raise typer.Exit(code=1)
+    for item in result.results:
+        suffix = f" ({item.detail})" if item.detail else ""
+        console.print(f"[green][OK][/green] {item.path}: {item.action}{suffix}")
+    typer.echo(f"Restored checkpoint '{checkpoint_id}'")
+
+
+@checkpoints_app.command("delete")
+def checkpoints_delete(
+    checkpoint_id: str | None = typer.Argument(None, help="Checkpoint id to delete (omit with --all)"),
+    all_checkpoints: bool = typer.Option(False, "--all", help="Delete every checkpoint (asks for confirmation)"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Delete one checkpoint, or all of them with --all."""
+    from .commands.checkpoints_command import delete_all_checkpoints, delete_checkpoint, resolve_checkpoints_dir
+
+    if all_checkpoints:
+        if checkpoint_id:
+            typer.echo("Error: specify either CHECKPOINT_ID or --all, not both", err=True)
+            raise typer.Exit(code=1)
+        checkpoints_dir = resolve_checkpoints_dir(project_path)
+        count = (
+            len([path for path in checkpoints_dir.iterdir() if path.is_dir() and (path / "manifest.json").is_file()])
+            if checkpoints_dir.is_dir()
+            else 0
+        )
+        if count == 0:
+            typer.echo(f"No checkpoints under {checkpoints_dir}")
+            return
+        if not typer.confirm(f"Delete all {count} checkpoint(s) under {checkpoints_dir}?"):
+            raise typer.Abort()
+        deleted = delete_all_checkpoints(project_path)
+        typer.echo(f"Deleted {deleted} checkpoint(s)")
+        return
+
+    if not checkpoint_id:
+        typer.echo("Error: provide CHECKPOINT_ID or --all", err=True)
+        raise typer.Exit(code=1)
+    try:
+        path = delete_checkpoint(checkpoint_id, project_path)
+    except (FileNotFoundError, ValueError) as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Deleted checkpoint {path}")
+
+
+app.add_typer(checkpoints_app, name="checkpoints")
+
+
 @app.callback()
 def main_callback(ctx: typer.Context):
     """
@@ -706,6 +835,7 @@ def code(
     async def run_task():
         from rich.console import Console
 
+        from .agent.checkpoints import CheckpointManager
         from .agent.config import AgentConfig, AgentLLMConfig
         from .agent.core import Agent, AgentLoopConfig, format_compaction_notice
         from .agent.llm.anthropic_provider import AnthropicProvider
@@ -772,6 +902,13 @@ def code(
             # is the transcript run id (HH-04). Chat passes none — every
             # message is a distinct run and gets a fresh id.
             run_id=execution_context.request_id,
+            # Local pre-mutation checkpoints (HH-06), bounded by the
+            # behavior retention/size config.
+            checkpoint_manager=CheckpointManager.for_project(
+                Path.cwd(),
+                retention=agent_config.behavior.checkpoint_retention,
+                max_bytes=agent_config.behavior.checkpoint_max_bytes,
+            ),
         )
         agent = Agent(loop_config)
 

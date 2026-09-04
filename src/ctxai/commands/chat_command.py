@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.prompt import Confirm
 
+from ..agent.checkpoints import CheckpointManager
 from ..agent.config import AgentConfig, AgentLLMConfig
 from ..agent.core import Agent, AgentLoopConfig, format_compaction_notice
 from ..agent.resilience import format_retry_notice
@@ -925,6 +926,13 @@ async def interactive_chat(
         on_compaction=(lambda notice: console.print(f"[yellow]{format_compaction_notice(notice)}[/yellow]")),
         session_store=session_store,
         session_name=current_session,
+        # Local pre-mutation checkpoints (HH-06): one per run under
+        # .ctxai/checkpoints/, bounded by the behavior retention/size config.
+        checkpoint_manager=CheckpointManager.for_project(
+            working_directory,
+            retention=agent_config.behavior.checkpoint_retention,
+            max_bytes=agent_config.behavior.checkpoint_max_bytes,
+        ),
     )
     agent = Agent(loop_config)
 

@@ -66,7 +66,7 @@ open repository
 | HH-03 Context window management | Measured tokens, mid-loop compaction | Validated (2026-09-04) |
 | HH-04 Run transcripts and cost ledger | Redacted local run records with usage/cost | Validated (2026-09-04) |
 | HH-05 True streaming interaction | Live token and tool events in chat | Validated (2026-09-04) |
-| HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Planned |
+| HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Validated (2026-09-04) |
 | HH-07 Approval ergonomics and planner control | once/session/deny approvals bound to exact diffs | Planned |
 | HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Planned |
 | HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Planned |
@@ -560,7 +560,7 @@ dashboard streaming; voice/TTY polish beyond event rendering.
 **User outcome:** A failed or cancelled verified run is reversible with one command: files are
 restored byte-identical to their pre-run state, including files the run created or deleted.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-04).
 
 **Scope**
 
