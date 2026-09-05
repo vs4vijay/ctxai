@@ -420,6 +420,102 @@ def eval_retrieval_validate(
 
 
 eval_app.add_typer(retrieval_eval_app, name="retrieval")
+
+
+agent_eval_app = typer.Typer(cls=_RunOrCommandGroup, no_args_is_help=True, help="Agent task benchmark (HH-09)")
+
+
+@agent_eval_app.command("run")
+def eval_agent_run(
+    benchmark: Path = typer.Argument(..., help="Path to the versioned agent benchmark JSON document"),
+    provider: str = typer.Option(
+        "mock",
+        "--provider",
+        help="'mock' runs the deterministic scripted benchmark (CI path, no network); 'configured' runs "
+        "the real configured provider (network + token cost, maintainer action)",
+    ),
+    cases: str | None = typer.Option(None, "--cases", help="Comma-separated case ids to run (default: all)"),
+    output: Path | None = typer.Option(
+        None, "--output", help="Artifact output path (defaults to .ctxai/evaluations/agent/)"
+    ),
+    baseline: Path | None = typer.Option(None, "--baseline", help="Prior agent artifact to compare against"),
+    fail_on_regression: bool = typer.Option(
+        False, "--fail-on-regression", help="Exit non-zero when any gate regresses beyond tolerance"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print the exact on-disk artifact JSON"),
+    project_path: Path | None = typer.Option(
+        None,
+        "--project-path",
+        "-p",
+        help="Project root for artifacts, workspaces, and configuration (uses current directory if not provided)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """Run the agent task benchmark through the real agent loop and report scored gates."""
+    from .commands.eval_command import run_agent_eval
+
+    case_ids = [item.strip() for item in cases.split(",") if item.strip()] if cases else None
+    exit_code = run_agent_eval(
+        benchmark_path=benchmark,
+        provider_mode=provider,
+        project_path=project_path,
+        cases=case_ids,
+        output=output,
+        baseline=baseline,
+        fail_on_regression=fail_on_regression,
+        as_json=as_json,
+    )
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+@agent_eval_app.command("validate")
+def eval_agent_validate(
+    benchmark: Path = typer.Argument(..., help="Path to the versioned agent benchmark JSON document"),
+    as_json: bool = typer.Option(False, "--json", help="Print a versioned JSON validation envelope"),
+):
+    """Validate an agent benchmark without running the agent (schema, ids, paths, checks)."""
+    from .commands.eval_command import validate_agent_benchmark
+
+    exit_code = validate_agent_benchmark(benchmark_path=benchmark, as_json=as_json)
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+eval_app.add_typer(agent_eval_app, name="agent")
+
+
+@eval_app.command("providers")
+def eval_providers(
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        help="Live provider name from PROVIDER_SPECS (network + token cost, maintainer action). "
+        "Omit for the deterministic mock conformance suite (CI path).",
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Print a versioned JSON conformance report"),
+    project_path: Path | None = typer.Option(
+        None,
+        "--project-path",
+        "-p",
+        help="Project path for configuration and credentials (uses current directory if not provided)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+):
+    """Run the executable provider conformance suite derived from PROVIDER_SPECS."""
+    from .commands.eval_command import run_providers_conformance
+
+    exit_code = run_providers_conformance(provider=provider, project_path=project_path, as_json=as_json)
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
 app.add_typer(eval_app, name="eval")
 
 

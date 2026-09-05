@@ -31,7 +31,7 @@ from .artifacts import (
     EvaluationArtifact,
 )
 from .benchmark import BenchmarkCase, RetrievalBenchmark
-from .common import MetricValue, content_fingerprint
+from .common import EvalError, MetricValue, content_fingerprint
 from .metrics import (
     bootstrap_ci,
     duplicate_token_ratio,
@@ -55,10 +55,6 @@ MAX_BOOTSTRAP_SAMPLES = 10000
 MAX_EVIDENCE_FILE_BYTES = 5_000_000
 
 GRAPH_UNAVAILABLE_REASON = "graph expansion not enabled (IG-03 graph retrieval not implemented)"
-
-
-class EvalError(RuntimeError):
-    """Raised when an evaluation cannot run or complete honestly."""
 
 
 @dataclass

@@ -613,6 +613,7 @@ def _metric_gate(
     current: MetricValue,
     baseline: MetricValue,
     tolerances: dict[str, MetricTolerance],
+    directions: dict[str, str] | None = None,
 ) -> GateResult:
     """Compare one metric for one cohort against the baseline value.
 
@@ -622,11 +623,12 @@ def _metric_gate(
         current: Current metric value.
         baseline: Baseline metric value.
         tolerances: Tolerance table (defaults to ``DEFAULT_TOLERANCES``).
+        directions: Metric direction table (defaults to ``METRIC_DIRECTIONS``).
 
     Returns:
         The resulting GateResult.
     """
-    direction = METRIC_DIRECTIONS.get(metric, "higher")
+    direction = (directions or METRIC_DIRECTIONS).get(metric, "higher")
     tolerance = tolerances.get(metric, MetricTolerance(absolute=0.02, relative=0.02))
     if not current.is_available or not baseline.is_available:
         reason = current.reason if not current.is_available else baseline.reason
@@ -673,29 +675,43 @@ def _identity_block(payload: dict[str, Any], key: str) -> dict[str, Any]:
     return block if isinstance(block, dict) else {}
 
 
-def compare_with_baseline(
-    current: EvaluationArtifact,
+def compare_evaluation_payloads(
+    *,
+    kind: str,
+    benchmark_block: dict[str, Any],
+    configuration_block: dict[str, Any],
+    case_ids: list[str],
+    aggregates: dict[str, Any],
     baseline_payload: dict[str, Any],
-    tolerances: dict[str, MetricTolerance] | None = None,
+    gated_metrics: frozenset[str],
+    tolerances: dict[str, MetricTolerance],
+    metric_directions: dict[str, str],
 ) -> ComparisonBlock:
-    """Compare a fresh artifact against a baseline artifact payload.
+    """Shared artifact-versus-baseline comparison (RE-01 retrieval, HH-09 agent).
 
     Compatibility is checked first: artifact schema, evaluation kind,
     benchmark fingerprint, configuration fingerprint, case set, and cohort
     set. Incompatible artifacts are never compared as equivalent; their
     status is ``incompatible`` with every mismatch named. Gate comparison
-    covers ``overall`` and every shared cohort for the gated metric set
-    (latency is reported in deltas but intentionally not gated).
+    covers ``overall`` and every shared cohort for the caller's gated metric
+    set (noisy latency-style metrics stay out of the gate sets).
 
     Args:
-        current: The freshly produced artifact.
+        kind: Evaluation kind of the current artifact.
+        benchmark_block: Benchmark identity block of the current artifact.
+        configuration_block: Configuration identity block of the current
+            artifact.
+        case_ids: Sorted case ids of the current artifact's runs.
+        aggregates: ``{"overall": CohortMetricsBlock, "by_cohort": {...}}``
+            aggregate blocks of the current artifact.
         baseline_payload: Parsed baseline artifact JSON.
-        tolerances: Optional tolerance table override.
+        gated_metrics: The metric names eligible for gates.
+        tolerances: Tolerance table for the gated metrics.
+        metric_directions: Direction table ("higher"/"lower") for gates.
 
     Returns:
         The ComparisonBlock embedded in the current artifact.
     """
-    tolerances = tolerances if tolerances is not None else DEFAULT_TOLERANCES
     incompatibilities: list[str] = []
 
     baseline_schema = baseline_payload.get("schema_version")
@@ -704,27 +720,24 @@ def compare_with_baseline(
             f"artifact schema_version {baseline_schema} != {EVALUATION_SCHEMA_VERSION}; rebuild the baseline"
         )
     baseline_kind = baseline_payload.get("kind")
-    if baseline_kind is not None and baseline_kind != current.kind:
-        incompatibilities.append(f"evaluation kind {baseline_kind!r} != {current.kind!r}")
+    if baseline_kind is not None and baseline_kind != kind:
+        incompatibilities.append(f"evaluation kind {baseline_kind!r} != {kind!r}")
 
-    current_benchmark = dict(current.benchmark)
     baseline_benchmark = _identity_block(baseline_payload, "benchmark")
-    if current_benchmark.get("fingerprint") != baseline_benchmark.get("fingerprint"):
+    if dict(benchmark_block).get("fingerprint") != baseline_benchmark.get("fingerprint"):
         incompatibilities.append(
             "benchmark fingerprint mismatch: the baseline was produced from a different benchmark document"
         )
-    current_configuration = dict(current.configuration)
     baseline_configuration = _identity_block(baseline_payload, "configuration")
-    if current_configuration.get("fingerprint") != baseline_configuration.get("fingerprint"):
+    if dict(configuration_block).get("fingerprint") != baseline_configuration.get("fingerprint"):
         incompatibilities.append("configuration fingerprint mismatch: embedding identity or retrieval settings changed")
 
-    current_cases = sorted(run.case_id for run in current.runs)
     baseline_cases = sorted(
         str(run["case_id"]) for run in baseline_payload.get("runs", []) if isinstance(run, dict) and "case_id" in run
     )
-    if current_cases != baseline_cases:
-        removed = sorted(set(baseline_cases) - set(current_cases))
-        added = sorted(set(current_cases) - set(baseline_cases))
+    if sorted(case_ids) != baseline_cases:
+        removed = sorted(set(baseline_cases) - set(case_ids))
+        added = sorted(set(case_ids) - set(baseline_cases))
         detail = []
         if removed:
             detail.append(f"missing from current: {', '.join(removed)}")
@@ -734,7 +747,7 @@ def compare_with_baseline(
 
     baseline_aggregates = baseline_payload.get("aggregates") or {}
     baseline_cohorts = baseline_aggregates.get("by_cohort") or {}
-    current_cohorts = current.aggregates["by_cohort"]
+    current_cohorts = aggregates.get("by_cohort") or {}
     if sorted(baseline_cohorts) != sorted(current_cohorts):
         incompatibilities.append(
             f"cohort set differs: baseline {sorted(baseline_cohorts)} vs current {sorted(current_cohorts)}"
@@ -743,10 +756,18 @@ def compare_with_baseline(
     gates: list[GateResult] = []
     if not incompatibilities:
         baseline_overall = CohortMetricsBlock.from_dict(baseline_aggregates.get("overall") or {})
-        gates.extend(_compare_blocks("overall", current.aggregates["overall"], baseline_overall, tolerances))
+        gates.extend(
+            compare_metric_blocks(
+                "overall", aggregates["overall"], baseline_overall, gated_metrics, tolerances, metric_directions
+            )
+        )
         for cohort in sorted(current_cohorts):
             baseline_block = CohortMetricsBlock.from_dict(baseline_cohorts.get(cohort) or {})
-            gates.extend(_compare_blocks(cohort, current_cohorts[cohort], baseline_block, tolerances))
+            gates.extend(
+                compare_metric_blocks(
+                    cohort, current_cohorts[cohort], baseline_block, gated_metrics, tolerances, metric_directions
+                )
+            )
 
     if incompatibilities:
         status = "incompatible"
@@ -770,27 +791,67 @@ def compare_with_baseline(
     )
 
 
-def _compare_blocks(
+def compare_with_baseline(
+    current: EvaluationArtifact,
+    baseline_payload: dict[str, Any],
+    tolerances: dict[str, MetricTolerance] | None = None,
+    gated_metrics: frozenset[str] | None = None,
+    metric_directions: dict[str, str] | None = None,
+) -> ComparisonBlock:
+    """Compare a fresh retrieval artifact against a baseline artifact payload.
+
+    Delegates to :func:`compare_evaluation_payloads` with the retrieval
+    defaults; HH-09's agent artifacts share the same comparison code through
+    :func:`ctxai.evals.agent_artifacts.compare_agent_with_baseline`.
+
+    Args:
+        current: The freshly produced artifact.
+        baseline_payload: Parsed baseline artifact JSON.
+        tolerances: Optional tolerance table override.
+        gated_metrics: Optional gated metric set override.
+        metric_directions: Optional direction table override.
+
+    Returns:
+        The ComparisonBlock embedded in the current artifact.
+    """
+    return compare_evaluation_payloads(
+        kind=current.kind,
+        benchmark_block=current.benchmark,
+        configuration_block=current.configuration,
+        case_ids=sorted(run.case_id for run in current.runs),
+        aggregates=dict(current.aggregates),
+        baseline_payload=baseline_payload,
+        gated_metrics=gated_metrics or GATED_METRICS,
+        tolerances=tolerances if tolerances is not None else DEFAULT_TOLERANCES,
+        metric_directions=metric_directions or METRIC_DIRECTIONS,
+    )
+
+
+def compare_metric_blocks(
     cohort: str,
     current: CohortMetricsBlock,
     baseline: CohortMetricsBlock,
+    gated_metrics: frozenset[str],
     tolerances: dict[str, MetricTolerance],
+    metric_directions: dict[str, str],
 ) -> list[GateResult]:
-    """Compare two metrics blocks for the gated metric set.
+    """Compare two metrics blocks for a gated metric set.
 
     Args:
         cohort: Cohort label for the gates.
         current: Current metrics block.
         baseline: Baseline metrics block.
+        gated_metrics: Metric names eligible for gates.
         tolerances: Tolerance table.
+        metric_directions: Direction table ("higher"/"lower") for gates.
 
     Returns:
-        Gate results for every metric present in either block.
+        Gate results for every gated metric present in either block.
     """
     gates: list[GateResult] = []
     metric_names = sorted(set(current.metrics) | set(baseline.metrics))
     for metric in metric_names:
-        if metric not in GATED_METRICS:
+        if metric not in gated_metrics:
             continue
         gates.append(
             _metric_gate(
@@ -799,6 +860,7 @@ def _compare_blocks(
                 current.metrics.get(metric, MetricValue.unavailable("metric not present in current artifact")),
                 baseline.metrics.get(metric, MetricValue.unavailable("metric not present in baseline artifact")),
                 tolerances,
+                metric_directions,
             )
         )
     return gates
