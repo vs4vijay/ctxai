@@ -103,7 +103,7 @@ VERIFIED: Both providers work identically!
 ```bash
 $ cat ~/.ctxai/keys.json
 {
-  "openrouter": "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"
+  "openrouter": "sk-or-v1-REDACTED"
 }
 ```
 
