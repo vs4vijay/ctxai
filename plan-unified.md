@@ -69,7 +69,7 @@ open repository
 | HH-06 Checkpoint and rollback | Failed runs reversible byte-identically | Validated (2026-09-04) |
 | HH-07 Approval ergonomics and planner control | once/session/deny approvals bound to exact diffs | Validated (2026-09-04) |
 | HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Validated (2026-09-04) |
-| HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Planned |
+| HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Validated (2026-09-05) |
 | RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Validated (2026-09-04) |
 | IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Planned |
 | IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Planned |
@@ -795,7 +795,7 @@ against held-out test cases; making noisy wall-clock latency a hard cross-platfo
 on a curated task benchmark (deterministic mock provider in CI, configured providers locally), with
 a non-zero exit when gates regress — the missing counterpart to RE-01's retrieval benchmark.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-05).
 
 **Scope**
 

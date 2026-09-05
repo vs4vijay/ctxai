@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "name": "ctxai-agent-core",
+  "description": "Deterministic agent task benchmark (HH-09): every case ships the MockLLMProvider script that makes a mock-provider run byte-stable in CI. mock_script is provider scripting, never expectations: configured providers ignore it and attempt the tasks for real.",
+  "cases": [
+    {
+      "id": "hello-file",
+      "instruction": "Create a file named hello.txt containing exactly the word hello",
+      "tags": ["files", "write"],
+      "cohort": "file-ops",
+      "split": "test",
+      "setup": {
+        "files": {
+          "README.md": "# Agent benchmark fixture project\n"
+        }
+      },
+      "expected_checks": [
+        {
+          "command": "cat hello.txt",
+          "description": "hello.txt contains the word hello",
+          "expect_output": "hello"
+        }
+      ],
+      "forbidden_paths": ["README.md"],
+      "plan_required": false,
+      "max_iterations": 8,
+      "mock_script": [
+        {
+          "content": "I will create hello.txt with the requested content.",
+          "tool_calls": [
+            {"name": "write_file", "parameters": {"path": "hello.txt", "content": "hello"}}
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Now I verify the file contents.",
+          "tool_calls": [
+            {"name": "bash", "parameters": {"command": "cat hello.txt"}}
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Created hello.txt containing the word hello and verified it.",
+          "finish_reason": "stop",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        }
+      ]
+    },
+    {
+      "id": "fix-typo",
+      "instruction": "Fix the typo in greeting.py so the greeting says 'hello world'",
+      "tags": ["files", "edit"],
+      "cohort": "file-ops",
+      "split": "dev",
+      "setup": {
+        "files": {
+          "greeting.py": "GREETING = \"helllo world\"\n",
+          "NOTES.md": "Maintainer notes that must stay untouched.\n"
+        }
+      },
+      "expected_checks": [
+        {
+          "command": "grep -c \"hello world\" greeting.py",
+          "description": "greeting.py contains the corrected greeting exactly once",
+          "expect_output": "1"
+        }
+      ],
+      "forbidden_paths": ["NOTES.md"],
+      "plan_required": false,
+      "max_iterations": 8,
+      "mock_script": [
+        {
+          "content": "I will read greeting.py first.",
+          "tool_calls": [
+            {"name": "read_file", "parameters": {"path": "greeting.py"}}
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Applying the exact one-occurrence fix.",
+          "tool_calls": [
+            {
+              "name": "edit_file",
+              "parameters": {"path": "greeting.py", "old_text": "helllo", "new_text": "hello"}
+            }
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Now I verify the corrected greeting.",
+          "tool_calls": [
+            {"name": "bash", "parameters": {"command": "grep -c \"hello world\" greeting.py"}}
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Fixed the typo: greeting.py now says 'hello world'.",
+          "finish_reason": "stop",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        }
+      ]
+    },
+    {
+      "id": "plan-refactor",
+      "instruction": "Refactor the MODE value in config.py from legacy to modern, then verify the module compiles",
+      "tags": ["planning", "edit"],
+      "cohort": "planning",
+      "split": "test",
+      "setup": {
+        "files": {
+          "config.py": "MODE = \"legacy\"\n",
+          "notes.txt": "Internal notes that must stay untouched.\n"
+        }
+      },
+      "expected_checks": [
+        {
+          "command": "grep -c modern config.py",
+          "description": "config.py contains the refactored MODE value",
+          "expect_output": "1"
+        }
+      ],
+      "forbidden_paths": ["notes.txt"],
+      "plan_required": true,
+      "max_iterations": 10,
+      "mock_script": [
+        {
+          "content": "I will inspect config.py before planning.",
+          "tool_calls": [
+            {"name": "read_file", "parameters": {"path": "config.py"}}
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "This is a refactor, so I submit an evidence-backed plan first.",
+          "tool_calls": [
+            {
+              "name": "submit_plan",
+              "parameters": {
+                "goal": "Refactor MODE in config.py from legacy to modern",
+                "reasoning": "The inspected MODE constant is the only change point in config.py.",
+                "actions": [
+                  {
+                    "action_id": "edit-mode",
+                    "description": "Update the MODE value to modern",
+                    "tool": "edit_file",
+                    "parameters": {"path": "config.py", "old_text": "MODE = \"legacy\"", "new_text": "MODE = \"modern\""},
+                    "evidence": ["config.py:1-1"],
+                    "completion_criteria": "config.py contains MODE = \"modern\""
+                  },
+                  {
+                    "action_id": "verify-compile",
+                    "description": "Compile the refactored module",
+                    "tool": "bash",
+                    "parameters": {"command": "python -m py_compile config.py"},
+                    "evidence": ["config.py:1-1"],
+                    "completion_criteria": "The compiler exits successfully"
+                  }
+                ]
+              }
+            }
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Applying the approved edit.",
+          "tool_calls": [
+            {
+              "name": "edit_file",
+              "parameters": {"path": "config.py", "old_text": "MODE = \"legacy\"", "new_text": "MODE = \"modern\""}
+            }
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Running the approved verification command.",
+          "tool_calls": [
+            {"name": "bash", "parameters": {"command": "python -m py_compile config.py"}}
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        },
+        {
+          "content": "Refactored MODE to modern and verified the module compiles.",
+          "finish_reason": "stop",
+          "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+        }
+      ]
+    }
+  ]
+}

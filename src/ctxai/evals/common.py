@@ -37,6 +37,10 @@ VOLATILE_KEYS = frozenset(
 )
 
 
+class EvalError(RuntimeError):
+    """Raised when an evaluation cannot run or complete honestly."""
+
+
 def canonical_json(payload: Any) -> str:
     """Serialize a payload to a deterministic canonical JSON string.
 
