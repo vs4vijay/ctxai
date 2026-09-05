@@ -132,6 +132,42 @@ jobs:
           name: bandit-report
           path: bandit-report.json
 
+  retrieval-quality:
+    name: Retrieval Quality Gate (RE-03)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --all-groups
+
+      # Deterministic: registered mock embedding provider, checked-in
+      # benchmark and baseline, no network, no credentials. Exits non-zero
+      # when a gated metric regresses beyond the reviewed tolerances.
+      - name: Run retrieval quality gate
+        run: |
+          uv run python scripts/ci_retrieval_eval.py             --artifacts-dir retrieval-eval-artifacts
+
+      - name: Upload evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-eval-artifacts
+          path: retrieval-eval-artifacts/
+
   dependency-audit:
     name: Dependency Audit (pip-audit)
     runs-on: ubuntu-latest

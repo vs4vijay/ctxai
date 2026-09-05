@@ -1,7 +1,9 @@
 """Local web dashboard for inspecting and querying ctxai indexes (VS-09/IG-02).
 
 Graph views are read-only and served through the shared
-:class:`ctxai.graph.operations.GraphOperations` service; all rendered values
+:class:`ctxai.graph.operations.GraphOperations` service; evaluation views
+(RE-03) read immutable artifacts exclusively through
+:class:`ctxai.evals.operations.EvaluationOperations`; all rendered values
 are HTML-escaped and every result is bounded before work begins.
 """
 
@@ -13,6 +15,7 @@ from pathlib import Path
 from rich.console import Console
 
 from ..embeddings import EmbeddingsFactory
+from ..evals.operations import EvaluationOperations, RunComparison
 from ..graph.model import MAX_SYMBOL_QUERY_LENGTH, MAX_TRAVERSAL_DEPTH
 from ..graph.operations import GraphOperations
 from ..index_operations import IndexOperations
@@ -29,6 +32,26 @@ console = Console(legacy_windows=False)
 # Dashboard result bounds: stricter than the CLI caps, applied before work.
 DASHBOARD_SYMBOL_LIMIT = 100
 DASHBOARD_GRAPH_LIMIT = 100
+DASHBOARD_EVALUATION_LIMIT = 100
+DASHBOARD_CASE_LIMIT = 100
+DASHBOARD_PREVIEW_CITATIONS = 3
+
+# Presentation order for aggregate metric tables (mirrors the CLI report).
+EVALUATION_METRIC_ORDER = (
+    "successful_query_rate",
+    "recall@1",
+    "recall@5",
+    "recall@10",
+    "mrr",
+    "ndcg@10",
+    "evidence_precision@5",
+    "selected_token_mean",
+    "selected_token_p95",
+    "duplicate_token_ratio",
+    "graph_contribution_rate",
+    "latency_p50_ms",
+    "latency_p95_ms",
+)
 
 STYLE = """
 body{font:16px system-ui;background:#0f172a;color:#e2e8f0;margin:0}.wrap{max-width:1100px;margin:auto;padding:2rem}
@@ -45,9 +68,140 @@ def _page(title: str, body: str) -> str:
     return (
         "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
         f"<title>{escape(title)} - ctxai</title><style>{STYLE}</style></head><body><main class='wrap'>"
-        "<nav class='nav'><a href='/'>Indexes</a><a href='/query'>Query</a></nav>"
+        "<nav class='nav'><a href='/'>Indexes</a><a href='/query'>Query</a>"
+        "<a href='/evaluations'>Evaluations</a></nav>"
         f"{body}</main></body></html>"
     )
+
+
+def _eval_status_chip(status: str) -> str:
+    """Render an escaped, color-coded status chip for run/gate statuses."""
+    css = {"complete": "ok", "pass": "ok", "partial": "warn", "regression": "bad", "incompatible": "bad"}.get(
+        status, "warn"
+    )
+    return f"<span class='{css}'>{escape(status)}</span>"
+
+
+def _metric_cell(entry: object) -> str:
+    """Render one metric-value entry honoring explicit availability."""
+    if not isinstance(entry, dict):
+        return "<span class='warn'>malformed entry</span>"
+    if entry.get("available"):
+        value = entry.get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return f"{float(value):.4f}"
+        return escape(str(value))
+    reason = escape(str(entry.get("reason") or "unavailable"))
+    return f"<span class='warn'>unavailable ({reason})</span>"
+
+
+def _delta_text(value: object) -> str:
+    """Format a delta number with an explicit sign (or a dash)."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "-"
+    return f"{float(value):+.4f}"
+
+
+def _trend_cell(trend: object) -> str:
+    """Render a trend chip (improved/regressed/flat)."""
+    if not trend:
+        return "-"
+    css = {"improved": "ok", "regressed": "bad", "flat": ""}.get(str(trend), "")
+    label = escape(str(trend))
+    return f"<span class='{css}'>{label}</span>" if css else label
+
+
+def _gate_status_cell(status: object) -> str:
+    """Render a gate status chip (pass/regression/unavailable/reported)."""
+    return _eval_status_chip(str(status)) if status in ("pass", "regression", "unavailable") else escape(str(status))
+
+
+def _render_comparison_gates(comparison: RunComparison) -> str:
+    """Render the dimension-grouped metric delta tables of a comparison."""
+    dimension_titles = (
+        ("correctness", "Correctness"),
+        ("quality", "Quality"),
+        ("efficiency", "Context efficiency"),
+        ("timing", "Latency (noisy; reported, never gated)"),
+        ("other", "Other metrics"),
+    )
+    sections = []
+    for dimension, title in dimension_titles:
+        gates = [gate for gate in comparison.gates if gate.dimension == dimension]
+        if not gates:
+            continue
+
+        def _metric_cell(value: float | None) -> str:
+            """Render a possibly-unavailable metric value.
+
+            Args:
+                value: The metric value, or None when unavailable.
+
+            Returns:
+                The formatted cell text.
+            """
+            return "-" if value is None else f"{value:.4f}"
+
+        rows = "".join(
+            "<tr>"
+            f"<td>{escape(gate.cohort)}</td><td>{escape(gate.metric)}</td>"
+            f"<td>{_metric_cell(gate.baseline)}</td>"
+            f"<td>{_metric_cell(gate.current)}</td>"
+            f"<td>{_delta_text(gate.delta)}</td>"
+            f"<td>{gate.absolute_tolerance}/{gate.relative_tolerance}</td>"
+            f"<td>{_gate_status_cell(gate.status)}</td>"
+            f"<td>{_trend_cell(gate.trend)}</td>"
+            "</tr>"
+            for gate in gates
+        )
+        sections.append(
+            f"<section class='card'><h2>{title} ({escape(comparison.status)})</h2>"
+            "<table><thead><tr><th>Cohort</th><th>Metric</th><th>Baseline</th><th>Candidate</th>"
+            "<th>Delta</th><th>Tolerance (abs/rel)</th><th>Status</th><th>Trend</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table></section>"
+        )
+    return "".join(sections)
+
+
+def _render_comparison_cases(comparison: RunComparison) -> str:
+    """Render the changed-cases section of a comparison."""
+    changed = [delta for delta in comparison.case_deltas if delta.kind != "unchanged"]
+    if not changed:
+        return "<section class='card'><h2>Changed cases</h2><p>No case outcomes changed.</p></section>"
+    rows = "".join(
+        "<tr>"
+        f"<td><code>{escape(delta.case_id)}</code></td><td>{escape(delta.cohort)}</td>"
+        f"<td>{_case_kind_cell(delta.kind)}</td>"
+        f"<td>{delta.baseline_first_relevant_rank or '-'} -> {delta.candidate_first_relevant_rank or '-'}</td>"
+        f"<td>{delta.baseline_tokens} -> {delta.candidate_tokens} ({delta.delta_tokens:+d})</td>"
+        f"<td>{_latency_pair(delta.baseline_latency_ms, delta.candidate_latency_ms)}</td>"
+        "</tr>"
+        for delta in changed
+    )
+    summary_lines = ""
+    if comparison.newly_passing:
+        summary_lines += f"<p class='ok'>Newly passing: {escape(', '.join(comparison.newly_passing))}</p>"
+    if comparison.newly_failing:
+        summary_lines += f"<p class='bad'>Newly failing: {escape(', '.join(comparison.newly_failing))}</p>"
+    return (
+        "<section class='card'><h2>Changed cases</h2>"
+        "<table><thead><tr><th>Case</th><th>Cohort</th><th>Change</th><th>First rank (base -> cand)</th>"
+        "<th>Tokens (base -> cand)</th><th>Latency ms (base -> cand)</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>{summary_lines}</section>"
+    )
+
+
+def _case_kind_cell(kind: str) -> str:
+    """Render a case-change kind with pass/fail coloring."""
+    css = {"newly_passing": "ok", "newly_failing": "bad", "improved": "ok", "worsened": "bad"}.get(kind, "warn")
+    return f"<span class='{css}'>{escape(kind)}</span>"
+
+
+def _latency_pair(baseline: float | None, candidate: float | None) -> str:
+    """Format a baseline -> candidate latency pair (reported, never gated)."""
+    if baseline is None or candidate is None:
+        return "-"
+    return f"{baseline:.1f} -> {candidate:.1f}"
 
 
 def _graph_links(name: str) -> str:
@@ -107,6 +261,7 @@ def create_dashboard_app(project_path: Path | None = None):
     app = FastHTML()
     operations = IndexOperations(project_path)
     graph_operations = GraphOperations(project_path)
+    eval_operations = EvaluationOperations(project_path)
 
     @app.get("/")
     def home():
@@ -457,6 +612,221 @@ def create_dashboard_app(project_path: Path | None = None):
             + "</tbody></table></section>"
         )
         return _page("Retrieval trace detail", body)
+
+    @app.get("/evaluations")
+    def evaluations_page():
+        """List stored evaluation runs (RE-03), newest first, bounded."""
+        summaries, corrupt = eval_operations.list_runs(limit=DASHBOARD_EVALUATION_LIMIT)
+        rows = "".join(
+            "<tr>"
+            f"<td><a href='/evaluations/{escape(summary.run_id)}'>{escape(summary.run_id[:16])}</a></td>"
+            f"<td>{escape(summary.created_at)}</td>"
+            f"<td><code>{escape(summary.benchmark_fingerprint[:12])}</code></td>"
+            f"<td>{_eval_status_chip(summary.status)}</td>"
+            f"<td>{'graph' if summary.graph_enabled else 'no-graph'}</td>"
+            f"<td>{escape(summary.index_name or '-')}</td>"
+            f"<td>{summary.case_count}</td>"
+            f"<td>{_eval_status_chip(summary.comparison_status) if summary.comparison_status else '-'}</td>"
+            "</tr>"
+            for summary in summaries
+        )
+        table = (
+            "<table><thead><tr><th>Run</th><th>Created</th><th>Benchmark fingerprint</th><th>Status</th>"
+            "<th>Mode</th><th>Index</th><th>Cases</th><th>Baseline comparison</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+            if rows
+            else "<p class='warn'>No evaluation artifacts stored. Run <code>ctxai eval retrieval</code> first.</p>"
+        )
+        compare_form = (
+            "<form method='get' action='/evaluations/compare'>"
+            "<label>Baseline <input name='baseline' required></label> "
+            "<label>Candidate <input name='candidate' required></label> "
+            "<button type='submit'>Compare</button></form>"
+        )
+        corrupt_lines = "".join(f"<p class='bad'>{escape(item)}</p>" for item in corrupt)
+        return _page(
+            "Evaluations",
+            f"<h1>Evaluation runs</h1><section class='card'>{compare_form}{table}</section>{corrupt_lines}",
+        )
+
+    @app.get("/evaluations/compare")
+    def evaluations_compare(baseline: str = "", candidate: str = ""):
+        """Compare two stored evaluation runs (aggregate, cohort, and case deltas)."""
+        if not baseline or not candidate:
+            return _page(
+                "Evaluation comparison",
+                "<h1>Evaluation comparison</h1>"
+                "<p class='warn'>Provide both run ids: "
+                "<code>/evaluations/compare?baseline=ID&amp;candidate=ID</code></p>",
+            )
+        try:
+            comparison = eval_operations.compare_runs(baseline, candidate)
+        except Exception as exc:
+            return _page("Comparison error", f"<h1>Comparison error</h1><p class='bad'>{escape(str(exc))}</p>")
+        head = (
+            "<h1>Evaluation comparison</h1>"
+            f"<p><strong>Baseline:</strong> <code>{escape(str(comparison.baseline.get('run_id') or baseline))}</code>"
+            " · <strong>Candidate:</strong> "
+            f"<code>{escape(str(comparison.candidate.get('run_id') or candidate))}</code> · "
+            f"Status: {_eval_status_chip(comparison.status)}</p>"
+        )
+        if not comparison.compatible:
+            banner = (
+                "<section class='card'><h2 class='bad'>Incompatible artifacts</h2>"
+                "<p>The two artifacts cannot be compared as equivalent:</p><ul>"
+                + "".join(f"<li class='bad'>{escape(item)}</li>" for item in comparison.incompatibilities)
+                + "</ul>"
+                + "".join(
+                    f"<p class='warn'>Rebuild/rerun action: {escape(action)}</p>" for action in comparison.actions
+                )
+                + "</section>"
+            )
+            return _page("Evaluation comparison", head + banner)
+        return _page(
+            "Evaluation comparison", head + _render_comparison_gates(comparison) + _render_comparison_cases(comparison)
+        )
+
+    @app.get("/evaluations/{run_id}")
+    def evaluation_run_page(run_id: str):
+        """Show one evaluation run: aggregates, cohorts, regressions, and cases."""
+        try:
+            payload = eval_operations.read_run(run_id)
+        except Exception as exc:
+            return _page("Evaluation error", f"<h1>Evaluation error</h1><p class='bad'>{escape(str(exc))}</p>")
+        benchmark = payload.get("benchmark") if isinstance(payload.get("benchmark"), dict) else {}
+        configuration = payload.get("configuration") if isinstance(payload.get("configuration"), dict) else {}
+        index = payload.get("index") if isinstance(payload.get("index"), dict) else {}
+        aggregates = payload.get("aggregates") if isinstance(payload.get("aggregates"), dict) else {}
+        overall = aggregates.get("overall") if isinstance(aggregates.get("overall"), dict) else {}
+        overall_metrics = overall.get("metrics") if isinstance(overall.get("metrics"), dict) else {}
+        intervals = overall.get("confidence_intervals") if isinstance(overall.get("confidence_intervals"), dict) else {}
+        by_cohort = aggregates.get("by_cohort") if isinstance(aggregates.get("by_cohort"), dict) else {}
+        graph_block = (
+            configuration.get("graph_expansion") if isinstance(configuration.get("graph_expansion"), dict) else {}
+        )
+
+        identity = (
+            "<section class='card'>"
+            f"<p><strong>Run:</strong> <code>{escape(str(payload.get('run_id') or run_id))}</code> · "
+            f"<strong>Created:</strong> {escape(str(payload.get('created_at')))} · "
+            f"Status: {_eval_status_chip(str(payload.get('status')))}</p>"
+            f"<p><strong>Benchmark:</strong> {escape(str(benchmark.get('name') or '-'))} "
+            f"(fingerprint <code>{escape(str(benchmark.get('fingerprint') or '-'))[:12]}</code>) · "
+            f"Configuration fingerprint: <code>{escape(str(configuration.get('fingerprint') or '-'))[:12]}</code></p>"
+            f"<p><strong>Index:</strong> {escape(str(index.get('name') or '-'))} · "
+            f"Mode: {'graph expansion' if graph_block.get('enabled') else 'no graph expansion'}</p>"
+            "</section>"
+        )
+
+        metric_names = [name for name in EVALUATION_METRIC_ORDER if name in overall_metrics]
+        metric_names += sorted(name for name in overall_metrics if name not in EVALUATION_METRIC_ORDER)
+        cohort_columns = sorted(by_cohort)
+        metric_rows = ""
+        for name in metric_names:
+            row = f"<tr><td>{escape(name)}</td><td>{_metric_cell(overall_metrics.get(name))}</td>"
+            for cohort in cohort_columns:
+                cohort_metrics = by_cohort[cohort].get("metrics") if isinstance(by_cohort[cohort], dict) else {}
+                row += f"<td>{_metric_cell(cohort_metrics.get(name))}</td>"
+            row += "</tr>"
+            metric_rows += row
+        metrics_table = (
+            "<section class='card'><h2>Aggregate metrics</h2>"
+            "<table><thead><tr><th>Metric</th><th>Overall</th>"
+            + "".join(f"<th>{escape(cohort)}</th>" for cohort in cohort_columns)
+            + "</tr></thead><tbody>"
+            + (metric_rows or "<tr><td colspan='2'>no metrics recorded</td></tr>")
+            + "</tbody></table></section>"
+        )
+
+        interval_rows = "".join(
+            f"<tr><td>{escape(name)}</td><td>{bound[0]:.4f}</td><td>{bound[1]:.4f}</td></tr>"
+            for name, bound in sorted(intervals.items())
+            if isinstance(bound, list) and len(bound) == 2
+        )
+        intervals_section = (
+            f"<section class='card'><h2>Bootstrap 95% confidence intervals (overall)</h2>"
+            "<table><thead><tr><th>Metric</th><th>Low</th><th>High</th></tr></thead>"
+            f"<tbody>{interval_rows}</tbody></table></section>"
+            if interval_rows
+            else ""
+        )
+
+        comparison_block = payload.get("comparison") if isinstance(payload.get("comparison"), dict) else None
+        if comparison_block is None:
+            regressions_section = (
+                "<section class='card'><h2>Baseline comparison</h2>"
+                "<p class='warn'>This run has no embedded baseline comparison; compare it against another "
+                "run from the evaluation list.</p></section>"
+            )
+        elif not comparison_block.get("compatible"):
+            items = "".join(
+                f"<li class='bad'>{escape(str(item))}</li>" for item in comparison_block.get("incompatibilities", [])
+            )
+            regressions_section = (
+                "<section class='card'><h2>Baseline comparison</h2>"
+                f"<p class='bad'>The embedded baseline was incompatible:</p><ul>{items}</ul></section>"
+            )
+        else:
+            regressions = [
+                gate
+                for gate in comparison_block.get("gates", [])
+                if isinstance(gate, dict) and gate.get("status") == "regression"
+            ]
+            regressions.sort(key=lambda gate: -abs(gate.get("delta") or 0.0))
+            worst_rows = "".join(
+                "<tr>"
+                f"<td>{escape(str(gate.get('cohort')))}</td><td>{escape(str(gate.get('metric')))}</td>"
+                f"<td>{_delta_text(gate.get('baseline'))}</td><td>{_delta_text(gate.get('current'))}</td>"
+                f"<td>{_delta_text(gate.get('delta'))}</td>"
+                "</tr>"
+                for gate in regressions[:10]
+            )
+            body = (
+                "<table><thead><tr><th>Cohort</th><th>Metric</th><th>Baseline</th><th>Current</th>"
+                "<th>Delta</th></tr></thead><tbody>"
+                + (worst_rows or "<tr><td colspan='5'>no gate regressed</td></tr>")
+                + "</tbody></table>"
+            )
+            regressions_section = f"<section class='card'><h2>Worst regressions vs baseline</h2>{body}</section>"
+
+        runs = payload.get("runs") if isinstance(payload.get("runs"), list) else []
+        case_rows = ""
+        for run in runs[:DASHBOARD_CASE_LIMIT]:
+            case = run if isinstance(run, dict) else {}
+            candidates = case.get("candidates") if isinstance(case.get("candidates"), list) else []
+            selected = [c for c in candidates if isinstance(c, dict) and c.get("decision") == "selected"]
+            citations = ", ".join(str(item.get("citation")) for item in selected[:DASHBOARD_PREVIEW_CITATIONS])
+            graph_count = sum(1 for item in candidates if isinstance(item, dict) and item.get("graph_path"))
+            latency_values = []
+            latency_block = case.get("latency") if isinstance(case.get("latency"), dict) else {}
+            raw_values = latency_block.get("values_ms")
+            if isinstance(raw_values, list):
+                latency_values = [
+                    float(v) for v in raw_values if isinstance(v, (int, float)) and not isinstance(v, bool)
+                ]
+            latency_mean = f"{sum(latency_values) / len(latency_values):.1f}" if latency_values else "-"
+            case_rows += (
+                "<tr>"
+                f"<td><code>{escape(str(case.get('case_id')))}</code></td>"
+                f"<td>{escape(str(case.get('cohort')))}</td>"
+                f"<td>{_eval_status_chip(str(case.get('status')))}</td>"
+                f"<td>{escape(str(case.get('first_relevant_rank') or '-'))}</td>"
+                f"<td>{escape(str(case.get('estimated_tokens')))}</td>"
+                f"<td>{latency_mean}</td>"
+                f"<td>{graph_count}</td>"
+                f"<td>{escape(citations[:200])}</td>"
+                "</tr>"
+            )
+        cases_section = (
+            "<section class='card'><h2>Per-case results</h2>"
+            "<table><thead><tr><th>Case</th><th>Cohort</th><th>Status</th><th>First rank</th>"
+            "<th>Tokens</th><th>Latency ms</th><th>Graph candidates</th><th>Selected citations</th></tr></thead>"
+            "<tbody>" + (case_rows or "<tr><td colspan='8'>no cases recorded</td></tr>") + "</tbody></table></section>"
+        )
+        return _page(
+            f"Evaluation {run_id}",
+            f"<h1>Evaluation run</h1>{identity}{metrics_table}{intervals_section}{regressions_section}{cases_section}",
+        )
 
     @app.get("/query")
     def query_page(index: str | None = None):

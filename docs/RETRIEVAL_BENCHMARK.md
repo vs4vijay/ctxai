@@ -253,3 +253,56 @@ current …`) and the process exits 1.
 4. After a deliberate retrieval change, refresh the baseline in a separate
    reviewable change: run once, store the artifact, commit it as the new
    baseline, and reference both fingerprints in the review.
+
+## Maintainer workflow: baseline refresh and the CI gate (RE-03)
+
+The retrieval-quality CI job (`.github/workflows/pr-gate.yml`,
+`retrieval-quality`) runs `scripts/ci_retrieval_eval.py` on every PR: it
+builds a fixture project from the checked-in benchmark's expected files,
+indexes it with the registered deterministic `mock` embedding provider (no
+network, no credentials, no model downloads), evaluates, and compares the
+fresh artifact against the checked-in baseline
+(`tests/fixtures/retrieval_baseline.json`) with `--fail-on-regression`
+semantics. Exit codes: 0 pass, 1 gated regression, 2 incompatible. The gate
+never fails on latency: timing is reported and flagged as noisy, never
+gated (criterion 3).
+
+### Refreshing the baseline (deliberate, separate change)
+
+```bash
+uv run python scripts/ci_retrieval_eval.py \
+    --update-baseline tests/fixtures/retrieval_baseline.json
+```
+
+The script regenerates the checked-in baseline and prints the reviewable
+evidence: the benchmark fingerprint and configuration fingerprint, plus an
+artifact diff. Required review evidence for a baseline-update PR:
+
+- the benchmark fingerprint is UNCHANGED (a changed benchmark fingerprint is
+  a benchmark change, not a baseline refresh);
+- the configuration fingerprint change is explained by the retrieval change
+  it accompanies;
+- the per-metric/cohort deltas are reviewed and accepted;
+- latency deltas are interpreted as noise unless a controlled runner makes
+  them reliable.
+
+A baseline update must never be bundled invisibly with the retrieval change
+it excuses — land it as a separate reviewed commit/PR.
+
+### Downloading CI artifacts
+
+Failed or successful `retrieval-quality` jobs publish their artifacts
+(candidate run, comparison) via `actions/upload-artifact@v4` (job page →
+Artifacts). Compare them locally with
+`ctxai eval retrieval compare BASELINE CANDIDATE --json`.
+
+### Recovering from incompatible artifacts
+
+When the comparator reports `incompatible` (exit 2), it names every
+mismatched identity field — schema version, benchmark fingerprint, case
+set/split, embedding identity, retrieval configuration. The remedy is one
+of: re-run both evaluations against the same benchmark document (transient
+mismatch), refresh the baseline deliberately after an intended benchmark or
+configuration change (see above), or rebuild the index if the embedding
+identity changed. Incompatible artifacts are never compared as if
+equivalent.
