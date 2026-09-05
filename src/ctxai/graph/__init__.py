@@ -1,10 +1,11 @@
-"""Inspectable symbol graph for one repository (IG-01).
+"""Inspectable multi-language symbol graph (IG-01/IG-02).
 
-Public surface: the data model (:mod:`ctxai.graph.model`), the Python
-language adapter (:mod:`ctxai.graph.python_adapter`), the transactional
-SQLite store (:mod:`ctxai.graph.store`), the build stage
-(:mod:`ctxai.graph.builder`), and the shared read service
-(:mod:`ctxai.graph.operations`).
+Public surface: the data model (:mod:`ctxai.graph.model`), the language
+adapters (:mod:`ctxai.graph.adapters`, registry and capability reporting),
+the transactional SQLite store (:mod:`ctxai.graph.store`), the build stage
+(:mod:`ctxai.graph.builder`), the shared read service
+(:mod:`ctxai.graph.operations`), and the versioned result DTOs
+(:mod:`ctxai.graph.dto`) used by the CLI, MCP, and dashboard.
 """
 
 from .builder import GraphBuilder, GraphBuildError, GraphBuildResult
@@ -21,8 +22,17 @@ from .model import (
     GraphMetadata,
     GraphNode,
 )
-from .operations import DIRECTIONS, GraphError, GraphHealth, GraphOperations, GraphStats, graph_health
-from .store import GraphStore, GraphStoreError, NeighborResult
+from .operations import (
+    DIRECTIONS,
+    GraphError,
+    GraphHealth,
+    GraphIndexNotFoundError,
+    GraphNotBuiltError,
+    GraphOperations,
+    GraphStats,
+    graph_health,
+)
+from .store import GraphSchemaError, GraphStore, GraphStoreError, NeighborResult
 
 __all__ = [
     "CONFIDENCES",
@@ -40,9 +50,12 @@ __all__ = [
     "GraphEdge",
     "GraphError",
     "GraphHealth",
+    "GraphIndexNotFoundError",
+    "GraphNotBuiltError",
     "GraphMetadata",
     "GraphOperations",
     "GraphStats",
+    "GraphSchemaError",
     "GraphStore",
     "GraphStoreError",
     "GraphNode",

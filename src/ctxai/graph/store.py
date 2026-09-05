@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     end_line INTEGER NOT NULL,
     parent_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
     visibility TEXT NOT NULL DEFAULT 'public',
-    source_hash TEXT
+    source_hash TEXT,
+    adapter_version TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -58,17 +59,33 @@ CREATE TABLE IF NOT EXISTS edges (
     resolver_version TEXT NOT NULL
 );
 
+-- Statically exported names per module (IG-02): lets import bindings resolve
+-- through re-exports/default exports even in incremental rebuilds where the
+-- exporting file was not re-extracted. One row per (module, exported name).
+CREATE TABLE IF NOT EXISTS module_exports (
+    module_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    target TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    language TEXT NOT NULL,
+    adapter_version TEXT NOT NULL DEFAULT '',
+    complete INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (module_name, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes(qualified_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_display_name ON nodes(display_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes(file_path);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_language ON nodes(language);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 CREATE INDEX IF NOT EXISTS idx_edges_kind_source ON edges(kind, source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind_target ON edges(kind, target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target_text ON edges(target_text);
+CREATE INDEX IF NOT EXISTS idx_module_exports_file ON module_exports(file_path);
 """
 
 _META_SCHEMA_VERSION = "schema_version"
@@ -80,10 +97,19 @@ _META_GENERATION = "generation"
 _META_NODE_COUNTS = "node_counts"
 _META_EDGE_COUNTS = "edge_counts"
 _META_UNRESOLVED = "unresolved_edges"
+_META_ADAPTER_VERSIONS = "adapter_versions"
 
 
 class GraphStoreError(RuntimeError):
     """Raised when the graph store cannot be read or updated reliably."""
+
+
+class GraphSchemaError(GraphStoreError):
+    """Raised when a store declares a different schema version than this build.
+
+    Migrations are forward-only: a v1 (IG-01) store is never silently
+    reinterpreted — callers rebuild it from source on the next index run.
+    """
 
 
 @dataclass
@@ -102,6 +128,75 @@ class NeighborResult:
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     truncated: bool
+
+
+@dataclass(frozen=True)
+class ModuleExport:
+    """One statically exported module name (IG-02).
+
+    Attributes:
+        module_name: Qualified module name that exposes the export.
+        name: Exported name (``"default"`` for ES default exports, ``"*"``
+            for ``export *``).
+        target: Qualified-name candidate the export points at.
+        file_path: Repository-relative file that declares the export.
+        language: Language of the declaring file.
+        adapter_version: Language adapter version at extraction time.
+        complete: Whether the module's export surface is statically complete.
+    """
+
+    module_name: str
+    name: str
+    target: str
+    file_path: str
+    language: str
+    adapter_version: str
+    complete: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dictionary.
+
+        Returns:
+            Dictionary of all fields.
+        """
+        return {
+            "module_name": self.module_name,
+            "name": self.name,
+            "target": self.target,
+            "file_path": self.file_path,
+            "language": self.language,
+            "adapter_version": self.adapter_version,
+            "complete": self.complete,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> ModuleExport:
+        """Rebuild an export record from :meth:`to_dict` output.
+
+        Args:
+            payload: Dictionary produced by :meth:`to_dict`.
+
+        Returns:
+            The rebuilt ModuleExport.
+        """
+        return cls(
+            module_name=payload["module_name"],
+            name=payload["name"],
+            target=payload["target"],
+            file_path=payload["file_path"],
+            language=payload["language"],
+            adapter_version=payload.get("adapter_version", ""),
+            complete=bool(payload.get("complete", False)),
+        )
+
+
+@dataclass(frozen=True)
+class FileGraphIdentity:
+    """Per-file graph identity: language and adapter version of its nodes."""
+
+    file_path: str
+    language: str
+    adapter_version: str
 
 
 def _fsync_directory(path: Path) -> None:
@@ -129,6 +224,7 @@ def _node_row(node: GraphNode) -> tuple[Any, ...]:
         node.parent_id,
         node.visibility,
         node.source_hash,
+        node.adapter_version,
     )
 
 
@@ -159,6 +255,7 @@ def _node_from_row(row: sqlite3.Row) -> GraphNode:
         parent_id=row["parent_id"],
         visibility=row["visibility"],
         source_hash=row["source_hash"],
+        adapter_version=row["adapter_version"],
     )
 
 
@@ -209,7 +306,13 @@ class GraphStore:
 
     # -- publication -------------------------------------------------------
 
-    def replace_all(self, nodes: list[GraphNode], edges: list[GraphEdge], metadata: GraphMetadata) -> GraphMetadata:
+    def replace_all(
+        self,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+        metadata: GraphMetadata,
+        exports: list[ModuleExport] | tuple[ModuleExport, ...] = (),
+    ) -> GraphMetadata:
         """Atomically replace the whole graph with the supplied content.
 
         Builds a temporary database, fsyncs it, then renames it over the live
@@ -219,6 +322,7 @@ class GraphStore:
             nodes: Full node set to publish.
             edges: Full edge set to publish.
             metadata: Metadata to store (counts are recomputed from rows).
+            exports: Full module export set to publish (IG-02).
 
         Returns:
             The published metadata with authoritative counts filled in.
@@ -235,7 +339,7 @@ class GraphStore:
             try:
                 connection.executescript(_SCHEMA)
                 connection.execute("BEGIN IMMEDIATE")
-                self._insert_rows(connection, nodes, edges)
+                self._insert_rows(connection, nodes, edges, exports)
                 published = self._write_meta(connection, metadata)
                 connection.execute("COMMIT")
             except sqlite3.Error as exc:
@@ -264,6 +368,7 @@ class GraphStore:
         changed: dict[str, tuple[list[GraphNode], list[GraphEdge]]],
         deleted: list[str],
         metadata: GraphMetadata,
+        exports: list[ModuleExport] | tuple[ModuleExport, ...] = (),
     ) -> GraphMetadata:
         """Replace the owned rows of changed files inside one transaction.
 
@@ -272,6 +377,8 @@ class GraphStore:
                 ``(nodes, edges)`` owned by that file.
             deleted: Repository-relative paths whose nodes must be removed.
             metadata: Metadata to store (counts are recomputed from rows).
+            exports: Fresh module export rows for the changed files; rows of
+                deleted and changed files are replaced (IG-02).
 
         Returns:
             The published metadata with authoritative counts filled in.
@@ -285,11 +392,12 @@ class GraphStore:
             connection.execute("BEGIN IMMEDIATE")
             for file_path in [*deleted, *changed.keys()]:
                 connection.execute("DELETE FROM nodes WHERE file_path = ?", (file_path,))
+                connection.execute("DELETE FROM module_exports WHERE file_path = ?", (file_path,))
             # Insert every node before any edge so cross-file edges never
             # reference a node that is not yet present in the transaction.
             all_nodes = [node for nodes, _ in changed.values() for node in nodes]
             all_edges = [edge for _, edges in changed.values() for edge in edges]
-            self._insert_rows(connection, all_nodes, all_edges)
+            self._insert_rows(connection, all_nodes, all_edges, exports)
             published = self._write_meta(connection, metadata)
             connection.execute("COMMIT")
             return published
@@ -303,11 +411,17 @@ class GraphStore:
             connection.close()
 
     @staticmethod
-    def _insert_rows(connection: sqlite3.Connection, nodes: list[GraphNode], edges: list[GraphEdge]) -> None:
+    def _insert_rows(
+        connection: sqlite3.Connection,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+        exports: list[ModuleExport] | tuple[ModuleExport, ...] = (),
+    ) -> None:
         for node in sorted(nodes, key=lambda item: (item.file_path, item.qualified_name, item.id)):
             connection.execute(
                 "INSERT INTO nodes (id, kind, qualified_name, display_name, language, file_path, start_line,"
-                " end_line, parent_id, visibility, source_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " end_line, parent_id, visibility, source_hash, adapter_version)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 _node_row(node),
             )
         for edge in sorted(edges, key=lambda item: item.id):
@@ -315,6 +429,23 @@ class GraphStore:
                 "INSERT INTO edges (id, kind, source_id, target_id, target_text, evidence_file, evidence_line,"
                 " confidence, resolver_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 _edge_row(edge),
+            )
+        for export in sorted(exports, key=lambda item: (item.module_name, item.name)):
+            connection.execute(
+                "INSERT INTO module_exports (module_name, name, target, file_path, language, adapter_version,"
+                " complete) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(module_name, name) DO UPDATE SET target = excluded.target,"
+                " file_path = excluded.file_path, language = excluded.language,"
+                " adapter_version = excluded.adapter_version, complete = excluded.complete",
+                (
+                    export.module_name,
+                    export.name,
+                    export.target,
+                    export.file_path,
+                    export.language,
+                    export.adapter_version,
+                    1 if export.complete else 0,
+                ),
             )
 
     @staticmethod
@@ -346,6 +477,7 @@ class GraphStore:
             node_counts=node_counts,
             edge_counts=edge_counts,
             unresolved_edges=int(unresolved),
+            adapter_versions=dict(metadata.adapter_versions),
         )
         values: dict[str, str] = {
             _META_SCHEMA_VERSION: str(published.schema_version),
@@ -357,6 +489,7 @@ class GraphStore:
             _META_NODE_COUNTS: json.dumps(published.node_counts, sort_keys=True),
             _META_EDGE_COUNTS: json.dumps(published.edge_counts, sort_keys=True),
             _META_UNRESOLVED: str(published.unresolved_edges),
+            _META_ADAPTER_VERSIONS: json.dumps(published.adapter_versions, sort_keys=True),
         }
         for key, value in values.items():
             connection.execute(
@@ -395,13 +528,19 @@ class GraphStore:
         if schema_version is None:
             raise GraphStoreError(f"Graph store at {self.path} is corrupt: schema version missing")
         if int(schema_version) != GRAPH_SCHEMA_VERSION:
-            raise GraphStoreError(
-                f"Unsupported graph schema {schema_version}; expected {GRAPH_SCHEMA_VERSION}. Rebuild the index."
+            raise GraphSchemaError(
+                f"Unsupported graph schema {schema_version}; expected {GRAPH_SCHEMA_VERSION}."
+                " Rebuild the index (a v1 store is rebuilt on the next index run)."
             )
         try:
             node_counts = json.loads(rows.get(_META_NODE_COUNTS, "{}"))
             edge_counts = json.loads(rows.get(_META_EDGE_COUNTS, "{}"))
-            if not isinstance(node_counts, dict) or not isinstance(edge_counts, dict):
+            adapter_versions = json.loads(rows.get(_META_ADAPTER_VERSIONS, "{}"))
+            if (
+                not isinstance(node_counts, dict)
+                or not isinstance(edge_counts, dict)
+                or not isinstance(adapter_versions, dict)
+            ):
                 raise ValueError("counts are not objects")
             return GraphMetadata(
                 schema_version=int(schema_version),
@@ -413,6 +552,7 @@ class GraphStore:
                 node_counts={str(key): int(value) for key, value in node_counts.items()},
                 edge_counts={str(key): int(value) for key, value in edge_counts.items()},
                 unresolved_edges=int(rows.get(_META_UNRESOLVED, "0")),
+                adapter_versions={str(key): str(value) for key, value in adapter_versions.items()},
             )
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise GraphStoreError(f"Graph store at {self.path} is corrupt: metadata unreadable ({exc})") from exc
@@ -588,6 +728,115 @@ class GraphStore:
         except sqlite3.Error as exc:
             raise GraphStoreError(f"Graph store query failed at {self.path}: {exc}") from exc
         return [_node_from_row(row) for row in rows]
+
+    def file_identities(self) -> dict[str, FileGraphIdentity]:
+        """Report the language and adapter version of every file's nodes (IG-02).
+
+        Used to detect files whose stored adapter version no longer matches
+        the current adapter so only affected files become stale.
+
+        Returns:
+            Mapping of repository-relative file path to its graph identity.
+
+        Raises:
+            GraphStoreError: If the store is unreadable.
+        """
+        if not self.exists():
+            raise GraphStoreError(f"Graph store is missing at {self.path}")
+        try:
+            connection = self._connect()
+            try:
+                rows = connection.execute(
+                    "SELECT DISTINCT file_path, language, adapter_version FROM nodes ORDER BY file_path"
+                ).fetchall()
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise GraphStoreError(f"Graph store query failed at {self.path}: {exc}") from exc
+        return {
+            row["file_path"]: FileGraphIdentity(
+                file_path=row["file_path"], language=row["language"], adapter_version=row["adapter_version"]
+            )
+            for row in rows
+        }
+
+    def language_node_counts(self) -> dict[str, int]:
+        """Count stored nodes per language (IG-02).
+
+        Returns:
+            Mapping of language to node count, ordered by language.
+
+        Raises:
+            GraphStoreError: If the store is unreadable.
+        """
+        return {
+            str(row["language"]): int(row["count"])
+            for row in self._rows("SELECT language, COUNT(*) AS count FROM nodes GROUP BY language ORDER BY language")
+        }
+
+    def unresolved_counts_by_kind(self) -> dict[str, int]:
+        """Count unresolved edges per edge kind (IG-02).
+
+        Returns:
+            Mapping of edge kind to unresolved edge count (kinds with zero
+            unresolved edges are omitted), ordered by kind.
+
+        Raises:
+            GraphStoreError: If the store is unreadable.
+        """
+        return {
+            str(row["kind"]): int(row["count"])
+            for row in self._rows(
+                "SELECT kind, COUNT(*) AS count FROM edges WHERE confidence = ? GROUP BY kind ORDER BY kind",
+                (CONFIDENCE_UNRESOLVED,),
+            )
+        }
+
+    def export_maps(self) -> dict[str, tuple[dict[str, str], set[str], bool]]:
+        """Read the persisted module export surface (IG-02).
+
+        Returns:
+            Mapping of module name to ``(bindings, files, complete)`` where
+            ``bindings`` maps exported names to qualified-name candidates,
+            ``files`` is the set of repository-relative declaring files, and
+            ``complete`` says whether the export surface is statically
+            complete.
+
+        Raises:
+            GraphStoreError: If the store is unreadable.
+        """
+        if not self.exists():
+            raise GraphStoreError(f"Graph store is missing at {self.path}")
+        try:
+            connection = self._connect()
+            try:
+                rows = connection.execute(
+                    "SELECT module_name, name, target, file_path, complete FROM module_exports"
+                    " ORDER BY module_name, name"
+                ).fetchall()
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise GraphStoreError(f"Graph store query failed at {self.path}: {exc}") from exc
+        maps: dict[str, tuple[dict[str, str], set[str], bool]] = {}
+        for row in rows:
+            bindings, files, complete = maps.setdefault(row["module_name"], ({}, set(), True))
+            bindings[row["name"]] = row["target"]
+            files.add(row["file_path"])
+            maps[row["module_name"]] = (bindings, files, complete and bool(row["complete"]))
+        return maps
+
+    def _rows(self, sql: str, parameters: tuple = ()) -> list[sqlite3.Row]:
+        if not self.exists():
+            raise GraphStoreError(f"Graph store is missing at {self.path}")
+        try:
+            connection = self._connect()
+            try:
+                return list(connection.execute(sql, parameters).fetchall())
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise GraphStoreError(f"Graph store query failed at {self.path}: {exc}") from exc
 
     def files_with_edges_into(self, file_paths: Iterable[str]) -> set[str]:
         """Find files owning edges that point into the supplied files' nodes.

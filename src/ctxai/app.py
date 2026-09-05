@@ -578,6 +578,18 @@ def graph_neighbors(
     graph_neighbors_command(symbol_id, index, edge_kind, direction, depth, limit, project_path, as_json)
 
 
+@graph_app.command("capabilities")
+def graph_capabilities(
+    index: str | None = typer.Argument(None, help="Optional index to also report what it actually contains"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of a table"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Show the per-language support matrix, constructs, and unsupported edge kinds."""
+    from .commands.graph_command import graph_capabilities as graph_capabilities_command
+
+    graph_capabilities_command(index, project_path, as_json)
+
+
 app.add_typer(graph_app, name="graph")
 
 

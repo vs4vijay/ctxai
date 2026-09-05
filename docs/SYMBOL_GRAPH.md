@@ -186,9 +186,64 @@ prefixes are rejected rather than guessed.
 Human output always shows the evidence: nodes as `file:start-end` rows, edges
 with `file:line` and confidence, so every result can be traced back to source.
 
-## Limits and non-goals (IG-01)
+## Multi-language support (IG-02)
 
-- Python only; JavaScript/TypeScript parity lands in IG-02.
+JavaScript and TypeScript adapters join the Python adapter behind one
+`LanguageAdapter` protocol (`src/ctxai/graph/adapters.py`). The support matrix
+below is generated from the same constants the CLI reports with
+`ctxai graph capabilities [INDEX] [--json]`; a test asserts the two stay in
+sync.
+
+| Language | Adapter | Node kinds | Edge kinds | Extensions |
+|---|---|---|---|---|
+| python | `python/1` | module, class, function, method, test | contains, imports, calls, inherits, references, tests | `.py` |
+| javascript | `javascript/1` | module, class, function, method, test | contains, imports, calls, inherits, references, tests | `.js`, `.jsx`, `.mjs`, `.cjs` |
+| typescript | `typescript/1` | module, class, function, method, interface, test | contains, imports, calls, inherits, references, tests | `.ts`, `.tsx`, `.mts`, `.cts` |
+
+JavaScript/TypeScript specifics: ES imports (`import x from`, named, namespace),
+CommonJS `require()`, re-exports, functions/classes/methods, TS
+`interface`/`type` declarations (node kind `interface`), `extends`/`implements`
+(inherits), statically named calls and member calls on local/imported symbols,
+`this.` within the class. Dynamic imports/requires, template paths, and
+ambiguous names stay **unresolved** — never guessed.
+
+Unsupported languages (e.g. `go`, `rust`) and constructs are reported
+explicitly by `ctxai graph capabilities` (and in per-row detail with
+`adapter_version: null`); their files remain fully indexable as ordinary
+chunks with no fabricated graph nodes. Graph records store each node's
+`language` and `adapter_version`; an adapter upgrade marks affected files
+stale for bounded incremental rebuild. Graph store schema v2 migrates
+forward-only from IG-01's v1 by rebuilding on the next index run.
+
+## Service contract: GraphOperations, MCP, and dashboard (IG-02)
+
+CLI, MCP, and dashboard all read through the `GraphOperations` application
+service (versioned DTOs in `src/ctxai/graph/dto.py`); nothing outside the
+graph package touches the SQLite store. The three surfaces therefore agree on
+identity, counts, confidence, and relationships for the same index (asserted
+by e2e tests on all three).
+
+MCP tools (read-only, versioned envelopes, deterministic error codes
+`invalid_input` / `not_found` / `storage_failed`):
+
+- `graph_stats(index_name)` — counts by kind, unresolved rate, capabilities,
+  health, generation.
+- `graph_symbol(index_name, query, kind?, language?, limit?)` — bounded
+  definition search with stable ids and `file:start-end` evidence.
+- `graph_neighbors(index_name, symbol_id, edge_kind?, direction?, depth?,
+  limit?)` — bounded traversal (depth ≤ 3, limit ≤ 500) with per-edge
+  evidence and confidence.
+
+Dashboard (loopback-bound by default, all output escaped, endpoints read-only):
+`/index/{name}/graph` summary (counts, generation, health),
+`/index/{name}/graph/symbols` searchable symbol table, and
+`/index/{name}/graph/node/{node_id}` node detail with incoming/outgoing
+relationships. Malformed names, traversal attempts, excessive depth/limit,
+stale graph generations, and corrupt stores return deterministic errors on
+every surface without leaking paths outside the repository.
+
+## Limits and non-goals
+
 - No runtime tracing, no whole-program type inference, no cross-repository
   graphs, no framework-specific dependency injection.
 - Node/edge records are local-only, stored in the index directory, and never

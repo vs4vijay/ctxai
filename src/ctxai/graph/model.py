@@ -11,14 +11,21 @@ sequence — so identical inputs always produce identical identities.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
-GRAPH_SCHEMA_VERSION = 1
+GRAPH_SCHEMA_VERSION = 2
 GRAPH_FILENAME = "graph.sqlite3"
 
 NODE_KINDS = ("module", "class", "function", "method", "interface", "test")
 EDGE_KINDS = ("contains", "imports", "calls", "inherits", "references", "tests")
+
+# Node kinds each language adapter can emit (IG-02 capability matrix).
+GRAPH_NODE_KINDS_BY_LANGUAGE = {
+    "python": ("module", "class", "function", "method", "test"),
+    "javascript": ("module", "class", "function", "method", "test"),
+    "typescript": NODE_KINDS,
+}
 
 CONFIDENCE_EXACT = "exact"
 CONFIDENCE_PROBABLE = "probable"
@@ -27,7 +34,11 @@ CONFIDENCES = (CONFIDENCE_EXACT, CONFIDENCE_PROBABLE, CONFIDENCE_UNRESOLVED)
 
 PYTHON_EXTRACTOR_VERSION = "python/1"
 PYTHON_RESOLVER_VERSION = "python/1"
-SUPPORTED_LANGUAGES = ("python",)
+JAVASCRIPT_EXTRACTOR_VERSION = "javascript/1"
+JAVASCRIPT_RESOLVER_VERSION = "javascript/1"
+TYPESCRIPT_EXTRACTOR_VERSION = "typescript/1"
+TYPESCRIPT_RESOLVER_VERSION = "typescript/1"
+SUPPORTED_LANGUAGES = ("python", "javascript", "typescript")
 
 # Safety bounds for graph queries (enforced by GraphOperations, documented in
 # docs/SYMBOL_GRAPH.md).
@@ -115,6 +126,7 @@ class GraphNode:
     parent_id: str | None = None
     visibility: str = "public"
     source_hash: str | None = None
+    adapter_version: str = ""
 
     def evidence(self) -> str:
         """Return the ``file:start-end`` evidence citation.
@@ -142,11 +154,15 @@ class GraphNode:
             "parent_id": self.parent_id,
             "visibility": self.visibility,
             "source_hash": self.source_hash,
+            "adapter_version": self.adapter_version,
         }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> GraphNode:
         """Rebuild a node from :meth:`to_dict` output.
+
+        Fields that carry defaults may be absent from the payload (IG-01
+        payloads without ``adapter_version`` still load).
 
         Args:
             payload: Dictionary produced by :meth:`to_dict`.
@@ -158,7 +174,10 @@ class GraphNode:
             ValueError: If the kind is unknown or required fields are absent.
         """
         field_names = {item.name for item in fields(cls)}
-        missing = field_names - set(payload)
+        optional = {
+            item.name for item in fields(cls) if item.default is not MISSING or item.default_factory is not MISSING
+        }
+        missing = field_names - set(payload) - optional
         if missing:
             raise ValueError(f"GraphNode payload is missing fields: {sorted(missing)}")
         return cls(
@@ -237,7 +256,14 @@ class GraphEdge:
 
 @dataclass
 class GraphMetadata:
-    """Versioned build identity and health summary for one graph generation."""
+    """Versioned build identity and health summary for one graph generation.
+
+    ``extractor_version``/``resolver_version`` are deterministic comma-joined
+    descriptors of every language adapter that contributed (sorted by
+    language, e.g. ``"javascript/1,python/1,typescript/1"``);
+    ``adapter_versions`` records the per-language versions so an adapter
+    upgrade marks only the files of that language stale.
+    """
 
     schema_version: int
     extractor_version: str
@@ -248,6 +274,7 @@ class GraphMetadata:
     node_counts: dict[str, int] = field(default_factory=dict)
     edge_counts: dict[str, int] = field(default_factory=dict)
     unresolved_edges: int = 0
+    adapter_versions: dict[str, str] = field(default_factory=dict)
 
     @property
     def total_nodes(self) -> int:
@@ -283,6 +310,7 @@ class GraphMetadata:
             "node_counts": dict(self.node_counts),
             "edge_counts": dict(self.edge_counts),
             "unresolved_edges": self.unresolved_edges,
+            "adapter_versions": dict(self.adapter_versions),
         }
 
     @classmethod
@@ -299,11 +327,29 @@ class GraphMetadata:
             ValueError: If required fields are absent.
         """
         field_names = {item.name for item in fields(cls)}
-        missing = field_names - set(payload)
+        optional = {
+            item.name for item in fields(cls) if item.default is not MISSING or item.default_factory is not MISSING
+        }
+        missing = field_names - set(payload) - optional
         if missing:
             raise ValueError(f"GraphMetadata payload is missing fields: {sorted(missing)}")
         payload = dict(payload)
         payload["supported_languages"] = list(payload["supported_languages"])
         payload["node_counts"] = dict(payload["node_counts"])
         payload["edge_counts"] = dict(payload["edge_counts"])
+        payload.setdefault("adapter_versions", {})
+        payload["adapter_versions"] = {str(key): str(value) for key, value in payload["adapter_versions"].items()}
         return cls(**payload)
+
+
+def combined_adapter_version(versions: dict[str, str]) -> str:
+    """Join per-language adapter versions into one deterministic descriptor.
+
+    Args:
+        versions: Mapping of language to adapter version (e.g.
+            ``{"python": "python/1"}``).
+
+    Returns:
+        Comma-joined versions sorted by language (empty string when empty).
+    """
+    return ",".join(versions[language] for language in sorted(versions))
