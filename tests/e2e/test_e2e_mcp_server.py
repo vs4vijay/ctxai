@@ -86,7 +86,9 @@ async def test_real_client_indexes_queries_and_inspects(sample_python_code, temp
             assert indexed["data"]["chunks"] > 0
             assert indexed["data"]["files"] > 0
             assert progress
-            assert progress[-1][0:2] == (5.0, 5.0)
+            # The indexing pipeline has six stages (IG-01 added the symbol
+            # graph stage); progress reports completion of the final one.
+            assert progress[-1][0:2] == (6.0, 6.0)
 
             listed = await call(client, "list_indexes")
             assert listed["data"]["indexes"][0]["name"] == "test-mcp-index"

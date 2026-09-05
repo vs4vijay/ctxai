@@ -15,6 +15,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 from ..chunking import CodeChunk, CodeChunker
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
+from ..graph.builder import GraphBuilder
 from ..index_manifest import SCHEMA_VERSION, IndexedFile, IndexManifest, get_repository_revision
 from ..size_validator import ProjectSizeLimitError, ProjectSizeValidator
 from ..traversal import CodeTraversal
@@ -53,6 +54,25 @@ def _file_hash(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _relative_path(repository_root: Path, file_path: Path | str) -> str:
+    """Return a canonical repository-relative path with forward slashes.
+
+    Args:
+        repository_root: Resolved repository root.
+        file_path: Absolute file path (as tracked in the manifest).
+
+    Returns:
+        Repository-relative path usable as graph file identity.
+
+    Raises:
+        IndexingError: If the path is outside the repository root.
+    """
+    try:
+        return Path(file_path).resolve().relative_to(repository_root).as_posix()
+    except ValueError as exc:
+        raise IndexingError(f"Path {file_path} is outside the repository root {repository_root}") from exc
 
 
 def _embedding_identity(config, provider) -> tuple[str, str, int]:
@@ -97,7 +117,7 @@ def index_codebase(
             progress_callback(completed, total, message)
 
     try:
-        report(0, 5, "Loading index configuration")
+        report(0, 6, "Loading index configuration")
         embedding_provider = EmbeddingsFactory.create(config.embedding)
         provider_name, model_name, dimension = _embedding_identity(config.embedding, embedding_provider)
         indexes_dir = get_indexes_dir(path)
@@ -133,7 +153,7 @@ def index_codebase(
             raise ProjectSizeLimitError(messages)
         oversized = {item[0].resolve() for item in project_stats.oversized_files}
         files = [file for file in files if file not in oversized]
-        report(1, 5, f"Discovered {len(files)} files")
+        report(1, 6, f"Discovered {len(files)} files")
 
         hashes = {str(file): _file_hash(file) for file in files}
         old_files = manifest.files if manifest else {}
@@ -159,7 +179,7 @@ def index_codebase(
         ) as progress:
             task = progress.add_task("Chunking changed files...", total=len(changed))
             for file in changed:
-                report(1, 5, f"Chunking {file.name}")
+                report(1, 6, f"Chunking {file.name}")
                 try:
                     chunks_by_file[str(file)] = chunker.chunk_file(file)
                 except Exception as exc:
@@ -170,14 +190,28 @@ def index_codebase(
         embeddings: list[list[float]] = []
         batch_size = max(1, config.embedding.batch_size)
         for offset in range(0, len(changed_chunks), batch_size):
-            report(2, 5, f"Embedding chunks {offset + 1}-{min(offset + batch_size, len(changed_chunks))}")
+            report(2, 6, f"Embedding chunks {offset + 1}-{min(offset + batch_size, len(changed_chunks))}")
             batch = changed_chunks[offset : offset + batch_size]
             try:
                 embeddings.extend(embedding_provider.generate_embeddings([chunk.content for chunk in batch]))
             except Exception as exc:
                 raise IndexingError(f"Embedding generation failed: {exc}") from exc
         _validate_embeddings(embeddings, len(changed_chunks), dimension)
-        report(3, 5, "Writing index storage")
+
+        # Graph generation runs BEFORE any storage mutation: a graph failure
+        # here aborts the run with the prior healthy graph, vector store, and
+        # manifest still in place (IG-01 acceptance 5).
+        report(3, 6, "Building symbol graph")
+        builder = GraphBuilder(repository_root=path)
+        graph_result = builder.update(
+            index_path=storage_path,
+            files={_relative_path(path, file) for file in files},
+            changed={_relative_path(path, file) for file in changed},
+            deleted={_relative_path(path, deleted_path) for deleted_path in deleted},
+            force_full=manifest is None or manifest.graph_generation is None,
+        )
+
+        report(4, 6, "Writing index storage")
 
         # Mutate storage only after all changed content has valid embeddings.
         vector_store.delete_files(deleted + [str(file) for file in changed])
@@ -198,7 +232,7 @@ def index_codebase(
 
         # Once storage mutation starts, complete manifest publication so storage
         # and metadata cannot be left at different revisions.
-        report(4, 5, "Publishing index manifest", cancellation_boundary=False)
+        report(5, 6, "Publishing index manifest", cancellation_boundary=False)
 
         if manifest is None:
             manifest = IndexManifest.create(
@@ -213,6 +247,14 @@ def index_codebase(
         manifest.files = file_state
         manifest.file_count = len(file_state)
         manifest.chunk_count = expected_chunks
+        # Graph identity is published atomically with the manifest: the graph
+        # store was already written and fsynced above, so the manifest is the
+        # commit point that makes this generation visible.
+        manifest.graph_schema_version = graph_result.metadata.schema_version
+        manifest.graph_extractor_version = graph_result.metadata.extractor_version
+        manifest.graph_generation = graph_result.metadata.generation
+        manifest.graph_node_count = graph_result.metadata.total_nodes
+        manifest.graph_edge_count = graph_result.metadata.total_edges
         manifest.save(storage_path)
 
         config_manager.update_index_metadata(
@@ -235,9 +277,11 @@ def index_codebase(
         console.print("[bold green][OK] Indexing complete![/bold green]")
         console.print(
             f"[dim]{result.files} files, {result.chunks} chunks; "
-            f"embedded {result.embedded_chunks} changed chunks, removed {result.deleted_files} stale files[/dim]\n"
+            f"embedded {result.embedded_chunks} changed chunks, removed {result.deleted_files} stale files; "
+            f"graph {graph_result.mode} (generation {graph_result.metadata.generation}, "
+            f"{graph_result.metadata.total_nodes} nodes, {graph_result.metadata.total_edges} edges)[/dim]\n"
         )
-        report(5, 5, "Indexing complete", cancellation_boundary=False)
+        report(6, 6, "Indexing complete", cancellation_boundary=False)
         return result
     except Exception:
         config_manager.update_index_metadata(index_name=index_name, status="failed")

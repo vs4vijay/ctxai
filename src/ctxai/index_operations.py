@@ -10,6 +10,7 @@ from typing import Any
 
 from .config import ConfigManager
 from .embeddings import EmbeddingsFactory
+from .graph.operations import GraphHealth, graph_health
 from .index_manifest import IndexManifest, IndexManifestError, get_repository_revision
 from .utils import get_indexes_dir
 from .vector_store import VectorStore, VectorStoreError
@@ -27,6 +28,7 @@ class IndexSummary:
     manifest: IndexManifest | None
     storage_chunks: int | None
     size_bytes: int
+    graph: GraphHealth | None = None
 
 
 class IndexOperations:
@@ -81,6 +83,12 @@ class IndexOperations:
                 and current_revision is not None
                 and current_revision != manifest.repository_revision
             )
+        # Graph health is reported separately: a missing graph is diagnostic
+        # only, while mismatch/corruption/count problems surface in doctor.
+        try:
+            graph = graph_health(path, manifest)
+        except Exception as exc:  # pragma: no cover - defensive, never block inspect
+            graph = GraphHealth(status="corrupt", metadata=None, problems=(f"graph health check failed: {exc}",))
         size_bytes = sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
         return IndexSummary(
             name=name,
@@ -91,6 +99,7 @@ class IndexOperations:
             manifest=manifest,
             storage_chunks=storage_chunks,
             size_bytes=size_bytes,
+            graph=graph,
         )
 
     def chunks(self, name: str, limit: int = 100) -> dict[str, Any]:

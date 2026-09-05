@@ -19,7 +19,7 @@ This roadmap summarizes validated capabilities and upcoming product work. [plan.
 
 ## Next: intelligence advantage
 
-- [ ] Build a persistent symbol and relationship graph for definitions, imports, calls, inheritance, tests, and references
+- [x] Build a persistent symbol and relationship graph for definitions, imports, calls, inheritance, tests, and references (`ctxai graph` over `graph.sqlite3`, Python first — IG-01; see [docs/SYMBOL_GRAPH.md](docs/SYMBOL_GRAPH.md))
 - [ ] Expand semantic retrieval with graph relationships while preserving bounded, inspectable evidence
 - [x] Add an executable retrieval-evaluation CLI with Recall@K, MRR, latency, and context-efficiency metrics (`ctxai eval retrieval`, RE-01)
 - [ ] Add privacy-preserving retrieval traces and dashboard observability

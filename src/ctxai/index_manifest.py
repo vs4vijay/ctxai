@@ -40,6 +40,16 @@ class IndexManifest:
     file_count: int
     chunk_count: int
     files: dict[str, IndexedFile] = field(default_factory=dict)
+    # Graph identity fields (IG-01). All optional: manifests written before
+    # the symbol graph existed load unchanged with these set to None, which
+    # doctor reports as "graph data has not been built" (a diagnostic, not
+    # corruption). Populated by the index workflow after the graph stage
+    # succeeds, atomically with the rest of the manifest.
+    graph_schema_version: int | None = None
+    graph_extractor_version: str | None = None
+    graph_generation: int | None = None
+    graph_node_count: int | None = None
+    graph_edge_count: int | None = None
 
     @classmethod
     def create(
