@@ -20,6 +20,11 @@ GRAPH_FILENAME = "graph.sqlite3"
 NODE_KINDS = ("module", "class", "function", "method", "interface", "test")
 EDGE_KINDS = ("contains", "imports", "calls", "inherits", "references", "tests")
 
+# Cross-file relationship kinds (IG-03): the allowlisted edges graph-expanded
+# retrieval and relationship classification follow. "contains" is excluded —
+# it is implicit structure within one file, not a cross-file relationship.
+RELATIONSHIP_EDGE_KINDS = ("calls", "imports", "inherits", "tests", "references")
+
 # Node kinds each language adapter can emit (IG-02 capability matrix).
 GRAPH_NODE_KINDS_BY_LANGUAGE = {
     "python": ("module", "class", "function", "method", "test"),

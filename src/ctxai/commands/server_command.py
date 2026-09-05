@@ -24,6 +24,7 @@ except ImportError:
 from rich.console import Console
 
 from ..agent.llm.base import ProviderError, ProviderErrorKind
+from ..chunking import CodeChunker
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
 from ..graph.adapters import capabilities_payload
@@ -239,7 +240,7 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             return failure(_provider_error_code(e) or MCPErrorCode.INDEX_FAILED, error_msg)
 
     @mcp.tool()
-    async def query_codebase(index_name: str, query: str, n_results: int = 5) -> dict[str, Any]:
+    async def query_codebase(index_name: str, query: str, n_results: int = 5, explain: bool = False) -> dict[str, Any]:
         """
         Query an indexed codebase using natural language. Returns relevant code chunks with metadata.
 
@@ -247,6 +248,8 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             index_name: Name of the index to query
             query: Natural language query to search the codebase
             n_results: Number of results to return (default: 5, max: 20)
+            explain: Include per-result retrieval explanation (reasons, graph
+                path, component contributions) in each result
 
         Returns:
             Formatted results with code chunks, similarity scores, and metadata
@@ -271,51 +274,76 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
 
             # Avoid provider initialization (which may involve network access) until
             # the local request and target index have been validated.
-            config_manager = ConfigManager(project_path)
-            config = config_manager.load()
+            config = ConfigManager(project_path).load()
             embeddings_generator = EmbeddingsFactory.create(config.embedding)
 
-            vector_store = VectorStore(storage_path=index_path, collection_name=index_name)
+            # Shared retrieval service (IG-03): the same fusion, budget, and
+            # config-driven graph expansion the CLI, agent, and dashboard use.
+            from ..repository_context import GraphExpansionSettings, retrieve_evidence
 
-            # Generate query embedding
+            settings = GraphExpansionSettings.from_config(config.retrieval, required=False)
+
+            def _run_query() -> Any:
+                return retrieve_evidence(
+                    project_path or Path.cwd(),
+                    query,
+                    embedding_provider=embeddings_generator,
+                    index_name=index_name,
+                    limit=n_results,
+                    token_budget=config.retrieval.token_budget,
+                    graph=settings,
+                    explain=explain,
+                )
+
             loop = asyncio.get_running_loop()
-            query_embedding = await loop.run_in_executor(None, embeddings_generator.generate_embedding, query)
+            evidence = await loop.run_in_executor(None, _run_query)
+            context = evidence.context
 
-            # Search
-            results = vector_store.search(
-                query_embedding=query_embedding,
-                n_results=n_results,
-            )
-
-            if not results:
-                return success({"index_name": index_name, "query": query, "results": [], "count": 0})
-
-            formatted_results = []
-            for result in results:
-                metadata = result["metadata"]
-                content = result["content"]
-                distance = result["distance"]
-                similarity = max(0, 1 - distance)
-                formatted_results.append(
+            if not context.items:
+                return success(
                     {
-                        "file_path": str(Path(metadata["file_path"])),
-                        "start_line": metadata["start_line"],
-                        "end_line": metadata["end_line"],
-                        "chunk_type": metadata["chunk_type"],
-                        "language": metadata["language"],
-                        "similarity": similarity,
-                        "content": content[:500],
-                        "truncated": len(content) > 500,
+                        "index_name": index_name,
+                        "query": query,
+                        "results": [],
+                        "count": 0,
+                        "estimated_tokens": 0,
                     }
                 )
 
-            logger.info(f"Query returned {len(results)} results")
+            formatted_results = []
+            for item in context.items:
+                distance = evidence.semantic_distances.get(item.id)
+                formatted: dict[str, Any] = {
+                    "file_path": str(Path(item.file_path)),
+                    "start_line": item.start_line,
+                    "end_line": item.end_line,
+                    "chunk_type": item.chunk_type,
+                    "language": CodeChunker.LANGUAGE_MAP.get(Path(item.file_path).suffix.lower(), "text"),
+                    # Backward-compatible field: the vector distance similarity
+                    # when the chunk came from semantic search, else None.
+                    "similarity": max(0, 1 - distance) if distance is not None else None,
+                    "score": item.score,
+                    "content": item.content[:500],
+                    "truncated": len(item.content) > 500,
+                }
+                if item.graph_evidence is not None:
+                    formatted["graph_path"] = item.graph_evidence.path
+                if explain:
+                    components = evidence.explain.components.get(item.id, {}) if evidence.explain else {}
+                    formatted["explanation"] = {
+                        "reasons": list(item.reasons),
+                        "components": {name: value for name, value in sorted(components.items())},
+                    }
+                formatted_results.append(formatted)
+
+            logger.info(f"Query returned {len(formatted_results)} results")
             return success(
                 {
                     "index_name": index_name,
                     "query": query,
                     "results": formatted_results,
                     "count": len(formatted_results),
+                    "estimated_tokens": context.estimated_tokens,
                 }
             )
 

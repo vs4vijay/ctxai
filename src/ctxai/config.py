@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 import tomlkit
 
 from .agent.config import AgentToolsConfig
+from .graph.model import RELATIONSHIP_EDGE_KINDS
 from .utils import get_global_ctxai_home, get_project_ctxai_home
 
 if TYPE_CHECKING:
@@ -107,6 +108,127 @@ class IndexConfig:
     chunk_overlap: int = 100  # Overlap between chunks
 
 
+# Retrieval graph-expansion defaults and bounds (IG-03). The allowlisted edge
+# kinds are the cross-file relationships the expansion may follow; "contains"
+# is deliberately excluded (a class's methods would flood the context). The
+# allowlist is the graph domain's RELATIONSHIP_EDGE_KINDS constant.
+GRAPH_EXPANSION_EDGE_KINDS = RELATIONSHIP_EDGE_KINDS
+GRAPH_EDGE_WEIGHTS_DEFAULT = {
+    "calls": 1.0,
+    "tests": 0.9,
+    "inherits": 0.8,
+    "imports": 0.7,
+    "references": 0.5,
+}
+
+MIN_GRAPH_SEED_COUNT = 1
+MAX_GRAPH_SEED_COUNT = 10
+MIN_GRAPH_EXPANSION_CAP = 1
+MAX_GRAPH_EXPANSION_CAP = 100
+MIN_GRAPH_NEIGHBORS_PER_SEED = 1
+MAX_GRAPH_NEIGHBORS_PER_SEED = 50
+MIN_GRAPH_DEPTH = 1
+MAX_GRAPH_DEPTH = 2  # depth 2 requires an explicit, bounded configuration choice
+MIN_RETRIEVAL_TOKEN_BUDGET = 1
+MAX_RETRIEVAL_TOKEN_BUDGET = 100_000
+MIN_EDGE_WEIGHT = 0.0
+MAX_EDGE_WEIGHT = 1.0
+
+
+@dataclass
+class RetrievalConfig:
+    """Retrieval configuration (IG-03).
+
+    Graph expansion is DISABLED by default; it may only become default after
+    the RE-01 gate (no Recall@5/MRR regression plus a relationship-oriented
+    improvement) passes. All bounds are validated on construction and on
+    :meth:`from_dict`, before any retrieval work begins.
+    """
+
+    token_budget: int = 2000
+    graph_enabled: bool = False
+    graph_edge_weights: dict[str, float] = field(default_factory=lambda: dict(GRAPH_EDGE_WEIGHTS_DEFAULT))
+    graph_seed_count: int = 3
+    graph_expansion_cap: int = 24
+    graph_max_neighbors_per_seed: int = 8
+    graph_depth: int = 1
+
+    def __post_init__(self) -> None:
+        """Reject out-of-bounds configuration before any work begins.
+
+        Raises:
+            ValueError: If any bound is violated or an edge kind/weight is invalid.
+        """
+        if not MIN_RETRIEVAL_TOKEN_BUDGET <= self.token_budget <= MAX_RETRIEVAL_TOKEN_BUDGET:
+            raise ValueError(
+                f"token_budget must be between {MIN_RETRIEVAL_TOKEN_BUDGET} and {MAX_RETRIEVAL_TOKEN_BUDGET}"
+            )
+        if not MIN_GRAPH_SEED_COUNT <= self.graph_seed_count <= MAX_GRAPH_SEED_COUNT:
+            raise ValueError(f"graph_seed_count must be between {MIN_GRAPH_SEED_COUNT} and {MAX_GRAPH_SEED_COUNT}")
+        if not MIN_GRAPH_EXPANSION_CAP <= self.graph_expansion_cap <= MAX_GRAPH_EXPANSION_CAP:
+            raise ValueError(
+                f"graph_expansion_cap must be between {MIN_GRAPH_EXPANSION_CAP} and {MAX_GRAPH_EXPANSION_CAP}"
+            )
+        if not MIN_GRAPH_NEIGHBORS_PER_SEED <= self.graph_max_neighbors_per_seed <= MAX_GRAPH_NEIGHBORS_PER_SEED:
+            raise ValueError(
+                "graph_max_neighbors_per_seed must be between "
+                f"{MIN_GRAPH_NEIGHBORS_PER_SEED} and {MAX_GRAPH_NEIGHBORS_PER_SEED}"
+            )
+        if not MIN_GRAPH_DEPTH <= self.graph_depth <= MAX_GRAPH_DEPTH:
+            raise ValueError(f"graph_depth must be between {MIN_GRAPH_DEPTH} and {MAX_GRAPH_DEPTH}")
+        unknown = sorted(set(self.graph_edge_weights) - set(GRAPH_EXPANSION_EDGE_KINDS))
+        if unknown:
+            raise ValueError(
+                f"graph_edge_weights has unknown edge kinds {unknown};"
+                f" allowlisted: {', '.join(GRAPH_EXPANSION_EDGE_KINDS)}"
+            )
+        for kind, weight in self.graph_edge_weights.items():
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise ValueError(f"graph_edge_weights[{kind!r}] must be a number")
+            if not MIN_EDGE_WEIGHT < float(weight) <= MAX_EDGE_WEIGHT:
+                raise ValueError(f"graph_edge_weights[{kind!r}] must be in ({MIN_EDGE_WEIGHT}, {MAX_EDGE_WEIGHT}]")
+
+    def to_dict(self) -> dict:
+        """Convert to a JSON/TOML-compatible dictionary.
+
+        Returns:
+            Dictionary of all fields with copied containers.
+        """
+        return {
+            "token_budget": self.token_budget,
+            "graph_enabled": self.graph_enabled,
+            "graph_edge_weights": dict(self.graph_edge_weights),
+            "graph_seed_count": self.graph_seed_count,
+            "graph_expansion_cap": self.graph_expansion_cap,
+            "graph_max_neighbors_per_seed": self.graph_max_neighbors_per_seed,
+            "graph_depth": self.graph_depth,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RetrievalConfig":
+        """Create from a dictionary, ignoring unknown keys and validating bounds.
+
+        Args:
+            data: Dictionary produced by :meth:`to_dict` (or a TOML table).
+
+        Returns:
+            The validated RetrievalConfig.
+
+        Raises:
+            ValueError: If any bound is violated.
+        """
+        weights = data.get("graph_edge_weights", dict(GRAPH_EDGE_WEIGHTS_DEFAULT))
+        return cls(
+            token_budget=data.get("token_budget", 2000),
+            graph_enabled=bool(data.get("graph_enabled", False)),
+            graph_edge_weights={str(kind): float(weight) for kind, weight in dict(weights).items()},
+            graph_seed_count=data.get("graph_seed_count", 3),
+            graph_expansion_cap=data.get("graph_expansion_cap", 24),
+            graph_max_neighbors_per_seed=data.get("graph_max_neighbors_per_seed", 8),
+            graph_depth=data.get("graph_depth", 1),
+        )
+
+
 @dataclass
 class ProviderConfig:
     """Configuration for a single LLM provider."""
@@ -153,6 +275,7 @@ class Config:
     # Other configurations
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexConfig = field(default_factory=IndexConfig)
+    retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
     version: str = "2.0"
 
@@ -198,6 +321,7 @@ class Config:
             },
             embedding=EmbeddingConfig(),
             indexing=IndexConfig(),
+            retrieval=RetrievalConfig(),
             tools=AgentToolsConfig(),
         )
 
@@ -284,6 +408,7 @@ class Config:
             "providers": {k: v.to_dict() for k, v in self.providers.items()},
             "embedding": asdict(self.embedding),
             "indexing": asdict(self.indexing),
+            "retrieval": self.retrieval.to_dict(),
             "tools": self.tools.to_dict(),
             "index_name": self.index_name,
             "index_status": self.index_status,
@@ -307,6 +432,7 @@ class Config:
             providers=providers,
             embedding=EmbeddingConfig(**data.get("embedding", {})),
             indexing=IndexConfig(**data.get("indexing", {})),
+            retrieval=RetrievalConfig.from_dict(data.get("retrieval", {})),
             tools=AgentToolsConfig.from_dict(data.get("tools", {})),
             index_name=data.get("index_name"),
             index_status=data.get("index_status"),

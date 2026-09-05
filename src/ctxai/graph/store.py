@@ -873,6 +873,63 @@ class GraphStore:
             raise GraphStoreError(f"Graph store query failed at {self.path}: {exc}") from exc
         return {row["owner"] for row in rows}
 
+    def cross_file_relationship_files(
+        self,
+        file_paths: Iterable[str],
+        edge_kinds: Iterable[str],
+    ) -> set[str]:
+        """Report which supplied files participate in cross-file relationships.
+
+        A file qualifies when it owns (or hosts the target of) a resolved edge
+        of one of ``edge_kinds`` whose other endpoint lives in a different
+        file. Used by the retrieval benchmark to derive the pre-registered
+        relationship-oriented case cohort (IG-03).
+
+        Args:
+            file_paths: Repository-relative candidate file paths.
+            edge_kinds: Edge kinds counted as relationships (validated by the
+                caller; every query is parameterized).
+
+        Returns:
+            The subset of ``file_paths`` with at least one cross-file
+            relationship edge.
+
+        Raises:
+            GraphStoreError: If the store is unreadable.
+        """
+        paths = sorted(set(file_paths))
+        kinds = sorted(set(edge_kinds))
+        if not paths or not kinds or not self.exists():
+            return set()
+        kind_placeholders = ", ".join("?" for _ in kinds)
+        path_placeholders = ", ".join("?" for _ in paths)
+        # Two UNION branches, each parameterized as kinds + paths.
+        parameters = [*kinds, *paths, *kinds, *paths]
+        sql = (
+            "SELECT DISTINCT source.file_path AS related FROM edges"
+            " JOIN nodes AS source ON source.id = edges.source_id"
+            " JOIN nodes AS target ON target.id = edges.target_id"
+            f" WHERE edges.kind IN ({kind_placeholders})"
+            " AND target.file_path != source.file_path"
+            f" AND source.file_path IN ({path_placeholders})"
+            " UNION"
+            " SELECT DISTINCT target.file_path FROM edges"
+            " JOIN nodes AS source ON source.id = edges.source_id"
+            " JOIN nodes AS target ON target.id = edges.target_id"
+            f" WHERE edges.kind IN ({kind_placeholders})"
+            " AND target.file_path != source.file_path"
+            f" AND target.file_path IN ({path_placeholders})"
+        )
+        try:
+            connection = self._connect()
+            try:
+                rows = connection.execute(sql, parameters).fetchall()
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise GraphStoreError(f"Graph store query failed at {self.path}: {exc}") from exc
+        return {row["related"] for row in rows}
+
     def neighbors(
         self,
         node_id: str,

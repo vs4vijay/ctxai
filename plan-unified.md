@@ -73,7 +73,7 @@ open repository
 | RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Validated (2026-09-04) |
 | IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Validated (2026-09-05) |
 | IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Validated (2026-09-05) |
-| IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Planned |
+| IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Validated (2026-09-05) |
 | RE-02 Privacy-preserving retrieval observability | Local, redacted retrieval traces | Planned |
 | RE-03 Retrieval quality dashboard + CI gate | Baseline comparison and merge protection | Planned |
 
@@ -977,7 +977,9 @@ rendering beyond accessible tables and relationship lists.
 relevant definitions, callers/callees, imports, and tests when they add value, with an explanation
 of why each item was selected.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-05) (shipped disabled-by-default behind the measured gate; the
+default-enablement comparator honestly reports `passed: false` under mock embeddings, so expansion
+stays non-default — see docs/RETRIEVAL_EXPANSION.md).
 
 **Scope**
 

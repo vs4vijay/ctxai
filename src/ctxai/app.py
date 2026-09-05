@@ -378,6 +378,12 @@ def eval_retrieval_run(
         False, "--fail-on-regression", help="Exit non-zero when any gate regresses beyond tolerance"
     ),
     repeat: int = typer.Option(1, "--repeat", min=1, max=10, help="Executions per case (first repeat warms up)"),
+    graph: bool | None = typer.Option(
+        None,
+        "--graph/--no-graph",
+        help="Run with graph expansion enabled (default: --no-graph). Requires a healthy, "
+        "generation-matched graph; the run fails explicitly otherwise.",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Print the exact on-disk artifact JSON"),
     project_path: Path | None = typer.Option(
         None,
@@ -401,8 +407,29 @@ def eval_retrieval_run(
         baseline=baseline,
         fail_on_regression=fail_on_regression,
         repeat=repeat,
+        graph=graph,
         as_json=as_json,
     )
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
+@retrieval_eval_app.command("compare-graph")
+def eval_retrieval_compare_graph(
+    baseline: Path = typer.Argument(..., help="No-graph baseline artifact JSON"),
+    graph: Path = typer.Argument(..., help="Graph-enabled candidate artifact JSON"),
+    as_json: bool = typer.Option(False, "--json", help="Print the verdict as versioned JSON"),
+):
+    """Compare a graph-enabled run against its no-graph baseline (IG-03 gate).
+
+    Verifies that graph expansion did not regress Recall@5/MRR (and the other
+    gated quality metrics) beyond the checked-in tolerances, and that at
+    least one pre-registered relationship-oriented metric improved on the
+    derived ``graph-relationship`` cohort. Exits 0 only when both hold.
+    """
+    from .commands.eval_command import compare_retrieval_graph_gate
+
+    exit_code = compare_retrieval_graph_gate(baseline_path=baseline, graph_path=graph, as_json=as_json)
     if exit_code != 0:
         raise typer.Exit(code=exit_code)
 
@@ -700,12 +727,26 @@ def query(
         "--no-content",
         help="Don't show code content, only metadata",
     ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Show why each item was selected: component ranks, graph paths, fusion contributions, "
+        "exclusions, and context-budget decisions",
+    ),
+    graph: bool | None = typer.Option(
+        None,
+        "--graph/--no-graph",
+        help="Graph-expanded retrieval (IG-03). --graph requires a healthy, generation-matched graph and "
+        "fails explicitly when unavailable; without flags the configured default applies "
+        "(retrieval.graph_enabled, falling back with a diagnostic)",
+    ),
 ):
     """
     Query an indexed codebase using natural language.
 
-    This command searches the vector database using semantic similarity
-    and returns the most relevant code chunks.
+    This command searches through the shared hybrid retrieval service
+    (semantic, lexical, symbol, repository-map, and optional graph expansion)
+    and returns the most relevant code chunks with file/line citations.
     """
     from .commands.query_command import query_codebase
 
@@ -714,6 +755,8 @@ def query(
         query=query_text,
         n_results=n_results,
         show_content=not no_content,
+        explain=explain,
+        graph=graph,
     )
 
 

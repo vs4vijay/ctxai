@@ -21,6 +21,7 @@ from .model import (
     MAX_SYMBOL_QUERY_LENGTH,
     MAX_TRAVERSAL_DEPTH,
     NODE_KINDS,
+    RELATIONSHIP_EDGE_KINDS,
     SUPPORTED_LANGUAGES,
     GraphMetadata,
     GraphNode,
@@ -359,6 +360,48 @@ class GraphOperations:
         store = self._store_for(index_name)
         self._require_graph(index_name, store)
         return store.find_nodes(text, kind=kind, language=language, limit=limit)
+
+    def files_with_cross_file_relationships(
+        self,
+        index_name: str,
+        file_paths: list[str] | set[str] | tuple[str, ...],
+        edge_kinds: tuple[str, ...] | None = None,
+    ) -> set[str]:
+        """Report which supplied files participate in cross-file relationships.
+
+        Used by the retrieval benchmark to derive the pre-registered
+        relationship-oriented case cohort (IG-03). A missing graph yields an
+        empty classification (no relationships exist to classify); an
+        unreadable store raises :class:`GraphStoreError`.
+
+        Args:
+            index_name: Index to classify.
+            file_paths: Repository-relative file paths (bounded by
+                MAX_RESULT_LIMIT).
+            edge_kinds: Relationship edge kinds; defaults to
+                ``RELATIONSHIP_EDGE_KINDS`` (the IG-03 allowlist).
+
+        Returns:
+            The subset of ``file_paths`` with at least one resolved
+            cross-file relationship edge.
+
+        Raises:
+            ValueError: On out-of-bounds inputs or unknown edge kinds.
+            GraphStoreError: If the graph store is unreadable.
+        """
+        paths = sorted(set(file_paths))
+        if len(paths) > MAX_RESULT_LIMIT:
+            raise ValueError(f"file_paths must be at most {MAX_RESULT_LIMIT} paths")
+        kinds = tuple(edge_kinds) if edge_kinds is not None else RELATIONSHIP_EDGE_KINDS
+        unknown = [kind for kind in kinds if kind not in EDGE_KINDS]
+        if unknown:
+            raise ValueError(f"Unknown edge kinds {unknown}; expected one of {', '.join(EDGE_KINDS)}")
+        if not paths:
+            return set()
+        store = self._store_for(index_name)
+        if not store.exists():
+            return set()
+        return store.cross_file_relationship_files(paths, kinds)
 
     def neighbors(
         self,
