@@ -358,7 +358,6 @@ class ConversationContext:
     def truncate_old_messages(self, max_tokens: int = 100000) -> None:
         """
         Truncate old messages if context is too large.
-
         Keeps system messages, the newest whole message groups that fit the
         token budget, and a deterministic summary of everything omitted.
         Groups (assistant tool calls together with their results) are never
@@ -383,7 +382,10 @@ class ConversationContext:
             token_count += group_tokens
 
         omitted = [msg for group in activity_groups for msg in group if id(msg) not in retained_ids]
-        summary = self._summarize_messages(omitted)
+        system_tokens = sum(len(msg.content) for msg in system_messages) // 4
+        # The summary itself must fit the remaining budget (chars//4 heuristic).
+        summary_budget_chars = max(0, max_tokens - token_count - system_tokens) * 4
+        summary = self._summarize_messages(omitted, max_chars=min(6000, summary_budget_chars))
         summary_message = []
         if summary:
             summary_message = [Message(role=MessageRole.SYSTEM, content=SUMMARY_MESSAGE_PREFIX + summary)]
@@ -392,12 +394,19 @@ class ConversationContext:
 
     @staticmethod
     def _summarize_messages(messages: list[Message], max_chars: int = 6000) -> str:
-        """Create a deterministic, relevance-oriented summary without another LLM call."""
+        """Create a deterministic, relevance-oriented summary without another LLM call.
+
+        When the assembled summary exceeds ``max_chars``, the oldest
+        low-relevance entries are dropped first, and remaining entries are
+        shortened uniformly, so decisions and failures survive tight budgets.
+        """
+        if max_chars <= 0:
+            return ""
         labels = {
             MessageRole.USER: "Request/decision",
             MessageRole.ASSISTANT: "Assistant outcome",
         }
-        lines: list[str] = []
+        entries: list[tuple[bool, str]] = []
         for message in messages:
             label = "Tool result" if message.tool_call_id else labels.get(message.role, "Context")
             content = " ".join(message.content.split())
@@ -408,9 +417,39 @@ class ConversationContext:
                 for term in ("decid", "chang", "fail", "error", "todo", "open", "risk", "test", "verify")
             )
             limit = 700 if important else 300
-            lines.append(f"- {label}: {content[:limit]}")
-        summary = "\n".join(lines)
+            entries.append((important, f"- {label}: {content[:limit]}"))
+
+        def _joined(items: list[tuple[bool, str]]) -> str:
+            return "\n".join(line for _, line in items)
+
+        if len(_joined(entries)) <= max_chars:
+            return _joined(entries)
+
+        kept = list(entries)
+        while len(_joined(kept)) > max_chars:
+            drop_index = next((i for i, (important, _) in enumerate(kept) if not important), None)
+            if drop_index is None:
+                break
+            kept.pop(drop_index)
+        if not kept:
+            # A summary must still exist for omitted history; keep the newest
+            # entry and let the sizing below fit it into the budget.
+            kept = [entries[-1]]
+
+        summary = _joined(kept)
+        if len(summary) > max_chars:
+            per_line = max(40, max_chars // max(1, len(kept)) - 1)
+            summary = "\n".join(line[:per_line] for _, line in kept)
         return summary[-max_chars:]
+
+    def prune_to_fit(self, max_tokens: int = 100000) -> int:
+        """
+        Aggressively prune until token budget is satisfied. Returns the
+        number of non-system messages dropped.
+        """
+        before = len(self.messages)
+        self.truncate_old_messages(max_tokens=max_tokens)
+        return before - len(self.messages)
 
     def clear(self) -> None:
         """Clear all messages except system messages."""

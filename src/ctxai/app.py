@@ -1598,6 +1598,23 @@ def models_library(
 
 app.add_typer(models_app, name="models")
 
+# Service subcommand (long-running daemon, REST/WS API).
+# Imported lazily so missing optional deps don't break the top-level CLI.
+try:
+    from .commands.service_command import service_app
+
+    app.add_typer(service_app, name="service")
+except Exception:
+    pass
+
+# Export subcommand (repo -> text/markdown/html/json/xml).
+try:
+    from .commands.export_command import export_app
+
+    app.add_typer(export_app, name="export")
+except Exception:
+    pass
+
 
 @app.command()
 def logout(

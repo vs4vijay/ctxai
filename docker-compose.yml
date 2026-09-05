@@ -1,0 +1,45 @@
+version: "3.8"
+
+# Default stack: ctxai service + Redis (optional, for distributed rate
+# limiting / sessions). Use `docker compose up -d` to start.
+
+services:
+  ctxai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ctxai:latest
+    container_name: ctxai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      CTXAI_HOME: /data
+      CTXAI_ENV: prod
+      CTXAI_LOG_LEVEL: ${CTXAI_LOG_LEVEL:-INFO}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ctxai-data:/data
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: ctxai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+
+volumes:
+  ctxai-data:
+  redis-data:

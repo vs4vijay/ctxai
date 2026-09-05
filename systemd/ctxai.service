@@ -1,0 +1,24 @@
+[Unit]
+Description=ctxai long-running agent service
+After=network.target
+
+[Service]
+Type=simple
+User=ctxai
+Group=ctxai
+WorkingDirectory=/opt/ctxai
+Environment=CTXAI_HOME=/var/lib/ctxai
+Environment=CTXAI_ENV=prod
+EnvironmentFile=-/etc/ctxai/env
+ExecStart=/usr/local/bin/python -m uvicorn ctxai.service.api_server:create_app --factory --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

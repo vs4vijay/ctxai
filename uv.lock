@@ -876,7 +876,7 @@ wheels = [
 
 [[package]]
 name = "ctxai"
-version = "0.0.4"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "chromadb" },
@@ -898,9 +898,12 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "fastapi" },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "openai" },
     { name = "python-fasthtml" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 dashboard = [
     { name = "python-fasthtml" },
@@ -908,8 +911,18 @@ dashboard = [
 mcp = [
     { name = "mcp" },
 ]
+observability = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
+]
 openai = [
     { name = "openai" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.dev-dependencies]
@@ -935,11 +948,18 @@ server = [
 [package.metadata]
 requires-dist = [
     { name = "chromadb", specifier = ">=0.5.0" },
+    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.118.0" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.118.0" },
+    { name = "httpx", marker = "extra == 'all'", specifier = ">=0.27.0" },
+    { name = "httpx", marker = "extra == 'server'", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.16.0,<1.17" },
     { name = "mcp", marker = "extra == 'all'", specifier = ">=1.16.0,<1.17" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.16.0,<1.17" },
     { name = "openai", marker = "extra == 'all'", specifier = ">=1.58.1" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.58.1" },
+    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.27.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'observability'", specifier = ">=1.27.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.27.0" },
     { name = "pathspec", specifier = ">=0.12.1" },
     { name = "prompt-toolkit", specifier = ">=3.0.48" },
     { name = "pydantic", specifier = ">=2.11.10" },
@@ -955,8 +975,10 @@ requires-dist = [
     { name = "tree-sitter", specifier = ">=0.25.2" },
     { name = "tree-sitter-language-pack", specifier = ">=0.9.0" },
     { name = "typer", specifier = ">=0.19.2" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.37.0" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.37.0" },
 ]
-provides-extras = ["openai", "dashboard", "mcp", "all"]
+provides-extras = ["openai", "dashboard", "mcp", "server", "observability", "all"]
 
 [package.metadata.requires-dev]
 dev = [

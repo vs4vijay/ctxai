@@ -13,6 +13,78 @@ from typing import Any
 from ..events import StreamEvent
 
 
+class ProviderErrorKind(str, Enum):
+    """Stable error categories shared by every provider."""
+
+    AUTHENTICATION = "authentication"
+    RATE_LIMIT = "rate_limit"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    UNSUPPORTED = "unsupported"
+    TRANSPORT = "transport"
+    INVALID_RESPONSE = "invalid_response"
+    CONTEXT_LENGTH = "context_length"
+
+
+class ProviderError(RuntimeError):
+    """Provider failure carrying a stable error kind and optional metadata.
+
+    Supports both construction styles used across the codebase::
+
+        ProviderError(ProviderErrorKind.TIMEOUT, "timed out", provider="anthropic")
+        AuthenticationError("bad key", provider="anthropic", status_code=401)
+    """
+
+    default_kind: ProviderErrorKind | None = None
+
+    def __init__(
+        self,
+        kind_or_message: ProviderErrorKind | str,
+        message: str | None = None,
+        *,
+        provider: str | None = None,
+        status_code: int | None = None,
+    ):
+        if isinstance(kind_or_message, ProviderErrorKind):
+            text = message if message is not None else kind_or_message.value
+            kind: ProviderErrorKind | None = kind_or_message
+        else:
+            text = kind_or_message
+            kind = self.default_kind
+        super().__init__(text)
+        self.kind = kind
+        self.provider = provider
+        self.status_code = status_code
+
+
+class RateLimitError(ProviderError):
+    """Provider rejected the request because we exceeded rate limits."""
+
+    default_kind = ProviderErrorKind.RATE_LIMIT
+
+    def __init__(self, message: str, retry_after: float | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.retry_after = retry_after
+
+
+class ContextLengthError(ProviderError):
+    """The context exceeds the provider's maximum context window."""
+
+    default_kind = ProviderErrorKind.CONTEXT_LENGTH
+
+
+class AuthenticationError(ProviderError):
+    """API key invalid, expired, or missing."""
+
+    default_kind = ProviderErrorKind.AUTHENTICATION
+
+
+class ProviderTimeoutError(ProviderError):
+    """The provider did not return a response within the timeout."""
+
+    default_kind = ProviderErrorKind.TIMEOUT
+
+
 class MessageRole(str, Enum):
     """Message roles in conversation."""
 
@@ -109,27 +181,6 @@ class ProviderCapabilities:
     images: bool = False
     structured_output: bool = False
     context_size: int = 100_000
-
-
-class ProviderErrorKind(str, Enum):
-    """Stable error categories shared by every provider."""
-
-    AUTHENTICATION = "authentication"
-    RATE_LIMIT = "rate_limit"
-    TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
-    UNSUPPORTED = "unsupported"
-    TRANSPORT = "transport"
-    INVALID_RESPONSE = "invalid_response"
-
-
-class ProviderError(RuntimeError):
-    """Provider-independent failure exposed to orchestration code."""
-
-    def __init__(self, kind: ProviderErrorKind, message: str, *, provider: str | None = None):
-        super().__init__(message)
-        self.kind = kind
-        self.provider = provider
 
 
 class BaseLLMProvider(ABC):
@@ -407,6 +458,17 @@ class BaseLLMProvider(ABC):
             True if API key is required
         """
         pass
+
+    def health_check(self) -> bool:
+        """
+        Optional health check — subclasses may override with a cheap ping.
+
+        Default implementation just checks that config is present.
+        """
+        try:
+            return self.validate_config()
+        except Exception:
+            return False
 
     def __repr__(self) -> str:
         """String representation of provider."""

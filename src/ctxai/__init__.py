@@ -25,7 +25,7 @@ Usage:
 For more information, visit: https://github.com/vs4vijay/ctxai
 """
 
-__version__ = "0.0.4"
+__version__ = "1.0.0"
 __author__ = "vs4vijay"
 
 __all__ = [

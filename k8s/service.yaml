@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ctxai
+  namespace: ctxai
+spec:
+  type: ClusterIP
+  selector:
+    app: ctxai
+  ports:
+    - port: 80
+      targetPort: 8000
+      name: http
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ctxai-data
+  namespace: ctxai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
