@@ -18,10 +18,16 @@ falls back to base behavior with a visible diagnostic.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
+import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .config import (
     GRAPH_EDGE_WEIGHTS_DEFAULT,
@@ -31,8 +37,19 @@ from .config import (
 )
 from .graph.model import GraphNode
 from .index_manifest import IndexManifest, IndexManifestError
+from .retrieval_traces import (
+    RetrievalRunRecord,
+    TraceOutcome,
+    TraceSettings,
+    configuration_fingerprint,
+    create_recorder,
+    errored_run_record,
+    query_hash,
+)
 from .utils import get_indexes_dir
 from .vector_store import VectorStore
+
+LOGGER = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -246,11 +263,17 @@ class RetrievalResult:
         semantic_distances: Chunk id -> vector distance from the semantic
             generator (adapters that used to show ``max(0, 1 - distance)``
             keep that value; chunks without a vector hit are absent).
+        component_counts: Candidate count per generator, always populated
+            (RE-02 tracing / observability).
+        component_ranks: Per-chunk rank within each generator, always
+            populated.
     """
 
     items: list[ContextItem]
     explain: RetrievalExplain | None = None
     semantic_distances: dict[str, float] = field(default_factory=dict)
+    component_counts: dict[str, int] = field(default_factory=dict)
+    component_ranks: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -266,6 +289,8 @@ class EvidenceResult:
             enabled in configuration but unavailable, else ``None``.
         semantic_distances: Chunk id -> vector distance from the semantic
             generator (for adapters that render a similarity percentage).
+        trace: Recording outcome (RE-02) when tracing was requested and the
+            mode persists; ``None`` when tracing is off.
     """
 
     index_name: str | None
@@ -274,6 +299,7 @@ class EvidenceResult:
     explain: RetrievalExplain | None = None
     graph_diagnostic: str | None = None
     semantic_distances: dict[str, float] = field(default_factory=dict)
+    trace: TraceOutcome | None = None
 
 
 def discover_repository_indexes(project_path: Path) -> list[str]:
@@ -366,6 +392,8 @@ class HybridRetriever:
         if not self.index_name:
             raise LookupError("No index matches the current repository. Run 'ctxai index' first.")
         index_path = get_indexes_dir(self.project_path) / self.index_name
+        if not index_path.is_dir():
+            raise LookupError(f"Index '{self.index_name}' does not exist at {index_path}")
         manifest = IndexManifest.load_optional(index_path)
         if manifest is not None and Path(manifest.repository_root).resolve() != self.project_path:
             raise LookupError(f"Index '{self.index_name}' belongs to a different repository")
@@ -418,48 +446,89 @@ class HybridRetriever:
     # Candidate generators (independently measurable)
     # ------------------------------------------------------------------
 
-    def _base_rankings(self, query: str, records: list[dict]) -> list[ComponentRanking]:
+    def _base_rankings(
+        self,
+        query: str,
+        records: list[dict],
+        *,
+        timings: dict[str, float] | None = None,
+        perf: Callable[[], float] | None = None,
+    ) -> list[ComponentRanking]:
         """Run the base candidate generators over the complete local corpus.
 
         Args:
             query: The natural-language or symbol query.
             records: All chunk records from the vector store.
+            timings: Optional accumulator receiving per-generator stage
+                durations in milliseconds (RE-02 tracing).
+            perf: Optional monotonic clock used with ``timings``.
 
         Returns:
             Component rankings in fixed, deterministic order.
         """
+
+        def stage(name: str, produce):
+            """Run one generator, recording its duration when tracing.
+
+            Args:
+                name: Stage name recorded in the trace.
+                produce: Zero-arg callable producing the ranking records.
+
+            Returns:
+                The generator's records.
+            """
+            if timings is None or perf is None:
+                return produce()
+            started = perf()
+            try:
+                return produce()
+            finally:
+                timings[name] = timings.get(name, 0.0) + max(0.0, (perf() - started) * 1000.0)
+
         query_terms = set(_terms(query))
         # Fuse over the complete local corpus (bounded by index size), then
         # apply the caller's result limit. Early truncation can hide an exact
         # symbol match merely because its vector rank is low.
-        semantic = self.store.search(self.embedding_provider.generate_embedding(query), n_results=len(records))
+        semantic = stage(
+            "semantic_candidates",
+            lambda: self.store.search(self.embedding_provider.generate_embedding(query), n_results=len(records)),
+        )
         rankings: list[ComponentRanking] = [ComponentRanking("semantic", semantic)]
 
-        lexical = sorted(
-            records,
-            key=lambda record: sum(_terms(record.get("content", "")).count(term) for term in query_terms),
-            reverse=True,
-        )
-        lexical = [r for r in lexical if query_terms & set(_terms(r.get("content", "")))]
+        def _lexical():
+            lexical = sorted(
+                records,
+                key=lambda record: sum(_terms(record.get("content", "")).count(term) for term in query_terms),
+                reverse=True,
+            )
+            return [r for r in lexical if query_terms & set(_terms(r.get("content", "")))]
+
+        lexical = stage("lexical_candidates", _lexical)
         rankings.append(ComponentRanking("lexical", lexical))
 
-        symbol = [
-            record
-            for record in records
-            if query_terms & set(_terms((record.get("metadata") or {}).get("meta_name", "")))
-        ]
+        symbol = stage(
+            "symbol_candidates",
+            lambda: [
+                record
+                for record in records
+                if query_terms & set(_terms((record.get("metadata") or {}).get("meta_name", "")))
+            ],
+        )
         rankings.append(ComponentRanking("symbol", symbol))
 
         # Repository-map signal: filenames and important definition types provide
         # useful structure even when a query's wording differs from code prose.
-        structure = sorted(
-            records,
-            key=lambda record: (
-                bool(query_terms & set(_terms((record.get("metadata") or {}).get("file_path", "")))),
-                (record.get("metadata") or {}).get("chunk_type", "")
-                in {"class_definition", "class_declaration", "function_definition", "function_declaration"},
+        structure = stage(
+            "structure_candidates",
+            lambda: sorted(
+                records,
+                key=lambda record: (
+                    bool(query_terms & set(_terms((record.get("metadata") or {}).get("file_path", "")))),
+                    (record.get("metadata") or {}).get("chunk_type", "")
+                    in {"class_definition", "class_declaration", "function_definition", "function_declaration"},
+                ),
+                reverse=True,
             ),
-            reverse=True,
         )
         rankings.append(ComponentRanking("repository-map", structure, adds_reasons=False))
         return rankings
@@ -791,7 +860,15 @@ class HybridRetriever:
         """
         return self.retrieve_detailed(query, limit=limit, explain=debug).items
 
-    def retrieve_detailed(self, query: str, limit: int = 20, explain: bool = False) -> RetrievalResult:
+    def retrieve_detailed(
+        self,
+        query: str,
+        limit: int = 20,
+        explain: bool = False,
+        *,
+        timings: dict[str, float] | None = None,
+        perf: Callable[[], float] | None = None,
+    ) -> RetrievalResult:
         """Retrieve ranked candidates with an optional explanation report.
 
         Args:
@@ -799,31 +876,62 @@ class HybridRetriever:
             limit: Maximum number of returned candidates.
             explain: When True, attach per-component contributions, base
                 order, seeds, graph paths, and diagnostics.
+            timings: Optional stage-duration accumulator (RE-02 tracing);
+                when provided together with ``perf``, every pipeline stage
+                records its duration in milliseconds.
+            perf: Optional monotonic clock used with ``timings``.
 
         Returns:
             The :class:`RetrievalResult` with ranked items.
         """
-        records = self.store.get_chunks()
+
+        def stage(name: str, produce):
+            """Run one pipeline stage, recording its duration when tracing.
+
+            Args:
+                name: Stage name recorded in the trace.
+                produce: Zero-arg callable producing the stage result.
+
+            Returns:
+                The stage result.
+            """
+            if timings is None or perf is None:
+                return produce()
+            started = perf()
+            try:
+                return produce()
+            finally:
+                timings[name] = timings.get(name, 0.0) + max(0.0, (perf() - started) * 1000.0)
+
+        records = stage("load_records", self.store.get_chunks)
         if not records:
             empty = RetrievalExplain(query=query, diagnostics=["index has no chunks"]) if explain else None
             return RetrievalResult([], empty)
-        rankings = self._base_rankings(query, records)
-        semantic_distances = {
-            record["id"]: float(record["distance"]) for record in rankings[0].ranked if "distance" in record
-        }
-        by_id = {record["id"]: _item(record) for record in records}
-        contributions: dict[str, dict[str, float]] = {}
-        for ranking in rankings:
-            for rank, record in enumerate(ranking.ranked, 1):
-                item = by_id[record["id"]]
-                contribution = 1.0 / (FUSION_RANK_OFFSET + rank)
-                item.score += contribution
-                components = contributions.setdefault(item.id, {})
-                components[ranking.component] = components.get(ranking.component, 0.0) + contribution
-                if explain or ranking.adds_reasons:
-                    item.reasons.append(f"{ranking.component} rank {rank}")
+        rankings = self._base_rankings(query, records, timings=timings, perf=perf)
 
-        base_order = sorted(by_id.values(), key=lambda item: (-item.score, item.file_path, item.start_line))
+        def _fuse():
+            semantic_distances = {
+                record["id"]: float(record["distance"]) for record in rankings[0].ranked if "distance" in record
+            }
+            by_id = {record["id"]: _item(record) for record in records}
+            contributions: dict[str, dict[str, float]] = {}
+            for ranking in rankings:
+                for rank, record in enumerate(ranking.ranked, 1):
+                    item = by_id[record["id"]]
+                    contribution = 1.0 / (FUSION_RANK_OFFSET + rank)
+                    item.score += contribution
+                    components = contributions.setdefault(item.id, {})
+                    components[ranking.component] = components.get(ranking.component, 0.0) + contribution
+                    if explain or ranking.adds_reasons:
+                        item.reasons.append(f"{ranking.component} rank {rank}")
+            return semantic_distances, by_id, contributions
+
+        semantic_distances, by_id, contributions = stage("fusion", _fuse)
+
+        base_order = stage(
+            "final_rank",
+            lambda: sorted(by_id.values(), key=lambda item: (-item.score, item.file_path, item.start_line)),
+        )
         base_snapshot = [(item.id, item.citation, item.score) for item in base_order[:limit]]
 
         seeds: list[dict] = []
@@ -831,10 +939,13 @@ class HybridRetriever:
         diagnostics: list[str] = []
         if self.graph_settings.enabled and self._graph_operations is not None:
             grouped_chunks, excluded_chunks = self._chunk_entries_by_file(records)
-            graph_candidates, seeds, diagnostics = self._expand_graph(
-                base_order=base_order,
-                grouped_chunks=grouped_chunks,
-                excluded_chunks=excluded_chunks,
+            graph_candidates, seeds, diagnostics = stage(
+                "graph_expansion",
+                lambda: self._expand_graph(
+                    base_order=base_order,
+                    grouped_chunks=grouped_chunks,
+                    excluded_chunks=excluded_chunks,
+                ),
             )
             for candidate in graph_candidates:
                 item = by_id[candidate.chunk_id]
@@ -844,7 +955,10 @@ class HybridRetriever:
                 item.graph_evidence = candidate.evidence
                 item.reasons.append(candidate.evidence.reason_text())
 
-        ordered = sorted(by_id.values(), key=lambda item: (-item.score, item.file_path, item.start_line))[:limit]
+        ordered = stage(
+            "truncate",
+            lambda: sorted(by_id.values(), key=lambda item: (-item.score, item.file_path, item.start_line))[:limit],
+        )
 
         explain_report: RetrievalExplain | None = None
         if explain:
@@ -870,7 +984,19 @@ class HybridRetriever:
                 final_rank={item.id: rank for rank, item in enumerate(ordered, 1)},
                 final_scores={item.id: item.score for item in ordered},
             )
-        return RetrievalResult(ordered, explain_report, semantic_distances)
+        component_counts = {ranking.component: len(ranking.ranked) for ranking in rankings}
+        component_ranks: dict[str, dict[str, int]] = {}
+        for ranking in rankings:
+            ranks = component_ranks.setdefault(ranking.component, {})
+            for rank, record in enumerate(ranking.ranked, 1):
+                ranks[record["id"]] = rank
+        return RetrievalResult(
+            ordered,
+            explain_report,
+            semantic_distances,
+            component_counts=component_counts,
+            component_ranks=component_ranks,
+        )
 
 
 class ContextAssembler:
@@ -940,6 +1066,8 @@ def retrieve_evidence(
     token_budget: int | None = None,
     graph: GraphExpansionSettings | None = None,
     explain: bool = False,
+    trace: TraceSettings | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> EvidenceResult:
     """Shared retrieval service: one query, ranked candidates, assembled context.
 
@@ -958,25 +1086,284 @@ def retrieve_evidence(
             packaged default configuration).
         graph: Resolved graph-expansion settings (disabled by default).
         explain: When True, attach the explanation report and debug reasons.
+        trace: Resolved tracing settings (RE-02); ``None`` or an ``off`` mode
+            records nothing. Recording failures are diagnostics and never
+            affect the retrieval.
+        clock: Injected monotonic clock for deterministic stage timings
+            (tests); wall-clock when ``None``.
 
     Returns:
-        The :class:`EvidenceResult` for the query.
+        The :class:`EvidenceResult` for the query, carrying the trace
+        outcome when tracing was requested.
 
     Raises:
         LookupError: When no matching index exists or a required graph is
-            unavailable.
+            unavailable. A failed retrieval is recorded best-effort as an
+            errored trace run before the raise.
     """
-    retriever = HybridRetriever(project_path, embedding_provider, index_name=index_name, graph=graph)
-    result = retriever.retrieve_detailed(query, limit=max(1, limit), explain=explain)
-    budget = token_budget if token_budget is not None else RetrievalConfig().token_budget
-    context = ContextAssembler(token_budget=max(1, budget), debug=explain).assemble(
-        retriever.index_name if retriever.index_name is not None else "", result.items
+    started = (clock or time.perf_counter)()
+    settings = trace if trace is not None else TraceSettings()
+    recorder = create_recorder(
+        project_path,
+        settings,
+        timestamp_clock=lambda: datetime.now(timezone.utc),
     )
-    return EvidenceResult(
-        index_name=retriever.index_name,
-        items=result.items,
-        context=context,
-        explain=result.explain,
-        graph_diagnostic=retriever.graph_diagnostic,
-        semantic_distances=result.semantic_distances,
+    timings: dict[str, float] = {}
+    perf = clock or time.perf_counter
+    try:
+        retriever = HybridRetriever(project_path, embedding_provider, index_name=index_name, graph=graph)
+        # Tracing needs generator counts and per-component contributions; the
+        # explain report carries them. Ordering, items, and assembled blocks
+        # are unchanged (the assembler's debug flag stays tied to the caller's
+        # explain request).
+        result = retriever.retrieve_detailed(
+            query, limit=max(1, limit), explain=explain or settings.enabled, timings=timings, perf=perf
+        )
+        budget = token_budget if token_budget is not None else RetrievalConfig().token_budget
+
+        def _assemble() -> AssembledContext:
+            return ContextAssembler(token_budget=max(1, budget), debug=explain).assemble(
+                retriever.index_name if retriever.index_name is not None else "", result.items
+            )
+
+        started_assemble = perf()
+        context = _assemble()
+        timings["assemble"] = timings.get("assemble", 0.0) + max(0.0, (perf() - started_assemble) * 1000.0)
+        total_latency_ms = max(0.0, (perf() - started) * 1000.0)
+
+        if not settings.enabled:
+            return EvidenceResult(
+                index_name=retriever.index_name,
+                items=result.items,
+                context=context,
+                explain=result.explain,
+                graph_diagnostic=retriever.graph_diagnostic,
+                semantic_distances=result.semantic_distances,
+                trace=None,
+            )
+        outcome = recorder.record(
+            _build_trace_record(
+                recorder=recorder,
+                settings=settings,
+                query=query,
+                retriever=retriever,
+                embedding_provider=embedding_provider,
+                result=result,
+                context=context,
+                timings=timings,
+                total_latency_ms=total_latency_ms,
+                limit=max(1, limit),
+                budget=max(1, budget),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+        return EvidenceResult(
+            index_name=retriever.index_name,
+            items=result.items,
+            context=context,
+            explain=result.explain,
+            graph_diagnostic=retriever.graph_diagnostic,
+            semantic_distances=result.semantic_distances,
+            trace=outcome,
+        )
+    except Exception as error:
+        if not settings.enabled:
+            raise
+        total_latency_ms = max(0.0, (perf() - started) * 1000.0)
+        try:
+            recorder.record(
+                errored_run_record(
+                    run_id=recorder.run_id or uuid.uuid4().hex,
+                    query_id=recorder.query_id or "",
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    mode=settings.mode,
+                    query=query,
+                    settings=settings,
+                    index_name=index_name,
+                    error=str(error),
+                    total_latency_ms=total_latency_ms,
+                )
+            )
+        except Exception:  # noqa: BLE001 - recording failures never mask the retrieval error
+            LOGGER.warning("retrieval trace: failed to record errored run: %s", error)
+        raise
+
+
+def _build_trace_record(
+    *,
+    recorder,
+    settings: TraceSettings,
+    query: str,
+    retriever: HybridRetriever,
+    embedding_provider,
+    result: RetrievalResult,
+    context: AssembledContext,
+    timings: dict[str, float],
+    total_latency_ms: float,
+    limit: int,
+    budget: int,
+    timestamp: str,
+) -> RetrievalRunRecord:
+    """Build the trace record for one completed retrieval (RE-02).
+
+    Args:
+        recorder: The active recorder (carries run/query ids and timestamp).
+        settings: Resolved tracing settings.
+        query: The raw query (recorded per the settings).
+        retriever: The retriever that served the query (index identity).
+        embedding_provider: The embedding provider (identity recording).
+        result: Ranked retrieval result.
+        context: The assembled context.
+        timings: Per-stage durations in milliseconds.
+        total_latency_ms: End-to-end latency.
+        limit: The caller's candidate limit.
+        budget: The applied token budget.
+        timestamp: ISO-8601 UTC timestamp for the record.
+
+    Returns:
+        The record ready to persist.
+    """
+    selected_ids = {item.id for item in context.items}
+    exclusion_by_citation = {citation: reason for citation, reason in context.excluded}
+    contributions = result.explain.components if result.explain is not None else {}
+    component_ranks = result.component_ranks
+
+    candidates: list[dict[str, Any]] = []
+    for rank, item in enumerate(result.items, 1):
+        if item.id in selected_ids:
+            decision = "selected"
+        elif exclusion_by_citation.get(item.citation) == "duplicate":
+            decision = "duplicate"
+        elif exclusion_by_citation.get(item.citation) == "budget":
+            decision = "budget"
+        else:
+            decision = "not_selected"
+        candidate: dict[str, Any] = {
+            "chunk_id": item.id,
+            "citation": item.citation,
+            "file": _relative_or_none(item.file_path),
+            "final_rank": rank,
+            "score": round(item.score, 6),
+            "components": {name: round(value, 6) for name, value in sorted(contributions.get(item.id, {}).items())},
+            "component_ranks": {
+                name: ranks[item.id] for name, ranks in sorted(component_ranks.items()) if item.id in ranks
+            },
+            "graph_path": item.graph_evidence.path if item.graph_evidence is not None else None,
+            "decision": decision,
+            "estimated_tokens": ContextAssembler.estimate_tokens(item.content),
+        }
+        if settings.mode == "full" and settings.source_preview == "store":
+            candidate["preview"] = item.content[: max(1, settings.preview_chars)]
+        candidates.append(candidate)
+
+    generators = [
+        {"component": component, "count": count} for component, count in sorted(result.component_counts.items())
+    ]
+    excluded = [{"citation": citation, "reason": reason} for citation, reason in context.excluded]
+    configuration = {
+        "token_budget": budget,
+        "limit": limit,
+        "graph": {
+            "enabled": retriever.graph_settings.enabled,
+            "depth": retriever.graph_settings.depth,
+            "seed_count": retriever.graph_settings.seed_count,
+            "expansion_cap": retriever.graph_settings.expansion_cap,
+        },
+        "trace": settings.to_dict(),
+    }
+    configuration["fingerprint"] = configuration_fingerprint(configuration)
+    return RetrievalRunRecord(
+        run_id=recorder.run_id,
+        query_id=recorder.query_id,
+        timestamp=timestamp,
+        mode=settings.mode,
+        status="ok",
+        index={
+            "name": retriever.index_name,
+            "embedding_provider": getattr(getattr(embedding_provider, "config", None), "provider", None),
+            "embedding_model": getattr(getattr(embedding_provider, "config", None), "model", None),
+            "chunk_count": len(retriever.store.get_chunks()),
+        },
+        graph=_trace_graph_block(retriever),
+        configuration=configuration,
+        query=_query_block_for(query, settings),
+        generators=generators,
+        candidates=candidates,
+        selected=[item.id for item in context.items],
+        excluded=excluded,
+        stage_timings_ms={name: round(value, 3) for name, value in sorted(timings.items())},
+        total_latency_ms=round(total_latency_ms, 3),
+        candidate_count=len(result.items),
+        selected_count=len(context.items),
+        estimated_tokens=context.estimated_tokens,
+        network=_network_proof(),
     )
+
+
+def _relative_or_none(path: Any) -> str | None:
+    """Normalize a stored path for tracing when it is inside the project.
+
+    Args:
+        path: A path-like or string value.
+
+    Returns:
+        The project-relative POSIX path, or ``None`` when it cannot be
+        contained (outside paths are never persisted).
+    """
+    try:
+        candidate = Path(str(path))
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            project = Path.cwd().resolve()
+            relative = resolved.relative_to(project)
+            return relative.as_posix()
+        return candidate.as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def _trace_graph_block(retriever: HybridRetriever) -> dict[str, Any]:
+    """Summarize graph identity for the trace record.
+
+    Args:
+        retriever: The retriever holding graph settings and operations.
+
+    Returns:
+        The graph identity block (enabled flag and health when available).
+    """
+    block: dict[str, Any] = {"enabled": retriever.graph_settings.enabled}
+    operations = retriever._graph_operations
+    if operations is not None:
+        try:
+            stats = operations.stats(retriever.index_name)
+            block["generation"] = getattr(stats, "generation", None)
+        except Exception:  # noqa: BLE001 - identity is best-effort
+            block["generation"] = None
+    return block
+
+
+def _query_block_for(query: str, settings: TraceSettings) -> dict[str, Any]:
+    """Build the query-recording block honoring the settings.
+
+    Args:
+        query: The raw query text.
+        settings: Resolved tracing settings.
+
+    Returns:
+        The query block (recording mode, optional text/hash, length).
+    """
+    length = len(query)
+    if settings.query_text == "store" and settings.mode == "full":
+        return {"recording": "store", "text": query, "hash": query_hash(query), "length": length}
+    if settings.query_text == "omit":
+        return {"recording": "omit", "text": None, "hash": None, "length": length}
+    return {"recording": "hash", "text": None, "hash": query_hash(query), "length": length}
+
+
+def _network_proof() -> dict[str, Any]:
+    """Prove the trace pipeline made no outbound requests.
+
+    Returns:
+        The network block persisted with every record.
+    """
+    return {"recorder_transport": "local-file-only", "outbound_transports": []}

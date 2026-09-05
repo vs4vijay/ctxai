@@ -108,6 +108,8 @@ files = [
     "src/ctxai/evals/common.py",
     "src/ctxai/evals/metrics.py",
     "src/ctxai/evals/retrieval_runner.py",
+    "src/ctxai/retrieval_traces.py",
+    "src/ctxai/commands/retrieval_command.py",
     "src/ctxai/repository_context.py",
 ]
 check_untyped_defs = true

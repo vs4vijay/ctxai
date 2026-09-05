@@ -74,7 +74,7 @@ open repository
 | IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Validated (2026-09-05) |
 | IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Validated (2026-09-05) |
 | IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Validated (2026-09-05) |
-| RE-02 Privacy-preserving retrieval observability | Local, redacted retrieval traces | Planned |
+| RE-02 Privacy-preserving retrieval observability | Local, redacted retrieval traces | Validated (2026-09-05) |
 | RE-03 Retrieval quality dashboard + CI gate | Baseline comparison and merge protection | Planned |
 
 ### Baseline facts the open slices build on or fix
@@ -1038,7 +1038,7 @@ change-impact analysis; automatic tuning against the test set.
 **User outcome:** A user can inspect why a particular search selected its context and diagnose
 slow, noisy, or graph-heavy retrieval locally without exposing source or queries.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-05).
 
 **Scope**
 

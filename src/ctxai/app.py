@@ -212,6 +212,50 @@ def runs_delete(
 
 app.add_typer(runs_app, name="runs")
 
+retrieval_app = typer.Typer(help="Inspect and manage local retrieval traces (RE-02)")
+retrieval_runs_app = typer.Typer(help="List, inspect, and delete stored retrieval traces")
+
+
+@retrieval_runs_app.command("list")
+def retrieval_runs_list(
+    limit: int | None = typer.Option(None, "--limit", "-l", help="Maximum number of runs to show (newest first)"),
+    index: str | None = typer.Option(None, "--index", help="Only show runs of this index"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of a table"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """List stored retrieval traces (newest first)."""
+    from .commands.retrieval_command import list_traces
+
+    raise typer.Exit(list_traces(project_path, limit=limit, index_name=index, as_json=as_json))
+
+
+@retrieval_runs_app.command("show")
+def retrieval_runs_show(
+    run_id: str = typer.Argument(...),
+    as_json: bool = typer.Option(False, "--json", help="Emit the exact on-disk trace payload as versioned JSON"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Show one retrieval trace with stage timings and selected evidence."""
+    from .commands.retrieval_command import show_trace
+
+    raise typer.Exit(show_trace(run_id, project_path, as_json=as_json))
+
+
+@retrieval_runs_app.command("delete")
+def retrieval_runs_delete(
+    run_id: str | None = typer.Argument(None, help="Run id to delete (required without --all)"),
+    delete_all: bool = typer.Option(False, "--all", help="Delete every stored trace (asks confirmation)"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Delete one retrieval trace, or all of them with confirmation."""
+    from .commands.retrieval_command import delete_trace
+
+    raise typer.Exit(delete_trace(run_id, project_path, delete_all=delete_all))
+
+
+retrieval_app.add_typer(retrieval_runs_app, name="runs")
+app.add_typer(retrieval_app, name="retrieval")
+
 
 checkpoints_app = typer.Typer(help="Inspect and manage run checkpoints for rollback")
 
@@ -740,6 +784,12 @@ def query(
         "fails explicitly when unavailable; without flags the configured default applies "
         "(retrieval.graph_enabled, falling back with a diagnostic)",
     ),
+    trace: bool | None = typer.Option(
+        None,
+        "--trace/--no-trace",
+        help="Persist a retrieval trace for this query (RE-02). --trace uses the configured mode, "
+        "promoting an off configuration to metrics; default follows retrieval.trace_mode (off).",
+    ),
 ):
     """
     Query an indexed codebase using natural language.
@@ -757,6 +807,7 @@ def query(
         show_content=not no_content,
         explain=explain,
         graph=graph,
+        trace=trace,
     )
 
 

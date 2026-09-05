@@ -17,8 +17,9 @@ SESSION_SCHEMA_VERSION = 1
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|password|secret)(\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{8,}\b"),
+    re.compile(r"\b(?:sk|ghp|github_pat)[_-][A-Za-z0-9_-]{8,}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b", re.IGNORECASE),
+    re.compile(r"//[A-Za-z0-9._~%+-]+:[^/\s:@]+@"),
 )
 _SECRET_KEYS = {
     "api_key",
