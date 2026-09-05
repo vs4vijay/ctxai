@@ -280,8 +280,10 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             # Shared retrieval service (IG-03): the same fusion, budget, and
             # config-driven graph expansion the CLI, agent, and dashboard use.
             from ..repository_context import GraphExpansionSettings, retrieve_evidence
+            from ..retrieval_traces import resolve_trace_settings
 
             settings = GraphExpansionSettings.from_config(config.retrieval, required=False)
+            trace_settings = resolve_trace_settings(config.retrieval)
 
             def _run_query() -> Any:
                 return retrieve_evidence(
@@ -293,22 +295,26 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
                     token_budget=config.retrieval.token_budget,
                     graph=settings,
                     explain=explain,
+                    trace=trace_settings,
                 )
 
             loop = asyncio.get_running_loop()
             evidence = await loop.run_in_executor(None, _run_query)
             context = evidence.context
 
+            trace_run_id = evidence.trace.run_id if evidence.trace is not None and evidence.trace.recorded else None
+
             if not context.items:
-                return success(
-                    {
-                        "index_name": index_name,
-                        "query": query,
-                        "results": [],
-                        "count": 0,
-                        "estimated_tokens": 0,
-                    }
-                )
+                payload = {
+                    "index_name": index_name,
+                    "query": query,
+                    "results": [],
+                    "count": 0,
+                    "estimated_tokens": 0,
+                }
+                if trace_run_id:
+                    payload["trace_run_id"] = trace_run_id
+                return success(payload)
 
             formatted_results = []
             for item in context.items:
@@ -337,15 +343,16 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
                 formatted_results.append(formatted)
 
             logger.info(f"Query returned {len(formatted_results)} results")
-            return success(
-                {
-                    "index_name": index_name,
-                    "query": query,
-                    "results": formatted_results,
-                    "count": len(formatted_results),
-                    "estimated_tokens": context.estimated_tokens,
-                }
-            )
+            payload = {
+                "index_name": index_name,
+                "query": query,
+                "results": formatted_results,
+                "count": len(formatted_results),
+                "estimated_tokens": context.estimated_tokens,
+            }
+            if trace_run_id:
+                payload["trace_run_id"] = trace_run_id
+            return success(payload)
 
         except Exception as e:
             error_msg = f"Error querying codebase: {e}"

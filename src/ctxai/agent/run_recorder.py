@@ -143,6 +143,10 @@ def _normalize_paths(value: Any, project_root: Path) -> Any:
         for prefix in home_prefixes:
             if prefix in normalized:
                 normalized = normalized.replace(prefix, "~/")
+        # Any other user's home directory is equally sensitive (RE-02 traces
+        # may carry content from collaborators' machines): rewrite the generic
+        # POSIX home shapes to ~.
+        normalized = re.sub(r"/(?:Users|home)/[A-Za-z0-9._-]+", "~", normalized)
         return normalized
 
     if isinstance(value, dict):

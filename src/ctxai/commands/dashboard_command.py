@@ -346,6 +346,118 @@ def create_dashboard_app(project_path: Path | None = None):
         except Exception as exc:
             return _page("Graph node error", f"<h1>Graph node error</h1><p class='bad'>{escape(str(exc))}</p>")
 
+    def _format_components(components: dict | None) -> str:
+        """Render a candidate's component contributions for the funnel table.
+
+        Args:
+            components: Component name to contribution mapping (may be None).
+
+        Returns:
+            A compact single-line rendering, or "-" when empty.
+        """
+        if not components:
+            return "-"
+        return ", ".join(f"{name} {value:.4f}" for name, value in sorted(components.items()))
+
+    @app.get("/retrieval-runs")
+    def retrieval_runs_page(index: str = "", status: str = ""):
+        """List local retrieval traces (RE-02): filters for index and status."""
+        from ..retrieval_traces import list_trace_runs, resolve_trace_dir
+
+        index_filter = index or None
+        status_filter = status or None
+        summaries, corrupt = list_trace_runs(
+            resolve_trace_dir(project_path or Path.cwd()),
+            limit=100,
+            index_name=index_filter,
+            status=status_filter,
+        )
+        rows = "".join(
+            "<tr>"
+            f"<td><a href='/retrieval-runs/{escape(summary.run_id)}'>{escape(summary.run_id[:12])}</a></td>"
+            f"<td>{escape(summary.timestamp)}</td>"
+            f"<td>{escape(summary.status)}</td><td>{escape(summary.mode)}</td>"
+            f"<td>{escape(summary.index_name or '-')}</td>"
+            f"<td>{summary.candidate_count}</td><td>{summary.selected_count}</td>"
+            f"<td>{summary.total_latency_ms:.1f}</td></tr>"
+            for summary in summaries
+        )
+        table = (
+            "<table><thead><tr><th>Run</th><th>Timestamp</th><th>Status</th><th>Mode</th>"
+            "<th>Index</th><th>Candidates</th><th>Selected</th><th>Latency (ms)</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+            if rows
+            else "<p class='warn'>No traces stored. Tracing is off by default; enable it with "
+            "retrieval.trace_mode or query --trace.</p>"
+        )
+        corrupt_lines = "".join(f"<p class='bad'>{escape(item)}</p>" for item in corrupt)
+        body = (
+            "<h1>Retrieval traces</h1>"
+            "<section class='card'>"
+            "<form method='get' action='/retrieval-runs'>"
+            "<label>Index <input type='text' name='index' value='"
+            f"{escape(index_filter or '')}"
+            "'></label> <label>Status <select name='status'>"
+            + "".join(
+                f"<option value='{value}'{' selected' if value == status_filter else ''}>{value or 'any'}</option>"
+                for value in ("", "ok", "error")
+            )
+            + "</select></label> <button type='submit'>Filter</button></form>"
+            f"{table}{corrupt_lines}</section>"
+        )
+        return _page("Retrieval traces", body)
+
+    @app.get("/retrieval-runs/{run_id}")
+    def retrieval_run_detail(run_id: str):
+        """Show one retrieval trace: the ranking funnel and stage timings."""
+        from ..retrieval_traces import (
+            TraceCorruptError,
+            TraceNotFoundError,
+            read_run_payload,
+            resolve_trace_dir,
+        )
+
+        try:
+            payload = read_run_payload(run_id, resolve_trace_dir(project_path or Path.cwd()))
+        except (TraceNotFoundError, TraceCorruptError, ValueError) as exc:
+            return _page("Retrieval trace", f"<h1>Trace unavailable</h1><p class='bad'>{escape(str(exc))}</p>")
+        stage_rows = "".join(
+            f"<tr><td>{escape(str(stage))}</td><td>{value:.2f}</td></tr>"
+            for stage, value in sorted((payload.get("stage_timings_ms") or {}).items())
+        )
+        candidate_rows = "".join(
+            "<tr>"
+            f"<td>{escape(str(candidate.get('final_rank')))}</td>"
+            f"<td><code>{escape(str(candidate.get('citation')))}</code></td>"
+            f"<td>{escape(str(candidate.get('decision')))}</td>"
+            f"<td>{escape(str(candidate.get('graph_path') or '-'))}</td>"
+            f"<td>{escape(_format_components(candidate.get('components')))}</td>"
+            "</tr>"
+            for candidate in payload.get("candidates") or []
+        )
+        body = (
+            f"<h1>Retrieval run {escape(str(payload.get('run_id'))[:12])}</h1>"
+            "<section class='card'>"
+            f"<p><strong>Index:</strong> {escape(str((payload.get('index') or {}).get('name')))} · "
+            f"<strong>Mode:</strong> {escape(str(payload.get('mode')))} · "
+            f"<strong>Status:</strong> {escape(str(payload.get('status')))} · "
+            f"<strong>Timestamp:</strong> {escape(str(payload.get('timestamp')))}</p>"
+            f"<p><strong>Candidates:</strong> {payload.get('candidate_count')} · "
+            f"<strong>Selected:</strong> {payload.get('selected_count')} · "
+            f"<strong>Tokens:</strong> {payload.get('estimated_tokens')} · "
+            f"<strong>Latency:</strong> {payload.get('total_latency_ms')} ms</p>"
+            "</section>"
+            "<section class='card'><h2>Stage timings (ms)</h2><table><thead><tr><th>Stage</th>"
+            "<th>Duration</th></tr></thead><tbody>"
+            + (stage_rows or "<tr><td colspan='2'>none recorded</td></tr>")
+            + "</tbody></table></section>"
+            "<section class='card'><h2>Ranking funnel</h2><table><thead><tr><th>Rank</th>"
+            "<th>Citation</th><th>Decision</th><th>Graph path</th><th>Components</th></tr></thead><tbody>"
+            + (candidate_rows or "<tr><td colspan='5'>no candidates</td></tr>")
+            + "</tbody></table></section>"
+        )
+        return _page("Retrieval trace detail", body)
+
     @app.get("/query")
     def query_page(index: str | None = None):
         options = "".join(
@@ -376,6 +488,8 @@ def create_dashboard_app(project_path: Path | None = None):
             config = ConfigManager(project_path).load()
             provider = EmbeddingsFactory.create(config.embedding)
             settings = GraphExpansionSettings.from_config(config.retrieval, required=False)
+            from ..retrieval_traces import resolve_trace_settings
+
             evidence = retrieve_evidence(
                 project_path or Path.cwd(),
                 query,
@@ -384,6 +498,7 @@ def create_dashboard_app(project_path: Path | None = None):
                 limit=max(1, min(n_results, 20)),
                 token_budget=config.retrieval.token_budget,
                 graph=settings,
+                trace=resolve_trace_settings(config.retrieval),
             )
             cards = []
             for item in evidence.context.items:

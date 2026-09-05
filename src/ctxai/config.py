@@ -134,15 +134,29 @@ MAX_RETRIEVAL_TOKEN_BUDGET = 100_000
 MIN_EDGE_WEIGHT = 0.0
 MAX_EDGE_WEIGHT = 1.0
 
+# Retrieval trace settings (RE-02). Persistence is OFF by default; `metrics`
+# stores no raw query or source; `full` requires explicit opt-in.
+TRACE_MODES = ("off", "metrics", "full")
+TRACE_QUERY_TEXT_MODES = ("omit", "hash", "store")
+TRACE_SOURCE_PREVIEW_MODES = ("omit", "store")
+MIN_TRACE_RETENTION = 1
+MAX_TRACE_RETENTION = 10_000
+MIN_TRACE_RETENTION_DAYS = 1
+MAX_TRACE_RETENTION_DAYS = 3_650
+MIN_TRACE_PREVIEW_CHARS = 50
+MAX_TRACE_PREVIEW_CHARS = 4_000
+DEFAULT_TRACE_PREVIEW_CHARS = 500
+
 
 @dataclass
 class RetrievalConfig:
-    """Retrieval configuration (IG-03).
+    """Retrieval configuration (IG-03, RE-02 tracing).
 
     Graph expansion is DISABLED by default; it may only become default after
     the RE-01 gate (no Recall@5/MRR regression plus a relationship-oriented
-    improvement) passes. All bounds are validated on construction and on
-    :meth:`from_dict`, before any retrieval work begins.
+    improvement) passes. Trace persistence is OFF by default. All bounds are
+    validated on construction and on :meth:`from_dict`, before any retrieval
+    work begins.
     """
 
     token_budget: int = 2000
@@ -152,6 +166,17 @@ class RetrievalConfig:
     graph_expansion_cap: int = 24
     graph_max_neighbors_per_seed: int = 8
     graph_depth: int = 1
+    # RE-02 trace settings: off|metrics|full recording, query text
+    # omit|hash|store (store honored only in full), source preview
+    # omit|store (store honored only in full), retention, and an optional
+    # trace-directory override validated to stay inside the project.
+    trace_mode: str = "off"
+    trace_query_text: str = "hash"
+    trace_source_preview: str = "omit"
+    trace_retention: int = 100
+    trace_retention_days: int = 30
+    trace_dir: str | None = None
+    trace_preview_chars: int = DEFAULT_TRACE_PREVIEW_CHARS
 
     def __post_init__(self) -> None:
         """Reject out-of-bounds configuration before any work begins.
@@ -162,6 +187,22 @@ class RetrievalConfig:
         if not MIN_RETRIEVAL_TOKEN_BUDGET <= self.token_budget <= MAX_RETRIEVAL_TOKEN_BUDGET:
             raise ValueError(
                 f"token_budget must be between {MIN_RETRIEVAL_TOKEN_BUDGET} and {MAX_RETRIEVAL_TOKEN_BUDGET}"
+            )
+        if self.trace_mode not in TRACE_MODES:
+            raise ValueError(f"trace_mode must be one of {', '.join(TRACE_MODES)}")
+        if self.trace_query_text not in TRACE_QUERY_TEXT_MODES:
+            raise ValueError(f"trace_query_text must be one of {', '.join(TRACE_QUERY_TEXT_MODES)}")
+        if self.trace_source_preview not in TRACE_SOURCE_PREVIEW_MODES:
+            raise ValueError(f"trace_source_preview must be one of {', '.join(TRACE_SOURCE_PREVIEW_MODES)}")
+        if not MIN_TRACE_RETENTION <= self.trace_retention <= MAX_TRACE_RETENTION:
+            raise ValueError(f"trace_retention must be between {MIN_TRACE_RETENTION} and {MAX_TRACE_RETENTION}")
+        if not MIN_TRACE_RETENTION_DAYS <= self.trace_retention_days <= MAX_TRACE_RETENTION_DAYS:
+            raise ValueError(
+                f"trace_retention_days must be between {MIN_TRACE_RETENTION_DAYS} and {MAX_TRACE_RETENTION_DAYS}"
+            )
+        if not MIN_TRACE_PREVIEW_CHARS <= self.trace_preview_chars <= MAX_TRACE_PREVIEW_CHARS:
+            raise ValueError(
+                f"trace_preview_chars must be between {MIN_TRACE_PREVIEW_CHARS} and {MAX_TRACE_PREVIEW_CHARS}"
             )
         if not MIN_GRAPH_SEED_COUNT <= self.graph_seed_count <= MAX_GRAPH_SEED_COUNT:
             raise ValueError(f"graph_seed_count must be between {MIN_GRAPH_SEED_COUNT} and {MAX_GRAPH_SEED_COUNT}")
@@ -202,6 +243,13 @@ class RetrievalConfig:
             "graph_expansion_cap": self.graph_expansion_cap,
             "graph_max_neighbors_per_seed": self.graph_max_neighbors_per_seed,
             "graph_depth": self.graph_depth,
+            "trace_mode": self.trace_mode,
+            "trace_query_text": self.trace_query_text,
+            "trace_source_preview": self.trace_source_preview,
+            "trace_retention": self.trace_retention,
+            "trace_retention_days": self.trace_retention_days,
+            "trace_dir": self.trace_dir,
+            "trace_preview_chars": self.trace_preview_chars,
         }
 
     @classmethod
@@ -218,6 +266,7 @@ class RetrievalConfig:
             ValueError: If any bound is violated.
         """
         weights = data.get("graph_edge_weights", dict(GRAPH_EDGE_WEIGHTS_DEFAULT))
+        trace_dir = data.get("trace_dir")
         return cls(
             token_budget=data.get("token_budget", 2000),
             graph_enabled=bool(data.get("graph_enabled", False)),
@@ -226,6 +275,13 @@ class RetrievalConfig:
             graph_expansion_cap=data.get("graph_expansion_cap", 24),
             graph_max_neighbors_per_seed=data.get("graph_max_neighbors_per_seed", 8),
             graph_depth=data.get("graph_depth", 1),
+            trace_mode=data.get("trace_mode", "off"),
+            trace_query_text=data.get("trace_query_text", "hash"),
+            trace_source_preview=data.get("trace_source_preview", "omit"),
+            trace_retention=data.get("trace_retention", 100),
+            trace_retention_days=data.get("trace_retention_days", 30),
+            trace_dir=str(trace_dir) if trace_dir is not None else None,
+            trace_preview_chars=data.get("trace_preview_chars", DEFAULT_TRACE_PREVIEW_CHARS),
         )
 
 

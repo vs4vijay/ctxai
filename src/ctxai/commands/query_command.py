@@ -15,6 +15,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
+from ..agent.sessions import redact_secrets
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
 from ..index_manifest import IndexManifest
@@ -184,6 +185,7 @@ def query_codebase(
     show_content: bool = True,
     explain: bool = False,
     graph: bool | None = None,
+    trace: bool | None = None,
 ):
     """
     Query an indexed codebase using natural language.
@@ -198,6 +200,7 @@ def query_codebase(
         n_results: Number of results to return
         show_content: Whether to show full code content
         explain: Show why each item was selected (ranks, graph paths, budget)
+        trace: Persist a retrieval trace per the configured mode (RE-02)
         graph: Graph expansion override; True requires a healthy graph,
             False disables expansion, None uses the configured default
     """
@@ -217,7 +220,8 @@ def query_codebase(
         console.print(f"[dim]Using configured index: {index_name}[/dim]")
 
     console.print(f"\n[bold blue][?] Searching index '{index_name}'...[/bold blue]\n")
-    console.print(f"[dim]Query: {query}[/dim]\n")
+    # Secrets pasted into a query must not survive into the terminal either.
+    console.print(f"[dim]Query: {escape(redact_secrets(query))}[/dim]\n")
 
     try:
         # Create embedding provider
@@ -255,6 +259,14 @@ def query_codebase(
             enabled=graph,
             required=bool(graph),
         )
+        from ..retrieval_traces import privacy_warning, resolve_trace_settings
+
+        trace_settings = resolve_trace_settings(config.retrieval, enabled=trace)
+        warning = privacy_warning(trace_settings.mode)
+        if warning:
+            # Bind at call time: the captured stderr of an import-time Console
+            # is closed under CLI test runners.
+            Console(file=sys.stderr, legacy_windows=False).print(f"[yellow]{warning}[/yellow]")
         result = retrieve_evidence(
             project_path or Path.cwd(),
             query,
@@ -264,6 +276,7 @@ def query_codebase(
             token_budget=config.retrieval.token_budget,
             graph=settings,
             explain=explain,
+            trace=trace_settings,
         )
 
         if result.graph_diagnostic:
