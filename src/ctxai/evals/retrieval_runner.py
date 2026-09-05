@@ -21,10 +21,17 @@ from typing import Any
 
 from ..config import EmbeddingConfig
 from ..index_operations import IndexOperations
-from ..repository_context import AssembledContext, ContextAssembler, ContextItem, HybridRetriever
+from ..repository_context import (
+    AssembledContext,
+    ContextAssembler,
+    ContextItem,
+    GraphExpansionSettings,
+    HybridRetriever,
+)
 from .artifacts import (
     EVALUATION_KIND_RETRIEVAL,
     EVALUATION_SCHEMA_VERSION,
+    RELATIONSHIP_COHORT,
     CandidateRecord,
     CaseRunRecord,
     CohortMetricsBlock,
@@ -54,7 +61,11 @@ MAX_BOOTSTRAP_SAMPLES = 10000
 # Evidence files larger than this are refused for line-range validation.
 MAX_EVIDENCE_FILE_BYTES = 5_000_000
 
-GRAPH_UNAVAILABLE_REASON = "graph expansion not enabled (IG-03 graph retrieval not implemented)"
+GRAPH_UNAVAILABLE_REASON = "graph expansion not enabled (re-run with --graph to compute graph contribution)"
+
+# Derived relationship-oriented cohort (IG-03 acceptance 5): cases whose
+# expected evidence files participate in cross-file relationship edges of the
+# index symbol graph. See docs/RETRIEVAL_BENCHMARK.md for the registration.
 
 
 @dataclass
@@ -71,6 +82,11 @@ class RetrievalEvalConfig:
         bootstrap_samples: Bootstrap resamples for confidence intervals
             (0 disables CIs, which are then explicitly unavailable).
         bootstrap_seed: Deterministic bootstrap seed.
+        graph_enabled: Run retrieval with graph expansion enabled (IG-03).
+            The expansion policy itself (edge weights, seed count, caps,
+            depth) uses the packaged defaults documented in
+            docs/RETRIEVAL_EXPANSION.md. When enabled, an absent/stale/corrupt
+            graph is an explicit failure.
     """
 
     token_budget: int = 2000
@@ -80,6 +96,7 @@ class RetrievalEvalConfig:
     record_queries: bool = True
     bootstrap_samples: int = 1000
     bootstrap_seed: int = 20260904
+    graph_enabled: bool = False
 
     def __post_init__(self) -> None:
         """Reject out-of-bounds configuration before any work begins.
@@ -113,6 +130,7 @@ class RetrievalEvalConfig:
             "record_queries": self.record_queries,
             "bootstrap_samples": self.bootstrap_samples,
             "bootstrap_seed": self.bootstrap_seed,
+            "graph_enabled": self.graph_enabled,
         }
 
 
@@ -303,6 +321,24 @@ class RetrievalBenchmarkRunner:
                 f"({manifest.embedding_provider}/{manifest.embedding_model}/{manifest.embedding_dimension}); "
                 "rebuild the index or use the manifest's embedding settings"
             )
+        if self.config.graph_enabled:
+            # Graph-enabled runs require a healthy, generation-matched graph
+            # up front; an absent/stale/corrupt graph is an explicit failure
+            # rather than a silent fallback (--graph semantics).
+            from ..graph.operations import graph_health
+
+            index_path = operations.path_for(self.index_name)
+            health = graph_health(index_path, manifest)
+            if health.status == "missing":
+                raise EvalError(
+                    f"Graph expansion was required but index '{self.index_name}' has no graph data;"
+                    " run 'ctxai index' to generate it"
+                )
+            if health.status != "healthy":
+                raise EvalError(
+                    f"Graph expansion was required but the graph for index '{self.index_name}' is not"
+                    f" readable ({health.status}): " + "; ".join(health.problems)
+                )
         self.index_summary = summary
 
     def _embedding_identity(self) -> dict[str, Any]:
@@ -348,7 +384,14 @@ class RetrievalBenchmarkRunner:
             The execution record with ranked items, assembled context, and
             stage timings.
         """
-        retriever = HybridRetriever(self.project_root, self.embedding_provider, index_name=self.index_name)
+        retriever = HybridRetriever(
+            self.project_root,
+            self.embedding_provider,
+            index_name=self.index_name,
+            graph=GraphExpansionSettings.from_config(enabled=self.config.graph_enabled, required=True)
+            if self.config.graph_enabled
+            else None,
+        )
         start = self.clock()
         ranked = retriever.retrieve(case.query, limit=self.config.candidate_limit, debug=True)
         retrieve_ms = (self.clock() - start) * 1000.0
@@ -500,6 +543,7 @@ class RetrievalBenchmarkRunner:
                     estimated_tokens=ContextAssembler.estimate_tokens(item.content),
                     decision=decision,
                     truncated=truncated_by_id.get(item.id) if decision == "selected" else None,
+                    graph_path=item.graph_evidence.path if item.graph_evidence is not None else None,
                 )
             )
 
@@ -525,6 +569,15 @@ class RetrievalBenchmarkRunner:
                 else MetricValue.unavailable("no selected context")
             ),
         }
+        if self.config.graph_enabled:
+            # Share of selected items that carry graph-expansion evidence
+            # (entered via expansion or boosted by it). Unavailable, never a
+            # fabricated zero, when nothing was selected.
+            if assembled.items:
+                contributed = sum(1 for item in assembled.items if item.graph_evidence is not None)
+                metrics["graph_contribution_rate"] = MetricValue.available(contributed / len(assembled.items))
+            else:
+                metrics["graph_contribution_rate"] = MetricValue.unavailable("no selected context")
 
         line_range_findings = self._line_range_findings(case, assembled.items)
 
@@ -658,7 +711,10 @@ class RetrievalBenchmarkRunner:
         metrics["duplicate_token_ratio"] = (
             MetricValue.available(dup_mean) if dup_mean is not None else MetricValue.unavailable("no selected context")
         )
-        metrics["graph_contribution_rate"] = MetricValue.unavailable(GRAPH_UNAVAILABLE_REASON)
+        if self.config.graph_enabled:
+            metrics["graph_contribution_rate"] = averaged("graph_contribution_rate")
+        else:
+            metrics["graph_contribution_rate"] = MetricValue.unavailable(GRAPH_UNAVAILABLE_REASON)
 
         confidence_intervals: dict[str, list[float]] = {}
         for metric in ("recall@5", "mrr"):
@@ -715,11 +771,23 @@ class RetrievalBenchmarkRunner:
             records.append(self._case_run_record(outcome, timestamp))
         duration_ms = (self.clock() - started) * 1000.0
 
+        # Pre-registered relationship-oriented cohort (IG-03): cases whose
+        # expected evidence files participate in cross-file relationship edges
+        # of the index symbol graph. Derived identically for graph-enabled and
+        # no-graph runs so cross-mode gate comparison stays compatible.
+        relationship_case_ids, relationship_note = self._relationship_case_ids()
+
         by_cohort: dict[str, CohortMetricsBlock] = {}
         for cohort in sorted({record.cohort for record in records}):
             cohort_records = [record for record in records if record.cohort == cohort]
             cohort_latencies = {record.case_id: latencies_by_case.get(record.case_id, []) for record in cohort_records}
             by_cohort[cohort] = self._aggregate(cohort_records, cohort_latencies)
+        if relationship_case_ids:
+            relationship_records = [record for record in records if record.case_id in relationship_case_ids]
+            relationship_latencies = {
+                record.case_id: latencies_by_case.get(record.case_id, []) for record in relationship_records
+            }
+            by_cohort[RELATIONSHIP_COHORT] = self._aggregate(relationship_records, relationship_latencies)
         by_split: dict[str, CohortMetricsBlock] = {}
         for split in sorted({record.split for record in records}):
             split_records = [record for record in records if record.split == split]
@@ -746,6 +814,11 @@ class RetrievalBenchmarkRunner:
                 "fingerprint": self.configuration_fingerprint(),
                 "embedding": self._embedding_identity(),
                 "retrieval": self.config.result_affecting_settings(),
+                "graph_expansion": {
+                    "enabled": self.config.graph_enabled,
+                    "relationship_cohort_cases": sorted(relationship_case_ids),
+                    "note": relationship_note,
+                },
             },
             index={
                 "name": self.index_name,
@@ -768,6 +841,32 @@ class RetrievalBenchmarkRunner:
             errors=run_errors,
         )
         return artifact
+
+    def _relationship_case_ids(self) -> tuple[set[str], str | None]:
+        """Derive the pre-registered relationship-oriented case cohort (IG-03).
+
+        A case belongs to the ``graph-relationship`` cohort when any expected
+        evidence file participates in a resolved cross-file relationship edge
+        (calls/imports/inherits/tests/references) of the index symbol graph.
+        The derivation is a property of the index and benchmark, so graph and
+        no-graph runs of the same index derive the identical cohort.
+
+        Returns:
+            ``(case_ids, note)``; the note explains when no cohort could be
+            derived (absent or unreadable graph data).
+        """
+        expected_files = sorted({path for case in self.benchmark.cases for path in case.expected.files})
+        if not expected_files:
+            return set(), None
+        from ..graph.operations import GraphOperations
+
+        try:
+            operations = GraphOperations(self.project_root)
+            related = operations.files_with_cross_file_relationships(self.index_name, expected_files)
+        except (ValueError, RuntimeError) as exc:
+            return set(), f"relationship cohort not derived: {exc}"
+        case_ids = {case.id for case in self.benchmark.cases if any(path in related for path in case.expected.files)}
+        return case_ids, None
 
     def _environment(self) -> dict[str, Any]:
         """Environment metadata proving the run was local-only.

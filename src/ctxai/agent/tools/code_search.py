@@ -7,7 +7,12 @@ from .base import BaseTool, ToolParameter, ToolParameterType, ToolSchema
 
 
 class SemanticSearchTool(BaseTool):
-    """Search the current repository's matching persistent index."""
+    """Search the current repository's matching persistent index.
+
+    Routes through the shared retrieval service (IG-03) so the agent sees the
+    same fusion, graph expansion, budget enforcement, and diagnostics as the
+    CLI, MCP, and dashboard surfaces.
+    """
 
     def __init__(self, project_path: Path | None = None, embedding_provider=None):
         super().__init__()
@@ -58,27 +63,53 @@ class SemanticSearchTool(BaseTool):
         try:
             from ctxai.config import ConfigManager
             from ctxai.embeddings import EmbeddingsFactory
-            from ctxai.repository_context import ContextAssembler, HybridRetriever
+            from ctxai.repository_context import GraphExpansionSettings, retrieve_evidence
 
+            config = ConfigManager(self.project_path).load()
             provider = self.embedding_provider
             if provider is None:
-                provider = EmbeddingsFactory.create(ConfigManager(self.project_path).load().embedding)
-            retriever = HybridRetriever(self.project_path, provider, index_name=index_name)
-            ranked = retriever.retrieve(query, limit=min(max(1, n_results), 20), debug=debug)
-            context = ContextAssembler(token_budget=max(1, token_budget), debug=debug).assemble(
-                retriever.index_name, ranked
+                provider = EmbeddingsFactory.create(config.embedding)
+            # Config-driven graph expansion (disabled by default); when
+            # enabled but unavailable the tool falls back with a visible
+            # diagnostic instead of failing the agent's turn.
+            settings = GraphExpansionSettings.from_config(config.retrieval, required=False)
+            evidence = retrieve_evidence(
+                self.project_path,
+                query,
+                embedding_provider=provider,
+                index_name=index_name,
+                limit=min(max(1, n_results), 20),
+                token_budget=max(1, token_budget),
+                graph=settings,
+                explain=debug,
             )
+            context = evidence.context
+            metadata: dict[str, Any] = {
+                "index_name": context.index_name,
+                "query": query,
+                "matches": len(context.items),
+                "estimated_tokens": context.estimated_tokens,
+                "citations": [item.citation for item in context.items],
+                "graph_expanded": sum(1 for item in context.items if item.graph_evidence is not None),
+            }
+            if evidence.graph_diagnostic:
+                metadata["graph_diagnostic"] = evidence.graph_diagnostic
+            if debug:
+                components = evidence.explain.components if evidence.explain is not None else {}
+                metadata["explanation"] = [
+                    {
+                        "citation": item.citation,
+                        "reasons": list(item.reasons),
+                        "components": {name: value for name, value in sorted(components.get(item.id, {}).items())},
+                        "graph_path": item.graph_evidence.path if item.graph_evidence is not None else None,
+                    }
+                    for item in context.items
+                ]
             return {
                 "success": True,
                 "result": context.text or "No matching code found.",
                 "error": None,
-                "metadata": {
-                    "index_name": context.index_name,
-                    "query": query,
-                    "matches": len(context.items),
-                    "estimated_tokens": context.estimated_tokens,
-                    "citations": [item.citation for item in context.items],
-                },
+                "metadata": metadata,
             }
         except Exception as exc:
             return {

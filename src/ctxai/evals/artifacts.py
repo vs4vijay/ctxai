@@ -95,13 +95,17 @@ class CandidateRecord:
         citation: ``file:start-end`` evidence citation.
         chunk_type: Tree-sitter chunk type.
         score: Final fused retrieval score.
-        reasons: Component provenance entries (e.g. ``semantic rank 3``).
+        reasons: Component provenance entries (e.g. ``semantic rank 3``);
+            graph-expanded candidates also carry a ``graph expansion from
+            ...`` reason line citing source and relationship.
         final_rank: 1-based rank in the candidate ordering.
         estimated_tokens: Estimated tokens of the chunk content.
         decision: ``selected``, ``duplicate`` (identity already selected), or
             ``budget`` (excluded by the context token budget).
         truncated: Whether the assembler clipped the content (selected items
             only; ``None`` otherwise).
+        graph_path: ``seed -[kind]-> expanded`` expansion path (IG-03) when
+            the candidate carries graph evidence, else ``None``.
     """
 
     chunk_id: str
@@ -116,6 +120,7 @@ class CandidateRecord:
     estimated_tokens: int
     decision: str
     truncated: bool | None = None
+    graph_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to the JSON representation.
@@ -136,6 +141,7 @@ class CandidateRecord:
             "estimated_tokens": self.estimated_tokens,
             "decision": self.decision,
             "truncated": self.truncated,
+            "graph_path": self.graph_path,
         }
 
     @classmethod
@@ -161,6 +167,7 @@ class CandidateRecord:
             estimated_tokens=int(data["estimated_tokens"]),
             decision=data["decision"],
             truncated=data.get("truncated"),
+            graph_path=data.get("graph_path"),
         )
 
 
@@ -864,3 +871,235 @@ def compare_metric_blocks(
             )
         )
     return gates
+
+
+# ----------------------------------------------------------------------
+# IG-03 graph-expansion gate (graph-enabled run vs no-graph baseline)
+# ----------------------------------------------------------------------
+
+# Cohort name of the pre-registered relationship-oriented case cohort derived
+# from the index symbol graph (cases whose expected files participate in
+# cross-file relationship edges). Present in both graph-enabled and no-graph
+# artifacts of the same index, so cross-mode comparison stays compatible.
+RELATIONSHIP_COHORT = "graph-relationship"
+
+# Metrics eligible for regression gates in the cross-mode comparison (the
+# checked-in tolerances apply; noisy latency metrics stay out).
+GRAPH_GATE_METRICS = frozenset(
+    {
+        "recall@1",
+        "recall@5",
+        "recall@10",
+        "mrr",
+        "ndcg@10",
+        "evidence_precision@5",
+        "successful_query_rate",
+        "duplicate_token_ratio",
+        "selected_token_mean",
+        "selected_token_p95",
+    }
+)
+
+# Pre-registered improvement criterion (IG-03 acceptance 5): at least ONE of
+# these metrics must strictly improve on the relationship cohort before
+# graph-expanded retrieval may become the default.
+RELATIONSHIP_IMPROVEMENT_METRICS = ("recall@5", "mrr", "evidence_precision@5")
+
+
+@dataclass(frozen=True)
+class GraphExpansionGate:
+    """Result of comparing a graph-enabled run against a no-graph baseline.
+
+    Attributes:
+        compatible: Whether the two artifacts describe the same benchmark,
+            case set, index, and embedding identity.
+        incompatibilities: Named identity mismatches (never silently ignored).
+        gates: Per metric/cohort regression gates with checked-in tolerances.
+        improvement: The pre-registered relationship-cohort metric that
+            improved (``None`` when none did or the cohort is unavailable).
+        passed: True only when compatible, no gate regresses, and a
+            pre-registered relationship improvement exists.
+    """
+
+    compatible: bool
+    incompatibilities: list[str]
+    gates: list[GateResult]
+    improvement: GateResult | None
+    passed: bool
+
+
+def compare_graph_gate(
+    baseline_payload: dict[str, Any],
+    graph_payload: dict[str, Any],
+    tolerances: dict[str, MetricTolerance] | None = None,
+) -> GraphExpansionGate:
+    """Compare a graph-enabled retrieval artifact against its no-graph baseline.
+
+    This is the IG-03 acceptance-5 comparator. Unlike the strict
+    :func:`compare_with_baseline` path, the configuration fingerprint is
+    expected to differ (the graph flag changes retrieval behavior), so
+    compatibility covers the schema, evaluation kind, benchmark fingerprint,
+    case set, cohort set, embedding identity, and the graph flags themselves
+    (baseline must be a no-graph run, candidate must be graph-enabled).
+
+    Args:
+        baseline_payload: Parsed no-graph baseline artifact JSON.
+        graph_payload: Parsed graph-enabled candidate artifact JSON.
+        tolerances: Optional tolerance table (defaults to checked-in values).
+
+    Returns:
+        The :class:`GraphExpansionGate` verdict.
+    """
+    tolerances = tolerances if tolerances is not None else DEFAULT_TOLERANCES
+    incompatibilities: list[str] = []
+
+    if graph_payload.get("kind") != EVALUATION_KIND_RETRIEVAL or baseline_payload.get("kind") not in (
+        None,
+        EVALUATION_KIND_RETRIEVAL,
+    ):
+        incompatibilities.append(
+            f"evaluation kinds {baseline_payload.get('kind')!r}/{graph_payload.get('kind')!r}"
+            f" must both be {EVALUATION_KIND_RETRIEVAL!r}"
+        )
+    if (
+        graph_payload.get("schema_version") != EVALUATION_SCHEMA_VERSION
+        or baseline_payload.get("schema_version") != EVALUATION_SCHEMA_VERSION
+    ):
+        incompatibilities.append(
+            f"artifact schema_version mismatch; both artifacts must be {EVALUATION_SCHEMA_VERSION}"
+        )
+
+    def _block(payload: dict[str, Any], key: str) -> dict[str, Any]:
+        block = payload.get(key)
+        return block if isinstance(block, dict) else {}
+
+    baseline_benchmark = _block(baseline_payload, "benchmark")
+    graph_benchmark = _block(graph_payload, "benchmark")
+    if baseline_benchmark.get("fingerprint") != graph_benchmark.get("fingerprint"):
+        incompatibilities.append("benchmark fingerprint mismatch: the runs evaluated different benchmark documents")
+
+    baseline_cases = sorted(
+        str(run["case_id"]) for run in baseline_payload.get("runs", []) if isinstance(run, dict) and "case_id" in run
+    )
+    graph_cases = sorted(
+        str(run["case_id"]) for run in graph_payload.get("runs", []) if isinstance(run, dict) and "case_id" in run
+    )
+    if baseline_cases != graph_cases:
+        incompatibilities.append("benchmark case set differs between the two runs")
+
+    baseline_index = _block(baseline_payload, "index")
+    graph_index = _block(graph_payload, "index")
+    for identity_field in ("name", "repository_root", "repository_revision", "chunk_count"):
+        if baseline_index.get(identity_field) != graph_index.get(identity_field):
+            incompatibilities.append(
+                f"index identity field {identity_field!r} differs between the two runs; the gate compares"
+                " graph on/off over the SAME index"
+            )
+            break
+
+    baseline_configuration = _block(baseline_payload, "configuration")
+    graph_configuration = _block(graph_payload, "configuration")
+    if _block(baseline_configuration, "embedding") != _block(graph_configuration, "embedding"):
+        incompatibilities.append("embedding identity mismatch between the two runs")
+    baseline_graph = _block(baseline_configuration, "graph_expansion")
+    graph_graph = _block(graph_configuration, "graph_expansion")
+    if baseline_graph.get("enabled") is not False:
+        incompatibilities.append("baseline run must be a no-graph run (graph_expansion.enabled is not false)")
+    if graph_graph.get("enabled") is not True:
+        incompatibilities.append("candidate run must be graph-enabled (graph_expansion.enabled is not true)")
+
+    baseline_aggregates = baseline_payload.get("aggregates") or {}
+    graph_aggregates = graph_payload.get("aggregates") or {}
+    baseline_cohorts = baseline_aggregates.get("by_cohort") or {}
+    graph_cohorts = graph_aggregates.get("by_cohort") or {}
+    if sorted(baseline_cohorts) != sorted(graph_cohorts):
+        incompatibilities.append(
+            f"cohort set differs: baseline {sorted(baseline_cohorts)} vs graph {sorted(graph_cohorts)}"
+        )
+
+    gates: list[GateResult] = []
+    improvement: GateResult | None = None
+    if not incompatibilities:
+        gates.extend(
+            compare_metric_blocks(
+                "overall",
+                CohortMetricsBlock.from_dict(graph_aggregates.get("overall") or {}),
+                CohortMetricsBlock.from_dict(baseline_aggregates.get("overall") or {}),
+                GRAPH_GATE_METRICS,
+                tolerances,
+                METRIC_DIRECTIONS,
+            )
+        )
+        for cohort in sorted(graph_cohorts):
+            gates.extend(
+                compare_metric_blocks(
+                    cohort,
+                    CohortMetricsBlock.from_dict(graph_cohorts.get(cohort) or {}),
+                    CohortMetricsBlock.from_dict(baseline_cohorts.get(cohort) or {}),
+                    GRAPH_GATE_METRICS,
+                    tolerances,
+                    METRIC_DIRECTIONS,
+                )
+            )
+        graph_relationship = CohortMetricsBlock.from_dict(graph_cohorts.get(RELATIONSHIP_COHORT) or {})
+        baseline_relationship = CohortMetricsBlock.from_dict(baseline_cohorts.get(RELATIONSHIP_COHORT) or {})
+        if not graph_relationship.metrics and not baseline_relationship.metrics:
+            improvement = GateResult(
+                cohort=RELATIONSHIP_COHORT,
+                metric=",".join(RELATIONSHIP_IMPROVEMENT_METRICS),
+                baseline=None,
+                current=None,
+                delta=None,
+                direction="higher",
+                absolute_tolerance=0.0,
+                relative_tolerance=0.0,
+                status="unavailable",
+                detail=f"no {RELATIONSHIP_COHORT} cohort in either artifact",
+            )
+        else:
+            for metric in RELATIONSHIP_IMPROVEMENT_METRICS:
+                gate = _metric_gate(
+                    RELATIONSHIP_COHORT,
+                    metric,
+                    graph_relationship.metrics.get(metric, MetricValue.unavailable("metric not present")),
+                    baseline_relationship.metrics.get(metric, MetricValue.unavailable("metric not present")),
+                    tolerances,
+                    METRIC_DIRECTIONS,
+                )
+                if gate.delta is not None and gate.delta > 0:
+                    improvement = GateResult(
+                        cohort=RELATIONSHIP_COHORT,
+                        metric=metric,
+                        baseline=gate.baseline,
+                        current=gate.current,
+                        delta=gate.delta,
+                        direction="higher",
+                        absolute_tolerance=gate.absolute_tolerance,
+                        relative_tolerance=gate.relative_tolerance,
+                        status="pass",
+                        detail="pre-registered relationship-oriented improvement",
+                    )
+                    break
+            if improvement is None:
+                improvement = GateResult(
+                    cohort=RELATIONSHIP_COHORT,
+                    metric=",".join(RELATIONSHIP_IMPROVEMENT_METRICS),
+                    baseline=None,
+                    current=None,
+                    delta=None,
+                    direction="higher",
+                    absolute_tolerance=0.0,
+                    relative_tolerance=0.0,
+                    status="unavailable",
+                    detail="no pre-registered relationship metric improved on the graph-relationship cohort",
+                )
+
+    regressions = [gate for gate in gates if gate.status == "regression"]
+    passed = not incompatibilities and not regressions and improvement is not None and improvement.status == "pass"
+    return GraphExpansionGate(
+        compatible=not incompatibilities,
+        incompatibilities=incompatibilities,
+        gates=gates,
+        improvement=improvement,
+        passed=passed,
+    )

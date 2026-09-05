@@ -199,7 +199,7 @@ def test_clean_install_run_reports_required_metrics_and_identity(runner, tmp_pat
         else:
             assert entry["available"] is True, f"{metric} unexpectedly unavailable: {entry}"
     assert overall["metrics"]["successful_query_rate"]["value"] == 1.0
-    assert set(payload["aggregates"]["by_cohort"]) == {"agent", "interface", "pipeline"}
+    assert set(payload["aggregates"]["by_cohort"]) == {"agent", "graph-relationship", "interface", "pipeline"}
     assert set(payload["aggregates"]["by_split"]) == {"test", "dev", "train"}
     assert set(overall["confidence_intervals"]) == {"recall@5", "mrr"}
 

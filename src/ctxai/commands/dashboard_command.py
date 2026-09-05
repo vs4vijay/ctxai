@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from ..embeddings import EmbeddingsFactory
 from ..graph.model import MAX_SYMBOL_QUERY_LENGTH, MAX_TRAVERSAL_DEPTH
 from ..graph.operations import GraphOperations
 from ..index_operations import IndexOperations
@@ -364,20 +365,52 @@ def create_dashboard_app(project_path: Path | None = None):
     @app.post("/query/search")
     def search(index: str, query: str, n_results: int = 5):
         try:
-            results = operations.query(index, query, n_results)
+            # Index-name boundary check stays here; the retrieval itself goes
+            # through the shared service (IG-03) so the dashboard sees the
+            # same fusion, budgets, and optional graph expansion as the CLI,
+            # agent, and MCP.
+            operations.validate_name(index)
+            from ..config import ConfigManager
+            from ..repository_context import GraphExpansionSettings, retrieve_evidence
+
+            config = ConfigManager(project_path).load()
+            provider = EmbeddingsFactory.create(config.embedding)
+            settings = GraphExpansionSettings.from_config(config.retrieval, required=False)
+            evidence = retrieve_evidence(
+                project_path or Path.cwd(),
+                query,
+                embedding_provider=provider,
+                index_name=index,
+                limit=max(1, min(n_results, 20)),
+                token_budget=config.retrieval.token_budget,
+                graph=settings,
+            )
             cards = []
-            for result in results:
-                metadata = result["metadata"]
-                location = (
-                    f"{metadata.get('file_path', 'unknown')}:"
-                    f"{metadata.get('start_line', '?')}-{metadata.get('end_line', '?')}"
+            for item in evidence.context.items:
+                distance = evidence.semantic_distances.get(item.id)
+                relevance = (
+                    f"Similarity: {max(0, 1 - float(distance)):.1%}"
+                    if distance is not None
+                    else f"Score: {item.score:.4f}"
+                )
+                graph_line = (
+                    f"<p class='ok'>Graph: {escape(item.graph_evidence.path)} "
+                    f"({escape(item.graph_evidence.confidence)})</p>"
+                    if item.graph_evidence is not None
+                    else ""
                 )
                 cards.append(
-                    f"<article class='card'><h2>{escape(location)}</h2>"
-                    f"<p>Similarity: {max(0, 1 - float(result['distance'])):.1%}</p>"
-                    f"<pre>{escape(str(result['content'])[:2000])}</pre></article>"
+                    f"<article class='card'><h2>{escape(item.citation)}</h2>"
+                    f"<p>{escape(relevance)} · {escape(item.chunk_type)}</p>{graph_line}"
+                    f"<pre>{escape(str(item.content)[:2000])}</pre></article>"
                 )
-            return _page("Query results", f"<h1>Evidence for “{escape(query)}”</h1>{''.join(cards)}")
+            diagnostic = ""
+            if evidence.graph_diagnostic:
+                diagnostic = f"<p class='warn'>{escape(evidence.graph_diagnostic)}</p>"
+            return _page(
+                "Query results",
+                f"<h1>Evidence for “{escape(query)}”</h1>{diagnostic}{''.join(cards)}",
+            )
         except Exception as exc:
             return _page("Query error", f"<h1>Query error</h1><p class='bad'>{escape(str(exc))}</p>")
 

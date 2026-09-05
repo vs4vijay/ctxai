@@ -29,6 +29,7 @@ from ..evals.agent_artifacts import (
 from ..evals.artifacts import (
     ComparisonBlock,
     EvaluationArtifact,
+    compare_graph_gate,
     compare_with_baseline,
     default_artifact_path,
 )
@@ -194,6 +195,7 @@ def run_retrieval_eval(
     baseline: Path | None = None,
     fail_on_regression: bool = False,
     repeat: int = 1,
+    graph: bool | None = False,
     as_json: bool = False,
 ) -> int:
     """Run the retrieval benchmark and report/aggregate/persist the artifact.
@@ -206,6 +208,8 @@ def run_retrieval_eval(
         baseline: Optional baseline artifact to compare against.
         fail_on_regression: Exit non-zero when any gate regresses.
         repeat: Executions per case (1-10; first repeat warms up when > 1).
+        graph: Run with graph expansion enabled (IG-03). Requires a healthy,
+            generation-matched graph; the run fails explicitly otherwise.
         as_json: Print the exact on-disk artifact JSON instead of tables.
 
     Returns:
@@ -223,7 +227,7 @@ def run_retrieval_eval(
         return 1
 
     try:
-        config = RetrievalEvalConfig(repeats=repeat)
+        config = RetrievalEvalConfig(repeats=repeat, graph_enabled=bool(graph))
     except ValueError as exc:
         return _fail(str(exc))
 
@@ -289,6 +293,104 @@ def run_retrieval_eval(
     return exit_code
 
 
+def compare_retrieval_graph_gate(baseline_path: Path, graph_path: Path, as_json: bool = False) -> int:
+    """Compare a graph-enabled retrieval artifact against its no-graph baseline.
+
+    Implements the IG-03 acceptance-5 gate: graph expansion must not regress
+    Recall@5/MRR (and the other gated quality metrics) beyond the checked-in
+    tolerances, and at least one pre-registered relationship-oriented metric
+    must improve on the derived ``graph-relationship`` cohort.
+
+    Args:
+        baseline_path: Path to the no-graph baseline artifact JSON.
+        graph_path: Path to the graph-enabled candidate artifact JSON.
+        as_json: Print the verdict as versioned JSON instead of tables.
+
+    Returns:
+        Process exit code: 0 when the gate passes, 1 otherwise.
+    """
+    payloads: dict[str, Any] = {}
+    for label, path in (("baseline", baseline_path), ("graph", graph_path)):
+        try:
+            loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return _fail(f"{label} artifact is not readable JSON at {path}: {exc}")
+        if not isinstance(loaded, dict):
+            return _fail(f"{label} artifact at {path} is not a JSON object")
+        payloads[label] = loaded
+
+    verdict = compare_graph_gate(payloads["baseline"], payloads["graph"])
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "kind": "retrieval-graph-gate",
+                    "passed": verdict.passed,
+                    "compatible": verdict.compatible,
+                    "incompatibilities": verdict.incompatibilities,
+                    "improvement": verdict.improvement.to_dict() if verdict.improvement else None,
+                    "gates": [gate.to_dict() for gate in verdict.gates],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0 if verdict.passed else 1
+
+    from rich.table import Table
+
+    if not verdict.compatible:
+        console.print("[red]Artifacts are not comparable; the gate was not evaluated:[/red]")
+        for item in verdict.incompatibilities:
+            console.print(f"  [red]- {item}[/red]")
+        return 1
+
+    gate_table = Table(title="Graph-expansion gate (graph run vs no-graph baseline)")
+    gate_table.add_column("Cohort")
+    gate_table.add_column("Metric")
+    gate_table.add_column("Baseline (no graph)")
+    gate_table.add_column("Graph run")
+    gate_table.add_column("Delta")
+    gate_table.add_column("Status")
+    for gate in verdict.gates:
+        baseline_text = f"{gate.baseline:.4f}" if gate.baseline is not None else "-"
+        current_text = f"{gate.current:.4f}" if gate.current is not None else "-"
+        delta_text = f"{gate.delta:+.4f}" if gate.delta is not None else "-"
+        status_style = {"pass": "green", "regression": "red", "unavailable": "yellow"}.get(gate.status, "white")
+        gate_table.add_row(
+            gate.cohort,
+            gate.metric,
+            baseline_text,
+            current_text,
+            delta_text,
+            f"[{status_style}]{gate.status}[/{status_style}]",
+        )
+    console.print(gate_table)
+
+    improvement = verdict.improvement
+    if improvement is not None and improvement.status == "pass":
+        console.print(
+            f"[green][OK] Improvement: {improvement.cohort}/{improvement.metric} "
+            f"{improvement.baseline:.4f} -> {improvement.current:.4f} ({improvement.delta:+.4f})[/green]"
+        )
+    else:
+        detail = improvement.detail if improvement is not None else "no improvement evaluated"
+        console.print(f"[red][X] No pre-registered relationship-oriented improvement: {detail}[/red]")
+
+    if verdict.passed:
+        console.print(
+            "[green][OK] Graph-expansion gate passed: no quality regression and a relationship"
+            " improvement is present[/green]"
+        )
+    else:
+        console.print(
+            "[red][X] Graph-expansion gate failed; graph-expanded retrieval cannot become the"
+            " default (criterion IG-03.5)[/red]"
+        )
+    return 0 if verdict.passed else 1
+
+
 def _render_run_report(
     project_root: Path,
     benchmark: RetrievalBenchmark,
@@ -312,6 +414,17 @@ def _render_run_report(
         f"[dim](fingerprint {artifact.benchmark['fingerprint'][:12]})[/dim]"
     )
     console.print(f"[dim]index: {index_name} | run: {artifact.run_id} | status: {artifact.status}[/dim]")
+    graph_block = artifact.configuration.get("graph_expansion") or {}
+    if graph_block.get("enabled"):
+        console.print("[dim]graph expansion: enabled (IG-03)[/dim]")
+        cohort_cases = graph_block.get("relationship_cohort_cases") or []
+        if cohort_cases:
+            console.print(
+                f"[dim]graph-relationship cohort: {len(cohort_cases)} case(s) whose expected files have"
+                " cross-file relationship edges[/dim]"
+            )
+        if graph_block.get("note"):
+            console.print(f"[yellow]graph cohort note: {graph_block['note']}[/yellow]")
 
     metrics_table = Table(title="Aggregate metrics")
     metrics_table.add_column("Metric")
