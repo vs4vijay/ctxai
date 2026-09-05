@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import sys
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from ..evals.artifacts import (
 from ..evals.benchmark import BenchmarkValidationError, RetrievalBenchmark, load_benchmark, validate_benchmark_payload
 from ..evals.common import MetricValue, atomic_write_json, redact_artifact
 from ..evals.conformance import run_mock_conformance, run_provider_conformance
+from ..evals.operations import ArtifactCorruptError, RunComparison, compare_retrieval_payloads
 from ..evals.retrieval_runner import (
     EvalError,
     RetrievalBenchmarkRunner,
@@ -389,6 +391,171 @@ def compare_retrieval_graph_gate(baseline_path: Path, graph_path: Path, as_json:
             " default (criterion IG-03.5)[/red]"
         )
     return 0 if verdict.passed else 1
+
+
+# ----------------------------------------------------------------------
+# RE-03: general maintainer run comparison
+# ----------------------------------------------------------------------
+
+
+def compare_retrieval_runs(baseline_path: Path, candidate_path: Path, as_json: bool = False) -> int:
+    """Compare two retrieval evaluation artifacts (RE-03 maintainer command).
+
+    This is the general run-versus-run comparison (distinct from the IG-03
+    ``compare-graph`` gate): metric deltas per cohort with dimension
+    classification and tolerance status, case-level newly passing/failing
+    identification, and an exhaustive incompatibility listing with
+    rebuild/rerun actions. Noisy latency metrics are reported but never gate.
+
+    Args:
+        baseline_path: Path to the baseline artifact JSON.
+        candidate_path: Path to the candidate artifact JSON.
+        as_json: Print a versioned JSON comparison envelope instead of tables.
+
+    Returns:
+        Process exit code: 0 comparable with no regression beyond tolerance,
+        1 a gated metric regressed beyond tolerance (or an input artifact was
+        unreadable), 2 incompatible artifacts.
+    """
+    payloads: dict[str, Any] = {}
+    for label, path in (("baseline", baseline_path), ("candidate", candidate_path)):
+        try:
+            loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return _fail(f"{label} artifact is not readable JSON at {path}: {exc}")
+        if not isinstance(loaded, dict):
+            return _fail(f"{label} artifact at {path} is not a JSON object")
+        payloads[label] = loaded
+
+    try:
+        comparison = compare_retrieval_payloads(payloads["baseline"], payloads["candidate"])
+    except ArtifactCorruptError as exc:
+        return _fail(str(exc))
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {"schema_version": 1, "kind": "retrieval-run-comparison", **comparison.to_dict()},
+                sort_keys=True,
+            )
+        )
+    else:
+        _render_run_comparison(comparison)
+
+    if comparison.status == "incompatible":
+        return 2
+    if comparison.status == "regression":
+        return 1
+    return 0
+
+
+def _render_run_comparison(comparison: RunComparison) -> None:
+    """Render the human-readable run comparison.
+
+    Args:
+        comparison: The computed run comparison.
+    """
+    from rich.table import Table
+
+    baseline_id = str(comparison.baseline.get("run_id") or "?")
+    candidate_id = str(comparison.candidate.get("run_id") or "?")
+    console.print(
+        f"\n[bold blue]Retrieval run comparison[/bold blue] [dim]{baseline_id[:12]} -> {candidate_id[:12]}[/dim]"
+    )
+
+    if not comparison.compatible:
+        console.print("[red]Artifacts are incompatible; they cannot be compared as equivalent:[/red]")
+        for item in comparison.incompatibilities:
+            console.print(f"  [red]- {escape(str(item))}[/red]")
+        for action in comparison.actions:
+            console.print(f"  [yellow]-> {escape(str(action))}[/yellow]")
+        return
+
+    dimension_titles = {
+        "correctness": "Correctness",
+        "quality": "Quality",
+        "efficiency": "Context efficiency",
+        "timing": "Latency (noisy, reported but never gated)",
+        "other": "Other metrics",
+    }
+    for dimension in ("correctness", "quality", "efficiency", "timing", "other"):
+        gates = [gate for gate in comparison.gates if gate.dimension == dimension]
+        if not gates:
+            continue
+        table = Table(title=f"{dimension_titles[dimension]} deltas ({comparison.status})")
+        table.add_column("Cohort")
+        table.add_column("Metric")
+        table.add_column("Baseline")
+        table.add_column("Candidate")
+        table.add_column("Delta")
+        table.add_column("Tolerance (abs/rel)")
+        table.add_column("Status")
+        table.add_column("Trend")
+        for gate in gates:
+            baseline_text = f"{gate.baseline:.4f}" if gate.baseline is not None else "-"
+            current_text = f"{gate.current:.4f}" if gate.current is not None else "-"
+            delta_text = f"{gate.delta:+.4f}" if gate.delta is not None else "-"
+            status_style = {
+                "pass": "green",
+                "regression": "red",
+                "unavailable": "yellow",
+                "reported": "cyan",
+            }.get(gate.status, "white")
+            trend_style = {"improved": "green", "regressed": "red", "flat": "white"}.get(gate.trend or "", "white")
+            table.add_row(
+                gate.cohort,
+                gate.metric,
+                baseline_text,
+                current_text,
+                delta_text,
+                f"{gate.absolute_tolerance}/{gate.relative_tolerance}",
+                f"[{status_style}]{gate.status}[/{status_style}]",
+                f"[{trend_style}]{gate.trend or '-'}[/{trend_style}]",
+            )
+        console.print(table)
+
+    for gate in comparison.regressions:
+        assert gate.baseline is not None and gate.current is not None
+        console.print(
+            f"[red][X] Gate failed: {gate.cohort}/{gate.metric} "
+            f"baseline {gate.baseline:.4f} -> current {gate.current:.4f} "
+            f"(tolerance abs={gate.absolute_tolerance}, rel={gate.relative_tolerance})[/red]"
+        )
+
+    changed = [delta for delta in comparison.case_deltas if delta.kind != "unchanged"]
+    if changed:
+        case_table = Table(title="Changed cases")
+        case_table.add_column("Case")
+        case_table.add_column("Cohort")
+        case_table.add_column("Change")
+        case_table.add_column("First rank (base -> cand)")
+        case_table.add_column("Tokens (delta)")
+        case_table.add_column("Latency ms (base -> cand)")
+        for delta in changed:
+            rank_text = f"{delta.baseline_first_relevant_rank or '-'} -> {delta.candidate_first_relevant_rank or '-'}"
+            latency_text = (
+                f"{delta.baseline_latency_ms:.1f} -> {delta.candidate_latency_ms:.1f}"
+                if delta.baseline_latency_ms is not None and delta.candidate_latency_ms is not None
+                else "-"
+            )
+            case_table.add_row(
+                delta.case_id,
+                delta.cohort,
+                delta.kind,
+                rank_text,
+                f"{delta.baseline_tokens} -> {delta.candidate_tokens} ({delta.delta_tokens:+d})",
+                latency_text,
+            )
+        console.print(case_table)
+        if comparison.newly_passing:
+            console.print(f"[green]Newly passing: {', '.join(comparison.newly_passing)}[/green]")
+        if comparison.newly_failing:
+            console.print(f"[red]Newly failing: {', '.join(comparison.newly_failing)}[/red]")
+
+    if comparison.status == "pass":
+        console.print("[green][OK] No gated metric regressed beyond tolerance.[/green]")
+    else:
+        console.print("[red][X] Gated metrics regressed beyond tolerance (exit code 1).[/red]")
 
 
 def _render_run_report(

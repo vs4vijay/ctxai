@@ -458,6 +458,30 @@ def eval_retrieval_run(
         raise typer.Exit(code=exit_code)
 
 
+@retrieval_eval_app.command("compare")
+def eval_retrieval_compare(
+    baseline: Path = typer.Argument(..., help="Baseline evaluation artifact JSON"),
+    candidate: Path = typer.Argument(..., help="Candidate evaluation artifact JSON"),
+    as_json: bool = typer.Option(False, "--json", help="Print a versioned JSON comparison envelope"),
+):
+    """Compare two retrieval runs: metric/cohort/case deltas with gate status (RE-03).
+
+    Reports aggregate and per-cohort deltas grouped by dimension (quality,
+    correctness, context efficiency, and noisy latency that is reported but
+    never gated), identifies newly passing/failing cases, and names every
+    incompatible identity field with a rebuild/rerun action.
+
+    Exit codes: 0 comparable with no regression beyond tolerance; 1 a gated
+    metric regressed beyond tolerance (or an input was unreadable); 2 the
+    artifacts are incompatible.
+    """
+    from .commands.eval_command import compare_retrieval_runs
+
+    exit_code = compare_retrieval_runs(baseline_path=baseline, candidate_path=candidate, as_json=as_json)
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
+
+
 @retrieval_eval_app.command("compare-graph")
 def eval_retrieval_compare_graph(
     baseline: Path = typer.Argument(..., help="No-graph baseline artifact JSON"),

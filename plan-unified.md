@@ -75,7 +75,7 @@ open repository
 | IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Validated (2026-09-05) |
 | IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Validated (2026-09-05) |
 | RE-02 Privacy-preserving retrieval observability | Local, redacted retrieval traces | Validated (2026-09-05) |
-| RE-03 Retrieval quality dashboard + CI gate | Baseline comparison and merge protection | Planned |
+| RE-03 Retrieval quality dashboard + CI gate | Baseline comparison and merge protection | Validated (2026-09-05) |
 
 ### Baseline facts the open slices build on or fix
 
@@ -1104,7 +1104,7 @@ interoperability need is demonstrated.
 **User outcome:** Maintainers can compare benchmark runs, identify regressed cohorts or cases, and
 prevent a retrieval change from merging when it violates reviewed quality gates.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-05).
 
 **Scope**
 
