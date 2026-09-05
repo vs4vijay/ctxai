@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..graph.operations import GraphHealth
 from ..index_manifest import IndexManifest, IndexManifestError
 from ..index_operations import IndexOperations
 
@@ -16,6 +17,7 @@ class IndexHealth:
     healthy: bool
     problems: tuple[str, ...]
     manifest: IndexManifest | None
+    graph: GraphHealth | None = None
 
 
 def list_indexes(project_path: Path | None = None) -> list[IndexManifest]:
@@ -34,8 +36,18 @@ def doctor_index(name: str, project_path: Path | None = None) -> IndexHealth:
     problems = list(summary.problems)
     if summary.stale:
         problems.append("repository revision or indexed files changed; run ctxai index to update")
+    graph = summary.graph
+    if graph is not None:
+        # Graph mismatch/corruption/count/schema problems fail the doctor;
+        # a never-built graph is a diagnostic only.
+        problems.extend(graph.problems)
     return IndexHealth(
-        name=name, path=summary.path, healthy=not problems, problems=tuple(problems), manifest=summary.manifest
+        name=name,
+        path=summary.path,
+        healthy=not problems,
+        problems=tuple(problems),
+        manifest=summary.manifest,
+        graph=graph,
     )
 
 

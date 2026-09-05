@@ -56,10 +56,21 @@ def indexes_doctor(
     name: str = typer.Argument(...),
     project_path: Path | None = typer.Option(None, "--project-path", "-p"),
 ):
-    """Check manifest, vector storage, and repository freshness."""
+    """Check manifest, vector storage, graph data, and repository freshness."""
     from .commands.indexes_command import doctor_index
 
     health = doctor_index(name, project_path)
+    graph = health.graph
+    if graph is not None:
+        if graph.status == "healthy" and graph.metadata is not None:
+            typer.echo(
+                f"[OK] Graph: healthy (generation {graph.metadata.generation}, "
+                f"{graph.metadata.total_nodes} nodes, {graph.metadata.total_edges} edges)"
+            )
+        elif graph.status == "missing":
+            typer.echo(f"[i] Graph: {graph.diagnostic}")
+        else:
+            typer.echo(f"[X] Graph: {graph.status}", err=True)
     if health.healthy:
         typer.echo(f"[OK] Index '{name}' is healthy")
         return
@@ -517,6 +528,57 @@ def eval_providers(
 
 
 app.add_typer(eval_app, name="eval")
+
+
+graph_app = typer.Typer(help="Inspect the repository symbol graph of an index")
+
+
+@graph_app.command("stats")
+def graph_stats(
+    index: str | None = typer.Argument(None, help="Name of the index (uses configured default if not provided)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of a table"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Show graph schema, extractor versions, counts, and unresolved rate."""
+    from .commands.graph_command import graph_stats as graph_stats_command
+
+    graph_stats_command(index, project_path, as_json)
+
+
+@graph_app.command("symbol")
+def graph_symbol(
+    query: str = typer.Argument(..., help="Substring of a qualified or display name to search for"),
+    index: str | None = typer.Argument(None, help="Name of the index (uses configured default if not provided)"),
+    kind: str | None = typer.Option(None, "--kind", help="Only show symbols of this kind (e.g. function, class, test)"),
+    language: str | None = typer.Option(None, "--language", help="Only show symbols of this language (e.g. python)"),
+    limit: int = typer.Option(20, "--limit", min=1, help="Maximum number of results (max 500)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of a table"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """Locate symbol definitions with file:start-end evidence."""
+    from .commands.graph_command import graph_symbol as graph_symbol_command
+
+    graph_symbol_command(query, index, kind, language, limit, project_path, as_json)
+
+
+@graph_app.command("neighbors")
+def graph_neighbors(
+    symbol_id: str = typer.Argument(..., help="Stable symbol id (or unique 8+ character prefix)"),
+    index: str | None = typer.Argument(None, help="Name of the index (uses configured default if not provided)"),
+    edge_kind: str | None = typer.Option(None, "--edge", help="Only traverse edges of this kind (e.g. calls, tests)"),
+    direction: str = typer.Option("both", "--direction", help="Traversal direction: in, out, or both"),
+    depth: int = typer.Option(1, "--depth", min=1, help="Traversal depth (max 3)"),
+    limit: int = typer.Option(50, "--limit", min=1, help="Maximum number of returned nodes (max 500)"),
+    as_json: bool = typer.Option(False, "--json", help="Emit a versioned JSON envelope instead of tables"),
+    project_path: Path | None = typer.Option(None, "--project-path", "-p"),
+):
+    """List callers/callees, parents/children, subclasses, references, and tests."""
+    from .commands.graph_command import graph_neighbors as graph_neighbors_command
+
+    graph_neighbors_command(symbol_id, index, edge_kind, direction, depth, limit, project_path, as_json)
+
+
+app.add_typer(graph_app, name="graph")
 
 
 @app.callback()

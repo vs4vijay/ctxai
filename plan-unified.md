@@ -71,7 +71,7 @@ open repository
 | HH-08 OS-sandboxed command execution | OS-level deny-by-default sandbox mode | Validated (2026-09-04) |
 | HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Validated (2026-09-05) |
 | RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Validated (2026-09-04) |
-| IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Planned |
+| IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Validated (2026-09-05) |
 | IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Planned |
 | IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Planned |
 | RE-02 Privacy-preserving retrieval observability | Local, redacted retrieval traces | Planned |
@@ -862,7 +862,7 @@ auto-generating tasks from history; leaderboard; multi-repo quality claims.
 **User outcome:** After indexing a supported repository, a user can inspect its definitions and
 structural relationships and trace every result back to source.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-05).
 
 **Scope**
 
