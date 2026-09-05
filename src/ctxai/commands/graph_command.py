@@ -1,15 +1,35 @@
-"""Symbol graph inspection commands shared by the CLI (IG-01)."""
+"""Symbol graph inspection commands shared by the CLI (IG-01/IG-02).
+
+All reads go through :class:`~ctxai.graph.operations.GraphOperations`; this
+module never touches graph storage directly. JSON output uses the versioned
+DTOs from :mod:`ctxai.graph.dto`, so CLI, MCP, and dashboard projections
+agree on identity, counts, confidence, and relationships.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any
 
 import typer
 
-from ..graph.operations import GraphError, GraphOperations, GraphStats
+from ..graph.adapters import capabilities_payload
+from ..graph.dto import (
+    CapabilitiesResult,
+    GraphStatsResult,
+    NeighborsResult,
+    SymbolSearchResult,
+)
+from ..graph.operations import (
+    GraphError,
+    GraphOperations,
+    GraphStats,
+)
 from ..graph.store import GraphStoreError, NeighborResult
 from ..index_manifest import IndexManifestError
+
+_JSON_ERRORS = (GraphError, GraphStoreError, IndexManifestError)
+_QUERY_ERRORS = (*_JSON_ERRORS, ValueError)
 
 
 def _operations(project_path: Path | None) -> GraphOperations:
@@ -18,6 +38,16 @@ def _operations(project_path: Path | None) -> GraphOperations:
 
 def _resolve_name(project_path: Path | None, index_name: str | None) -> str:
     return GraphOperations.resolve_index_name(project_path, index_name)
+
+
+def _fail(error: Exception) -> typer.Exit:
+    """Report one deterministic one-line error and exit non-zero."""
+    typer.echo(f"Error: {error}", err=True)
+    return typer.Exit(code=1)
+
+
+def _emit_json(payload: dict) -> None:
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def graph_stats(index_name: str | None, project_path: Path | None, as_json: bool) -> None:
@@ -31,8 +61,6 @@ def graph_stats(index_name: str | None, project_path: Path | None, as_json: bool
     Raises:
         typer.Exit: On invalid input or unavailable graph data.
     """
-    import json
-
     from rich.console import Console
     from rich.table import Table
 
@@ -40,22 +68,12 @@ def graph_stats(index_name: str | None, project_path: Path | None, as_json: bool
     try:
         name = _resolve_name(project_path, index_name)
         stats: GraphStats = operations.stats(name)
-    except (GraphError, GraphStoreError, IndexManifestError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+    except _JSON_ERRORS as error:
+        raise _fail(error) from error
 
     if as_json:
-        envelope: dict[str, Any] = {
-            "schema_version": 1,
-            "index": name,
-            "health": {
-                "status": stats.health.status,
-                "problems": list(stats.health.problems),
-                "diagnostic": stats.health.diagnostic,
-            },
-            "graph": stats.metadata.to_dict() if stats.metadata else None,
-        }
-        typer.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        result = GraphStatsResult.build(name, stats, capabilities_payload())
+        _emit_json(result.to_dict())
         return
 
     console = Console()
@@ -114,8 +132,6 @@ def graph_symbol(
     Raises:
         typer.Exit: On invalid input or unavailable graph data.
     """
-    import json
-
     from rich.console import Console
     from rich.table import Table
 
@@ -123,19 +139,12 @@ def graph_symbol(
     try:
         name = _resolve_name(project_path, index_name)
         nodes = operations.find_symbols(name, query, kind=kind, language=language, limit=limit)
-    except (GraphError, GraphStoreError, IndexManifestError, ValueError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+    except _QUERY_ERRORS as error:
+        raise _fail(error) from error
 
     if as_json:
-        envelope = {
-            "schema_version": 1,
-            "index": name,
-            "query": query,
-            "count": len(nodes),
-            "symbols": [{**node.to_dict(), "evidence": node.evidence()} for node in nodes],
-        }
-        typer.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        result = SymbolSearchResult.build(name, query, kind, language, nodes)
+        _emit_json(result.to_dict())
         return
 
     console = Console()
@@ -178,8 +187,6 @@ def graph_neighbors(
     Raises:
         typer.Exit: On invalid input or unavailable graph data.
     """
-    import json
-
     from rich.console import Console
     from rich.table import Table
 
@@ -194,24 +201,12 @@ def graph_neighbors(
             depth=depth,
             limit=limit,
         )
-    except (GraphError, GraphStoreError, IndexManifestError, ValueError) as error:
-        typer.echo(f"Error: {error}", err=True)
-        raise typer.Exit(code=1) from error
+    except _QUERY_ERRORS as error:
+        raise _fail(error) from error
 
     if as_json:
-        envelope = {
-            "schema_version": 1,
-            "index": name,
-            "symbol_id": symbol_id,
-            "edge_kind": edge_kind,
-            "direction": direction,
-            "depth": depth,
-            "limit": limit,
-            "truncated": result.truncated,
-            "nodes": [{**node.to_dict(), "evidence": node.evidence()} for node in result.nodes],
-            "edges": [{**edge.to_dict(), "evidence": edge.evidence()} for edge in result.edges],
-        }
-        typer.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        envelope = NeighborsResult.build(name, symbol_id, direction, depth, limit, result)
+        _emit_json(envelope.to_dict())
         return
 
     console = Console()
@@ -252,3 +247,77 @@ def graph_neighbors(
     console.print(node_table)
     if result.truncated:
         console.print("[yellow]Result truncated by --limit; raise the limit or narrow the traversal[/yellow]")
+
+
+def graph_capabilities(index_name: str | None, project_path: Path | None, as_json: bool) -> None:
+    """Print the language support matrix, with per-index observations (IG-02).
+
+    Without an index the static per-language matrix is shown. With an index,
+    per-index observations are added: languages present with node counts,
+    unresolved edges by kind, and the count of indexed files in languages
+    without an adapter (they stay searchable as ordinary chunks).
+
+    Args:
+        index_name: Optional index name (config default when omitted).
+        project_path: Optional project root.
+        as_json: Emit the versioned JSON envelope instead of a table.
+
+    Raises:
+        typer.Exit: On invalid input or an unknown index.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    operations = _operations(project_path)
+    try:
+        name = _resolve_name(project_path, index_name) if index_name else None
+        result: CapabilitiesResult = operations.capabilities(name)
+    except _JSON_ERRORS as error:
+        raise _fail(error) from error
+
+    if as_json:
+        _emit_json(result.to_dict())
+        return
+
+    console = Console()
+    console.print("\n[bold blue]Graph language capabilities[/bold blue]")
+    table = Table(show_header=True, header_style="bold")
+    for column in ("Language", "Supported", "Adapter", "Extensions", "Node kinds", "Edge kinds"):
+        table.add_column(column)
+    for entry in result.languages:
+        table.add_row(
+            entry["language"],
+            "yes" if entry["supported"] else "no",
+            entry["adapter_version"] or "-",
+            ", ".join(entry["file_extensions"]) or "-",
+            ", ".join(entry["node_kinds"]) or "-",
+            ", ".join(entry["edge_kinds"]) or "-",
+        )
+    console.print(table)
+    for entry in result.languages:
+        if not entry["supported"]:
+            console.print(
+                f"[yellow]{entry['language']}: no adapter — {'; '.join(entry['unsupported_constructs'])}[/yellow]"
+            )
+        elif entry["unsupported_constructs"]:
+            console.print(
+                f"[dim]{entry['language']}: never resolved (no fabricated edges): "
+                + "; ".join(entry["unsupported_constructs"])
+                + "[/dim]"
+            )
+    observations = result.index
+    if observations is not None:
+        console.print(f"\n[bold blue]Index '{observations.index}'[/bold blue]")
+        counts = observations.languages_present
+        if counts:
+            for language in sorted(counts):
+                console.print(f"Graph nodes in {language}: {counts[language]}")
+        else:
+            console.print("[yellow]No graph nodes recorded for this index yet[/yellow]")
+        for kind in sorted(observations.unresolved_edges_by_kind):
+            console.print(f"Unresolved {kind} edges: {observations.unresolved_edges_by_kind[kind]}")
+        if observations.unsupported_file_count:
+            console.print(
+                f"[yellow]{observations.unsupported_file_count} of {observations.total_file_count} indexed files are"
+                " in languages without a graph adapter; they remain searchable as ordinary chunks[/yellow]"
+            )

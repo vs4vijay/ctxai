@@ -3,28 +3,27 @@
 The adapter runs in two phases:
 
 1. ``extract_file`` parses one file with tree-sitter (the same parser the
-   chunker uses) and produces structural records: definition nodes,
-   containment edges, import records, base-class records, and call/reference
-   usages. It never imports or executes indexed code.
+   chunker uses) and produces the shared structural records from
+   :mod:`ctxai.graph.resolution`: definition nodes, containment edges, import
+   records, base-class records, and call/reference usages. It never imports
+   or executes indexed code.
 2. ``resolve_edges`` turns the per-file records into final graph edges using a
-   repository-wide symbol index. The resolution ladder is deliberately
-   conservative: a target is connected only when statically unambiguous
-   (import binding, lexical/module scope, or a unique repository-wide display
-   name); everything else stays an *unresolved* edge (imports, calls,
-   inheritance) or is simply not recorded (references), never guessed.
+   repository-wide symbol index and the shared conservative ladder. A target
+   is connected only when statically unambiguous (import binding,
+   lexical/module scope, or a unique repository-wide display name); everything
+   else stays an *unresolved* edge (imports, calls, inheritance) or is simply
+   not recorded (references), never guessed.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
 from typing import Any
 
 from tree_sitter_language_pack import get_parser
 
 from .model import (
     CONFIDENCE_EXACT,
-    CONFIDENCE_PROBABLE,
     CONFIDENCE_UNRESOLVED,
     PYTHON_EXTRACTOR_VERSION,
     PYTHON_RESOLVER_VERSION,
@@ -33,6 +32,32 @@ from .model import (
     derive_edge_id,
     derive_node_id,
 )
+from .resolution import (
+    BaseRecord,
+    FileExtraction,
+    ImportRecord,
+    SymbolIndexes,
+    UsageRecord,
+    build_symbol_indexes,
+    make_resolved_edge,
+    resolve_bases,
+    resolve_usages,
+)
+
+__all__ = [
+    "BUILTIN_CALLABLES",
+    "BaseRecord",
+    "FileExtraction",
+    "ImportRecord",
+    "PYTHON_EXTENSION",
+    "PythonAdapter",
+    "SELF_NAMES",
+    "SymbolIndexes",
+    "UsageRecord",
+    "build_symbol_indexes",
+    "module_name_for_path",
+    "resolve_edges",
+]
 
 PYTHON_EXTENSION = ".py"
 
@@ -141,173 +166,13 @@ def _visibility(name: str) -> str:
     return "private" if name.startswith("_") else "public"
 
 
-@dataclass(frozen=True)
-class ImportRecord:
-    """One import binding produced by a single import statement.
-
-    Attributes:
-        binding: Local name the import binds (``"*"`` for star imports).
-        module_target: Absolute dotted module target of the statement
-            (relative imports are pre-resolved against the file's package);
-            this is what the ``imports`` edge points at.
-        binds_module: Dotted module name the *binding* refers to (the root
-            package for plain ``import a.b``, the full target for aliases).
-        symbol: Name imported from ``module_target``, or ``None`` for plain
-            module imports.
-        line: 1-based evidence line of the import statement.
-    """
-
-    binding: str
-    module_target: str
-    binds_module: str
-    symbol: str | None
-    line: int
-
-
-@dataclass(frozen=True)
-class UsageRecord:
-    """One call or non-call name usage inside a definition.
-
-    Attributes:
-        kind: ``"call"`` or ``"reference"``.
-        source_node_id: Enclosing definition node id (or module node id).
-        scope_qn: Qualified name of the enclosing lexical scope.
-        class_qn: Qualified name of the enclosing class, when any.
-        root: Leftmost identifier of the dotted expression (``None`` when the
-            expression is not a plain dotted chain).
-        attrs: Remaining dotted components after ``root``.
-        text: Raw source text of the expression.
-        line: 1-based evidence line.
-    """
-
-    kind: str
-    source_node_id: str
-    scope_qn: str
-    class_qn: str | None
-    root: str | None
-    attrs: tuple[str, ...]
-    text: str
-    line: int
-
-
-@dataclass(frozen=True)
-class BaseRecord:
-    """One base-class expression of a class definition.
-
-    Attributes:
-        class_node_id: Node id of the inheriting class.
-        root: Leftmost identifier of the base expression (``None`` when not a
-            plain dotted chain).
-        attrs: Remaining dotted components.
-        text: Raw source text of the base expression.
-        line: 1-based evidence line of the class definition.
-    """
-
-    class_node_id: str
-    root: str | None
-    attrs: tuple[str, ...]
-    text: str
-    line: int
-
-
-@dataclass
-class FileExtraction:
-    """Structural extraction result for a single Python file."""
-
-    file_path: str
-    language: str
-    module_name: str
-    module_node: GraphNode
-    nodes: list[GraphNode]
-    contains: list[GraphEdge]
-    imports: list[ImportRecord]
-    bases: list[BaseRecord]
-    usages: list[UsageRecord]
-    syntax_errors: int = 0
-
-
-@dataclass
-class SymbolIndexes:
-    """Repository-wide lookup tables used to resolve usage records.
-
-    Attributes:
-        symbol: Qualified name to node id for non-module definitions.
-        module: Dotted module name to module node id.
-        packages: Ancestor prefixes of known modules (namespace packages have
-            no node but make dotted chains walkable).
-        display: Display name to the (sorted) node ids sharing it.
-        qualified_by_id: Node id to qualified name.
-        kind_by_id: Node id to node kind.
-    """
-
-    symbol: dict[str, str] = field(default_factory=dict)
-    module: dict[str, str] = field(default_factory=dict)
-    packages: set[str] = field(default_factory=set)
-    display: dict[str, list[str]] = field(default_factory=dict)
-    qualified_by_id: dict[str, str] = field(default_factory=dict)
-    kind_by_id: dict[str, str] = field(default_factory=dict)
-
-
-def build_symbol_indexes(nodes: list[GraphNode]) -> SymbolIndexes:
-    """Build resolution indexes from a repository-wide node set.
-
-    Args:
-        nodes: All candidate nodes (existing store nodes plus fresh extractions).
-
-    Returns:
-        Deterministically built :class:`SymbolIndexes`; on duplicate qualified
-        names the first node in ``(file_path, qualified_name, id)`` order wins.
-    """
-    indexes = SymbolIndexes()
-    for node in sorted(nodes, key=lambda item: (item.file_path, item.qualified_name, item.id)):
-        indexes.qualified_by_id[node.id] = node.qualified_name
-        indexes.kind_by_id[node.id] = node.kind
-        if node.kind == "module":
-            indexes.module.setdefault(node.qualified_name, node.id)
-            parts = node.qualified_name.split(".")
-            for depth in range(1, len(parts)):
-                indexes.packages.add(".".join(parts[:depth]))
-            continue
-        indexes.symbol.setdefault(node.qualified_name, node.id)
-        indexes.display.setdefault(node.display_name, []).append(node.id)
-    return indexes
-
-
-def _walkable(indexes: SymbolIndexes, qualified: str) -> bool:
-    return qualified in indexes.symbol or qualified in indexes.module or qualified in indexes.packages
-
-
-def _chain_from(indexes: SymbolIndexes, base_qualified: str, attrs: tuple[str, ...]) -> str | None:
-    """Walk ``attrs`` below a qualified name through the symbol indexes.
-
-    Args:
-        indexes: Repository-wide symbol indexes.
-        base_qualified: Qualified name the chain starts from (root, binding
-            referent, or enclosing scope).
-        attrs: Remaining dotted components.
-
-    Returns:
-        Node id when the full chain resolves to a known symbol or module,
-        otherwise ``None``.
-    """
-    current = base_qualified
-    if not _walkable(indexes, current):
-        return None
-    node_id = indexes.symbol.get(current) or indexes.module.get(current)
-    for attr in attrs:
-        current = f"{current}.{attr}"
-        if not _walkable(indexes, current):
-            return None
-        node_id = indexes.symbol.get(current) or indexes.module.get(current)
-    return node_id
-
-
 class PythonAdapter:
     """LanguageAdapter for Python source files (tree-sitter based)."""
 
     language = "python"
     extractor_version = PYTHON_EXTRACTOR_VERSION
     resolver_version = PYTHON_RESOLVER_VERSION
+    extensions = (PYTHON_EXTENSION,)
 
     def __init__(self) -> None:
         """Create the adapter and its shared tree-sitter parser.
@@ -341,8 +206,35 @@ class PythonAdapter:
             The :class:`FileExtraction` for the file; syntax errors are
             tolerated and counted, they never raise.
         """
-        walker = _FileWalker(self._parser, relative_path, source, repository_root, self.language, self.resolver_version)
+        walker = _FileWalker(
+            self._parser,
+            relative_path,
+            source,
+            repository_root,
+            self.language,
+            self.extractor_version,
+            self.resolver_version,
+        )
         return walker.run()
+
+    @classmethod
+    def resolve_edges(
+        cls,
+        extractions: list[FileExtraction],
+        indexes: SymbolIndexes,
+        repository_root: str,
+    ) -> list[GraphEdge]:
+        """Resolve per-file extraction records into final graph edges.
+
+        Args:
+            extractions: Fresh Python extractions to resolve.
+            indexes: Repository-wide symbol indexes (fresh nodes included).
+            repository_root: Canonical repository root used for stable ids.
+
+        Returns:
+            Deterministically sorted edge list, including containment edges.
+        """
+        return resolve_edges(extractions, indexes, repository_root)
 
 
 class _FileWalker:
@@ -355,6 +247,7 @@ class _FileWalker:
         source: bytes,
         repository_root: str,
         language: str,
+        adapter_version: str,
         resolver_version: str,
     ) -> None:
         self._parser = parser
@@ -362,6 +255,7 @@ class _FileWalker:
         self._relative_path = relative_path
         self._source = source
         self._language = language
+        self._adapter_version = adapter_version
         self._resolver_version = resolver_version
         self._module_name = module_name_for_path(relative_path)
         self._nodes: list[GraphNode] = []
@@ -423,6 +317,7 @@ class _FileWalker:
             parent_id=parent_id,
             visibility=_visibility(name),
             source_hash=self._node_hash(node),
+            adapter_version=self._adapter_version,
         )
         self._nodes.append(graph_node)
         if parent_id is not None:
@@ -542,6 +437,7 @@ class _FileWalker:
             parent_id=None,
             visibility="public",
             source_hash=hashlib.sha256(self._source).hexdigest(),
+            adapter_version=self._adapter_version,
         )
         self._nodes.append(module_node)
         self._bound_stack.append(self._collect_bound_names(root))
@@ -700,7 +596,16 @@ class _FileWalker:
             level, base = 0, ""
         target_module = self._absolute_module(base, level)
         for child in node.children:
-            if child is module_field or child.type in ("from", "import", ",", "(", ")", "relative_import"):
+            # Compare tree-sitter nodes by id: repeated accesses may return
+            # distinct Python wrappers around the same underlying node.
+            if (module_field is not None and child.id == module_field.id) or child.type in (
+                "from",
+                "import",
+                ",",
+                "(",
+                ")",
+                "relative_import",
+            ):
                 continue
             if child.type == "dotted_name":
                 symbol = self._text(child)
@@ -885,41 +790,32 @@ def resolve_edges(
         edges.extend(extraction.contains)
         import_edges, bindings = _resolve_imports(extraction, indexes, repository_root)
         edges.extend(import_edges)
-        edges.extend(_resolve_bases(extraction, bindings, indexes, repository_root))
-        edges.extend(_resolve_usages(extraction, bindings, indexes, repository_root))
+        edges.extend(
+            resolve_bases(
+                extraction,
+                bindings,
+                indexes,
+                repository_root,
+                PYTHON_RESOLVER_VERSION,
+                SELF_NAMES,
+                BUILTIN_CALLABLES,
+            )
+        )
+        edges.extend(
+            resolve_usages(
+                extraction,
+                bindings,
+                indexes,
+                repository_root,
+                PYTHON_RESOLVER_VERSION,
+                SELF_NAMES,
+                BUILTIN_CALLABLES,
+            )
+        )
     unique: dict[str, GraphEdge] = {}
     for edge in edges:
         unique.setdefault(edge.id, edge)
     return sorted(unique.values(), key=lambda item: item.id)
-
-
-def _make_resolved_edge(
-    repository_root: str,
-    resolver_version: str,
-    file_path: str,
-    kind: str,
-    source_id: str,
-    target_id: str | None,
-    target_text: str | None,
-    line: int,
-    confidence: str | None = None,
-) -> GraphEdge:
-    resolved = target_id is not None
-    return GraphEdge(
-        id=derive_edge_id(repository_root, kind, source_id, target_id, target_text, file_path, line),
-        kind=kind,
-        source_id=source_id,
-        target_id=target_id,
-        target_text=target_text,
-        evidence_file=file_path,
-        evidence_line=line,
-        confidence=confidence
-        if resolved and confidence
-        else CONFIDENCE_UNRESOLVED
-        if not resolved
-        else CONFIDENCE_EXACT,
-        resolver_version=resolver_version,
-    )
 
 
 def _resolve_imports(
@@ -947,7 +843,7 @@ def _resolve_imports(
         if record.symbol is None:
             target_id = indexes.module.get(record.module_target)
             edges.append(
-                _make_resolved_edge(
+                make_resolved_edge(
                     repository_root,
                     resolver_version,
                     extraction.file_path,
@@ -962,7 +858,7 @@ def _resolve_imports(
         elif record.symbol == "*":
             text = f"{record.module_target}.*"
             edges.append(
-                _make_resolved_edge(
+                make_resolved_edge(
                     repository_root,
                     resolver_version,
                     extraction.file_path,
@@ -980,7 +876,7 @@ def _resolve_imports(
             if target_id is not None:
                 bindings[record.binding] = ("node", target_id)
                 edges.append(
-                    _make_resolved_edge(
+                    make_resolved_edge(
                         repository_root,
                         resolver_version,
                         extraction.file_path,
@@ -994,7 +890,7 @@ def _resolve_imports(
             else:
                 bindings[record.binding] = ("unresolved", candidate)
                 edges.append(
-                    _make_resolved_edge(
+                    make_resolved_edge(
                         repository_root,
                         resolver_version,
                         extraction.file_path,
@@ -1006,194 +902,3 @@ def _resolve_imports(
                     )
                 )
     return edges, bindings
-
-
-def _resolve_dotted(
-    extraction: FileExtraction,
-    bindings: dict[str, tuple[str, Any]],
-    indexes: SymbolIndexes,
-    root: str | None,
-    attrs: tuple[str, ...],
-    scope_qn: str,
-    class_qn: str | None,
-    preserve_unresolved: bool,
-) -> tuple[str | None, str | None]:
-    """Resolve a dotted usage through the conservative ladder.
-
-    Args:
-        extraction: Extraction the usage belongs to.
-        bindings: The module's import binding map.
-        indexes: Repository-wide symbol indexes.
-        root: Leftmost identifier (``None`` for dynamic expressions).
-        attrs: Remaining dotted components.
-        scope_qn: Enclosing lexical scope qualified name.
-        class_qn: Enclosing class qualified name when any.
-        preserve_unresolved: Whether an unresolved edge must be preserved (calls,
-            inheritance) as opposed to silently skipped (references).
-
-    Returns:
-        ``(node_id, confidence)`` where confidence is ``exact``/``probable``
-        and ``node_id`` is set; ``(None, None)`` when nothing should be
-        recorded (builtins, unrecorded references); or ``(None, "unresolved")``
-        when an unresolved edge must be preserved.
-    """
-    unresolved = CONFIDENCE_UNRESOLVED if preserve_unresolved else None
-    if root is None:
-        return None, unresolved
-
-    binding = bindings.get(root)
-    if binding is not None:
-        kind, value = binding
-        if kind == "node":
-            if not attrs:
-                return value, CONFIDENCE_EXACT
-            base_qualified = indexes.qualified_by_id.get(value)
-            resolved = _chain_from(indexes, base_qualified, attrs) if base_qualified else None
-            return (resolved, CONFIDENCE_EXACT) if resolved else (None, unresolved)
-        if kind == "module":
-            if not attrs:
-                return indexes.module.get(value), CONFIDENCE_EXACT
-            resolved = _chain_from(indexes, value, attrs)
-            return (resolved, CONFIDENCE_EXACT) if resolved else (None, unresolved)
-        return None, unresolved
-
-    if root in SELF_NAMES and class_qn is not None and attrs:
-        resolved = _chain_from(indexes, class_qn, attrs)
-        if resolved:
-            return resolved, CONFIDENCE_EXACT
-        return None, unresolved
-
-    if scope_qn:
-        resolved = _chain_from(indexes, f"{scope_qn}.{root}", attrs)
-        if resolved:
-            return resolved, CONFIDENCE_EXACT
-
-    module_resolved = _chain_from(indexes, f"{extraction.module_name}.{root}", attrs)
-    if module_resolved:
-        return module_resolved, CONFIDENCE_EXACT
-
-    display_ids = indexes.display.get(root, [])
-    if len(display_ids) == 1 and not attrs:
-        return display_ids[0], CONFIDENCE_PROBABLE
-
-    if root in BUILTIN_CALLABLES:
-        return None, None
-
-    return None, unresolved
-
-
-def _resolve_bases(
-    extraction: FileExtraction,
-    bindings: dict[str, tuple[str, Any]],
-    indexes: SymbolIndexes,
-    repository_root: str,
-) -> list[GraphEdge]:
-    edges: list[GraphEdge] = []
-    for record in extraction.bases:
-        node_id, confidence = _resolve_dotted(
-            extraction,
-            bindings,
-            indexes,
-            record.root,
-            record.attrs,
-            extraction.module_name,
-            None,
-            preserve_unresolved=True,
-        )
-        if node_id is not None:
-            edges.append(
-                _make_resolved_edge(
-                    repository_root,
-                    PYTHON_RESOLVER_VERSION,
-                    extraction.file_path,
-                    "inherits",
-                    record.class_node_id,
-                    node_id,
-                    None,
-                    record.line,
-                    confidence=confidence,
-                )
-            )
-        elif confidence == CONFIDENCE_UNRESOLVED:
-            edges.append(
-                _make_resolved_edge(
-                    repository_root,
-                    PYTHON_RESOLVER_VERSION,
-                    extraction.file_path,
-                    "inherits",
-                    record.class_node_id,
-                    None,
-                    record.text,
-                    record.line,
-                )
-            )
-    return edges
-
-
-def _resolve_usages(
-    extraction: FileExtraction,
-    bindings: dict[str, tuple[str, Any]],
-    indexes: SymbolIndexes,
-    repository_root: str,
-) -> list[GraphEdge]:
-    edges: list[GraphEdge] = []
-    for usage in extraction.usages:
-        node_id, confidence = _resolve_dotted(
-            extraction,
-            bindings,
-            indexes,
-            usage.root,
-            usage.attrs,
-            usage.scope_qn,
-            usage.class_qn,
-            preserve_unresolved=usage.kind == "call",
-        )
-        if usage.kind == "reference":
-            if node_id is not None and confidence is not None:
-                edges.append(
-                    _make_resolved_edge(
-                        repository_root,
-                        PYTHON_RESOLVER_VERSION,
-                        extraction.file_path,
-                        "references",
-                        usage.source_node_id,
-                        node_id,
-                        None,
-                        usage.line,
-                        confidence=confidence,
-                    )
-                )
-            continue
-        # Calls always preserve an edge unless the target is a runtime builtin.
-        if node_id is None and confidence is None:
-            continue
-        edges.append(
-            _make_resolved_edge(
-                repository_root,
-                PYTHON_RESOLVER_VERSION,
-                extraction.file_path,
-                "calls",
-                usage.source_node_id,
-                node_id,
-                usage.text if node_id is None else None,
-                usage.line,
-                confidence=confidence,
-            )
-        )
-        if node_id is not None and indexes.kind_by_id.get(usage.source_node_id) == "test":
-            target_kind = indexes.kind_by_id.get(node_id)
-            if target_kind is not None and target_kind != "test":
-                edges.append(
-                    _make_resolved_edge(
-                        repository_root,
-                        PYTHON_RESOLVER_VERSION,
-                        extraction.file_path,
-                        "tests",
-                        usage.source_node_id,
-                        node_id,
-                        None,
-                        usage.line,
-                        confidence=confidence,
-                    )
-                )
-    return edges

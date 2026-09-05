@@ -72,7 +72,7 @@ open repository
 | HH-09 Agent task evaluation harness | Scored, gated agent benchmark + provider conformance | Validated (2026-09-05) |
 | RE-01 Executable retrieval benchmark | One-command reproducible retrieval quality gates | Validated (2026-09-04) |
 | IG-01 Inspectable symbol graph | Python definitions/relationships with evidence | Validated (2026-09-05) |
-| IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Planned |
+| IG-02 Multi-language graph + service contract | JS/TS parity, MCP + dashboard consumption | Validated (2026-09-05) |
 | IG-03 Graph-expanded grounded retrieval | Graph evidence behind measured gates | Planned |
 | RE-02 Privacy-preserving retrieval observability | Local, redacted retrieval traces | Planned |
 | RE-03 Retrieval quality dashboard + CI gate | Baseline comparison and merge protection | Planned |
@@ -923,7 +923,7 @@ resolution of reflection, monkey-patching, generated code, or dynamic imports.
 **User outcome:** Python, JavaScript, and TypeScript users receive the same graph commands and
 predictable capability reporting, while MCP and dashboard clients can consume the same results.
 
-**Status:** Planned.
+**Status:** Validated (2026-09-05).
 
 **Scope**
 

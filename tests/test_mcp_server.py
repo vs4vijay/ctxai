@@ -37,12 +37,15 @@ async def test_list_indexes_via_server(tmp_path):
         server = create_server()
 
         # The tools should be registered
-        assert len(server._tool_manager._tools) == 4
+        assert len(server._tool_manager._tools) == 7
         tool_names = [tool.name for tool in server._tool_manager._tools.values()]
         assert "list_indexes" in tool_names
         assert "index_codebase" in tool_names
         assert "query_codebase" in tool_names
         assert "get_index_stats" in tool_names
+        assert "graph_stats" in tool_names
+        assert "graph_symbol" in tool_names
+        assert "graph_neighbors" in tool_names
 
 
 @pytest.mark.asyncio

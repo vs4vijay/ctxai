@@ -51,7 +51,15 @@ async def test_real_client_discovers_every_versioned_tool(temp_dir):
         async with connected_client(create_server(temp_dir)) as client:
             tools = await client.list_tools()
             names = {tool.name for tool in tools.tools}
-            assert names == {"list_indexes", "index_codebase", "query_codebase", "get_index_stats"}
+            assert names == {
+                "list_indexes",
+                "index_codebase",
+                "query_codebase",
+                "get_index_stats",
+                "graph_stats",
+                "graph_symbol",
+                "graph_neighbors",
+            }
             timeout_schema = next(tool for tool in tools.tools if tool.name == "index_codebase").inputSchema
             assert timeout_schema["properties"]["timeout_seconds"]["default"] == 300
             result = await call(client, "list_indexes")

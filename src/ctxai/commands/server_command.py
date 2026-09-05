@@ -26,6 +26,14 @@ from rich.console import Console
 from ..agent.llm.base import ProviderError, ProviderErrorKind
 from ..config import ConfigManager
 from ..embeddings import EmbeddingsFactory
+from ..graph.adapters import capabilities_payload
+from ..graph.dto import GraphStatsResult, NeighborsResult, SymbolSearchResult
+from ..graph.operations import (
+    GraphIndexNotFoundError,
+    GraphNotBuiltError,
+    GraphOperations,
+)
+from ..graph.store import GraphStoreError
 from ..index_manifest import IndexManifest
 from ..mcp_protocol import MCPErrorCode, failure, success
 from ..utils import get_indexes_dir
@@ -364,6 +372,125 @@ def create_server(project_path: Path | None = None) -> "FastMCP":
             error_msg = f"Error getting index stats: {e}"
             logger.error(error_msg, exc_info=True)
             return failure(_provider_error_code(e) or MCPErrorCode.STORAGE_FAILED, error_msg)
+
+    @mcp.tool()
+    async def graph_stats(index_name: str) -> dict[str, Any]:
+        """
+        Get symbol graph statistics and health for an index (IG-02, read-only).
+
+        Args:
+            index_name: Name of the index
+
+        Returns:
+            Versioned graph stats: health verdict, schema/adapter versions,
+            node/edge counts by kind, unresolved rate, and the per-language
+            capability matrix.
+        """
+        try:
+            logger.info(f"Getting graph stats for index: {index_name}")
+            if not _valid_index_name(index_name):
+                return failure(MCPErrorCode.INVALID_INPUT, "Invalid index name")
+            operations = GraphOperations(project_path)
+            stats = operations.stats(index_name)
+            result = GraphStatsResult.build(index_name, stats, capabilities_payload())
+            return success(result.to_dict())
+        except GraphStoreError as e:
+            return failure(MCPErrorCode.STORAGE_FAILED, f"Graph store error: {e}")
+        except (GraphIndexNotFoundError, GraphNotBuiltError) as e:
+            return failure(MCPErrorCode.NOT_FOUND, str(e))
+        except Exception as e:
+            error_msg = f"Error getting graph stats: {e}"
+            logger.error(error_msg, exc_info=True)
+            return failure(_provider_error_code(e) or MCPErrorCode.INTERNAL_ERROR, error_msg)
+
+    @mcp.tool()
+    async def graph_symbol(
+        index_name: str,
+        query: str,
+        kind: str | None = None,
+        language: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """
+        Find symbol definitions by qualified/display name substring (IG-02, read-only).
+
+        Args:
+            index_name: Name of the index to search
+            query: Substring of a qualified or display name
+            kind: Optional node kind filter (module, class, function, method, interface, test)
+            language: Optional language filter (python, javascript, typescript)
+            limit: Maximum results (1-500)
+
+        Returns:
+            Versioned symbol records with stable ids and file:start-end evidence
+        """
+        try:
+            logger.info(f"Graph symbol search: index={index_name}, query={query}")
+            if not _valid_index_name(index_name):
+                return failure(MCPErrorCode.INVALID_INPUT, "Invalid index name")
+            operations = GraphOperations(project_path)
+            nodes = operations.find_symbols(index_name, query, kind=kind, language=language, limit=limit)
+            result = SymbolSearchResult.build(index_name, query, kind, language, nodes)
+            return success(result.to_dict())
+        except GraphStoreError as e:
+            return failure(MCPErrorCode.STORAGE_FAILED, f"Graph store error: {e}")
+        except (GraphIndexNotFoundError, GraphNotBuiltError) as e:
+            return failure(MCPErrorCode.NOT_FOUND, str(e))
+        except ValueError as e:
+            return failure(MCPErrorCode.INVALID_INPUT, str(e))
+        except Exception as e:
+            error_msg = f"Error searching graph symbols: {e}"
+            logger.error(error_msg, exc_info=True)
+            return failure(_provider_error_code(e) or MCPErrorCode.INTERNAL_ERROR, error_msg)
+
+    @mcp.tool()
+    async def graph_neighbors(
+        index_name: str,
+        symbol_id: str,
+        edge_kind: str | None = None,
+        direction: str = "both",
+        depth: int = 1,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Traverse the symbol graph around one symbol (IG-02, read-only).
+
+        Args:
+            index_name: Name of the index to traverse
+            symbol_id: Stable symbol id, or a unique prefix of at least 8 characters
+            edge_kind: Optional edge kind filter (contains, imports, calls, inherits, references, tests)
+            direction: Traversal direction: in, out, or both
+            depth: Traversal depth (1-3)
+            limit: Maximum returned nodes (1-500)
+
+        Returns:
+            Versioned bounded neighborhood with evidence and confidence per edge
+        """
+        try:
+            logger.info(f"Graph neighbors: index={index_name}, symbol_id={symbol_id[:12]}...")
+            if not _valid_index_name(index_name):
+                return failure(MCPErrorCode.INVALID_INPUT, "Invalid index name")
+            operations = GraphOperations(project_path)
+            result = operations.neighbors(
+                index_name,
+                symbol_id,
+                edge_kind=edge_kind,
+                direction=direction,
+                depth=depth,
+                limit=limit,
+            )
+            envelope = NeighborsResult.build(index_name, symbol_id, direction, depth, limit, result)
+            return success(envelope.to_dict())
+        except GraphStoreError as e:
+            return failure(MCPErrorCode.STORAGE_FAILED, f"Graph store error: {e}")
+        except (GraphIndexNotFoundError, GraphNotBuiltError) as e:
+            return failure(MCPErrorCode.NOT_FOUND, str(e))
+        except ValueError as e:
+            return failure(MCPErrorCode.INVALID_INPUT, str(e))
+        except Exception as e:
+            error_msg = f"Error traversing graph: {e}"
+            logger.error(error_msg, exc_info=True)
+            return failure(_provider_error_code(e) or MCPErrorCode.INTERNAL_ERROR, error_msg)
 
     return mcp
 

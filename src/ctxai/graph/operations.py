@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from ..index_manifest import IndexManifest
+from ..index_manifest import IndexManifest, IndexManifestError
 from .model import (
     EDGE_KINDS,
     GRAPH_FILENAME,
@@ -24,13 +25,24 @@ from .model import (
     GraphMetadata,
     GraphNode,
 )
-from .store import GraphStore, GraphStoreError, NeighborResult
+from .store import GraphSchemaError, GraphStore, GraphStoreError, NeighborResult
+
+if TYPE_CHECKING:
+    from .dto import CapabilitiesResult
 
 DIRECTIONS = ("in", "out", "both")
 
 
 class GraphError(RuntimeError):
     """Raised when a graph operation cannot be served honestly."""
+
+
+class GraphIndexNotFoundError(GraphError):
+    """Raised when the requested index does not exist."""
+
+
+class GraphNotBuiltError(GraphError):
+    """Raised when the index exists but has no readable graph generation."""
 
 
 @dataclass(frozen=True)
@@ -100,6 +112,8 @@ def graph_health(index_path: Path, manifest: IndexManifest | None) -> GraphHealt
         )
     try:
         metadata = store.read_metadata()
+    except GraphSchemaError as exc:
+        return GraphHealth(status="unsupported_schema", metadata=None, problems=(str(exc),))
     except GraphStoreError as exc:
         return GraphHealth(status="corrupt", metadata=None, problems=(str(exc),))
 
@@ -194,15 +208,40 @@ class GraphOperations:
         return configured
 
     def _store_for(self, index_name: str) -> GraphStore:
-        path = self._index_operations.path_for(index_name)
+        try:
+            path = self._index_operations.path_for(index_name)
+        except IndexManifestError as exc:
+            raise GraphError(str(exc)) from exc
         if not path.is_dir():
-            raise GraphError(f"Index '{index_name}' does not exist at {path}")
+            raise GraphIndexNotFoundError(f"Index '{index_name}' does not exist at {path}")
         return GraphStore(path)
 
-    @staticmethod
-    def _require_graph(index_name: str, store: GraphStore) -> None:
-        if not store.exists():
-            raise GraphError(f"Graph data has not been built for index '{index_name}'; run ctxai index to generate it")
+    def _require_graph(self, index_name: str, store: GraphStore) -> None:
+        """Refuse reads against missing, stale, or corrupt graph generations.
+
+        Args:
+            index_name: Index being read.
+            store: The resolved graph store.
+
+        Raises:
+            GraphNotBuiltError: If the graph was never built (diagnostic).
+            GraphError: If the graph generation is stale, unsupported, or
+                corrupt — reads return a deterministic error instead of
+                incomplete data.
+        """
+        try:
+            manifest = IndexManifest.load_optional(store.index_path)
+        except IndexManifestError as exc:
+            raise GraphError(f"Index manifest for '{index_name}' is unreadable: {exc}") from exc
+        health = graph_health(store.index_path, manifest)
+        if health.status == "healthy":
+            return
+        if health.status == "missing":
+            raise GraphNotBuiltError(
+                f"Graph data has not been built for index '{index_name}'; run ctxai index to generate it"
+            )
+        detail = "; ".join(health.problems) if health.problems else health.status
+        raise GraphError(f"Graph data for index '{index_name}' is not readable: {detail}")
 
     @staticmethod
     def _validate_query(query: str) -> str:
@@ -223,14 +262,68 @@ class GraphOperations:
             The :class:`GraphStats` for the index.
 
         Raises:
-            GraphError: If the index does not exist.
+            GraphIndexNotFoundError: If the index does not exist.
         """
         path = self._index_operations.path_for(index_name)
         if not path.is_dir():
-            raise GraphError(f"Index '{index_name}' does not exist at {path}")
+            raise GraphIndexNotFoundError(f"Index '{index_name}' does not exist at {path}")
         manifest = IndexManifest.load_optional(path)
         health = graph_health(path, manifest)
         return GraphStats(index_name=index_name, path=path, health=health, metadata=health.metadata)
+
+    def capabilities(self, index_name: str | None) -> CapabilitiesResult:
+        """Return the versioned capability report, optionally for one index.
+
+        Without an index the report carries the static per-language support
+        matrix only. With an index it adds what that index actually contains:
+        languages present with node counts, unresolved edges by kind, and the
+        number of indexed files whose language has no adapter (they stay
+        indexable as ordinary chunks — reported, never silently dropped).
+
+        Args:
+            index_name: Index to inspect, or ``None`` for the static matrix.
+
+        Returns:
+            The versioned :class:`CapabilitiesResult`.
+
+        Raises:
+            GraphIndexNotFoundError: If a named index does not exist.
+        """
+        from .adapters import capabilities_payload
+        from .dto import CapabilitiesResult, GraphHealthRecord, IndexCapabilities
+
+        index: IndexCapabilities | None = None
+        if index_name:
+            path = self._index_operations.path_for(index_name)
+            if not path.is_dir():
+                raise GraphIndexNotFoundError(f"Index '{index_name}' does not exist at {path}")
+            try:
+                manifest = IndexManifest.load_optional(path)
+            except IndexManifestError as exc:
+                raise GraphError(f"Index manifest for '{index_name}' is unreadable: {exc}") from exc
+            health = graph_health(path, manifest)
+            store = GraphStore(path)
+            language_counts = store.language_node_counts() if store.exists() else {}
+            unresolved = store.unresolved_counts_by_kind() if store.exists() else {}
+            total_files: int | None = None
+            unsupported_files = 0
+            if manifest is not None:
+                total_files = manifest.file_count
+                from .adapters import language_for_file
+
+                supported_files = sum(
+                    1 for file_path in manifest.files if language_for_file(Path(file_path).as_posix()) is not None
+                )
+                unsupported_files = max(0, manifest.file_count - supported_files)
+            index = IndexCapabilities(
+                index=index_name,
+                health=GraphHealthRecord.from_health(health),
+                languages_present=language_counts,
+                unresolved_edges_by_kind=unresolved,
+                unsupported_file_count=unsupported_files,
+                total_file_count=total_files,
+            )
+        return CapabilitiesResult.build(capabilities_payload(), index)
 
     def find_symbols(
         self,
