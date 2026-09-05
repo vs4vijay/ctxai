@@ -190,7 +190,7 @@ async def call_with_retry(
                 raise asyncio.CancelledError() from error
             delay = backoff_delay(policy, attempt, rng)
             if on_retry is not None:
-                kind = error.kind.value if isinstance(error, ProviderError) else "error"
+                kind = error.kind.value if isinstance(error, ProviderError) and error.kind is not None else "error"
                 on_retry(RetryNotice(attempt=attempt + 1, max_retries=policy.max_retries, delay_s=delay, kind=kind))
             await sleep_fn(delay)
 
