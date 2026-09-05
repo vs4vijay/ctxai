@@ -73,14 +73,14 @@ def list_traces(
         return 0
 
     table = Table(title=f"Retrieval traces ({len(summaries)})")
-    table.add_column("Run")
-    table.add_column("Time")
-    table.add_column("Status")
-    table.add_column("Mode")
-    table.add_column("Index")
-    table.add_column("Cands", justify="right")
-    table.add_column("Sel", justify="right")
-    table.add_column("ms", justify="right")
+    table.add_column("Run", no_wrap=True)
+    table.add_column("Time", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Mode", no_wrap=True)
+    table.add_column("Index", no_wrap=True)
+    table.add_column("Cands", justify="right", no_wrap=True)
+    table.add_column("Sel", justify="right", no_wrap=True)
+    table.add_column("ms", justify="right", no_wrap=True)
     for summary in summaries:
         table.add_row(
             summary.run_id[:_RUN_ID_PREFIX_LEN],
@@ -90,7 +90,9 @@ def list_traces(
             summary.index_name or "-",
             str(summary.candidate_count),
             str(summary.selected_count),
-            f"{summary.total_latency_ms:.1f}",
+            # Whole milliseconds keep the table inside narrow terminals even
+            # under load; full precision is on `retrieval runs show`.
+            f"{summary.total_latency_ms:.0f}",
         )
     console.print(table)
     for item in corrupt:
